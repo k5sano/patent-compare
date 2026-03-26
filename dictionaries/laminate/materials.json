@@ -1,0 +1,25 @@
+{
+  "resins": {
+    "ポリエチレン": {"abbreviations": ["PE"], "subtypes": ["LDPE", "HDPE", "LLDPE"]},
+    "ポリプロピレン": {"abbreviations": ["PP"], "subtypes": ["OPP", "CPP"]},
+    "ポリエチレンテレフタレート": {"abbreviations": ["PET"], "subtypes": []},
+    "ポリエチレンナフタレート": {"abbreviations": ["PEN"], "subtypes": []},
+    "ポリアミド": {"abbreviations": ["PA", "Ny", "ナイロン"], "subtypes": ["ナイロン6", "ナイロン66", "MXD6"]},
+    "ポリカーボネート": {"abbreviations": ["PC"], "subtypes": []},
+    "エチレン-ビニルアルコール共重合体": {"abbreviations": ["EVOH"], "subtypes": []},
+    "ポリビニルアルコール": {"abbreviations": ["PVA", "PVOH"], "subtypes": []},
+    "ポリ塩化ビニリデン": {"abbreviations": ["PVDC"], "subtypes": []},
+    "ポリイミド": {"abbreviations": ["PI"], "subtypes": []},
+    "ポリウレタン": {"abbreviations": ["PU"], "subtypes": []}
+  },
+  "metals": {
+    "アルミニウム": {"abbreviations": ["Al"]},
+    "銅": {"abbreviations": ["Cu"]},
+    "ステンレス": {"abbreviations": ["SUS"]}
+  },
+  "adhesives": {
+    "ポリウレタン系接着剤": [],
+    "ポリエステル系接着剤": [],
+    "エチレン-酢酸ビニル共重合体": ["EVA"]
+  }
+}

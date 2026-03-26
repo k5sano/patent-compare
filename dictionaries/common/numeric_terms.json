@@ -1,0 +1,25 @@
+{
+  "units": {
+    "concentration": ["質量%", "重量%", "mass%", "wt%", "vol%", "体積%", "%", "ppm", "ppb"],
+    "length": ["mm", "μm", "nm", "cm", "m", "Å"],
+    "weight": ["g", "mg", "kg", "μg"],
+    "volume": ["mL", "L", "μL", "dL"],
+    "pressure": ["Pa", "MPa", "kPa", "hPa", "atm", "bar"],
+    "temperature": ["℃", "°C", "K"],
+    "viscosity": ["mPa・s", "Pa・s", "cP", "cps"],
+    "molecular_weight": ["Da", "kDa"],
+    "ph": ["pH"]
+  },
+  "range_expressions": {
+    "patterns": [
+      "{value1}～{value2}{unit}",
+      "{value1}から{value2}{unit}",
+      "{value1}−{value2}{unit}",
+      "{value}{unit}以上",
+      "{value}{unit}以下",
+      "{value}{unit}未満",
+      "{value}{unit}超",
+      "{value}{unit}以上{value2}{unit}以下"
+    ]
+  }
+}

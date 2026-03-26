@@ -1,0 +1,54 @@
+{
+  "theme_code": "4F100",
+  "theme_name": "積層体",
+  "note": "スケルトン版 - 必要に応じて拡充",
+  "categories": {
+    "AK": {
+      "label": "基材の材質",
+      "entries": {
+        "AK01": {"label": "ポリオレフィン", "examples": ["ポリエチレン", "ポリプロピレン", "PE", "PP"]},
+        "AK25": {"label": "ポリエステル", "examples": ["PET", "PEN", "ポリエチレンテレフタレート"]},
+        "AK41": {"label": "ポリアミド", "examples": ["ナイロン", "PA", "ポリアミド"]},
+        "AK46": {"label": "ポリカーボネート", "examples": ["PC", "ポリカーボネート"]},
+        "AK51": {"label": "EVOH", "examples": ["エチレン-ビニルアルコール共重合体", "EVOH"]},
+        "AK70": {"label": "金属", "examples": ["アルミニウム", "銅", "SUS", "ステンレス"]}
+      }
+    },
+    "BA": {
+      "label": "層の機能",
+      "entries": {
+        "BA02": {"label": "基材層", "examples": []},
+        "BA03": {"label": "バリア層", "examples": []},
+        "BA06": {"label": "接着層", "examples": []},
+        "BA07": {"label": "シーラント層", "examples": []},
+        "BA10": {"label": "表面層", "examples": []},
+        "BA15": {"label": "中間層", "examples": []}
+      }
+    },
+    "GB": {
+      "label": "層構成",
+      "entries": {
+        "GB01": {"label": "2層構成", "examples": []},
+        "GB08": {"label": "3層構成", "examples": []},
+        "GB15": {"label": "4層以上", "examples": []}
+      }
+    },
+    "JK": {
+      "label": "製造方法",
+      "entries": {
+        "JK01": {"label": "共押出", "examples": []},
+        "JK06": {"label": "ラミネーション", "examples": ["ドライラミネーション", "押出ラミネーション"]},
+        "JK10": {"label": "コーティング", "examples": []},
+        "JK12": {"label": "蒸着", "examples": ["アルミ蒸着", "シリカ蒸着"]}
+      }
+    },
+    "YY": {
+      "label": "用途",
+      "entries": {
+        "YY01": {"label": "包装材", "examples": ["食品包装", "医薬品包装"]},
+        "YY10": {"label": "光学用途", "examples": ["ディスプレイ", "光学フィルム"]},
+        "YY20": {"label": "建材", "examples": []}
+      }
+    }
+  }
+}

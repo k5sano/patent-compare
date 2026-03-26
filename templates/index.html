@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PatentCompare</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --border: #475569; --text: #e2e8f0; --text2: #94a3b8;
+    --accent: #3b82f6; --accent-hover: #2563eb;
+    --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .container { max-width: 960px; margin: 0 auto; padding: 2rem; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
+  .subtitle { color: var(--text2); margin-bottom: 2rem; font-size: 0.9rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+  .card:hover { border-color: var(--accent); }
+  .card h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+  .card .meta { color: var(--text2); font-size: 0.85rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+  .badge-blue { background: #1e3a5f; color: #60a5fa; }
+  .badge-green { background: #14532d; color: #4ade80; }
+  .badge-gray { background: var(--surface2); color: var(--text2); }
+  .progress-dots { display: flex; gap: 6px; margin-top: 0.7rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--surface2); }
+  .dot.done { background: var(--green); }
+  .dot.partial { background: var(--yellow); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .card-link { display: block; text-decoration: none; color: inherit; }
+  .card-link:hover { text-decoration: none; }
+  .new-case { margin-top: 2rem; }
+  .new-case h2 { font-size: 1.2rem; margin-bottom: 1rem; }
+  .form-row { display: flex; gap: 0.8rem; margin-bottom: 0.8rem; flex-wrap: wrap; }
+  input, select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); padding: 0.6rem 0.8rem; border-radius: 8px; font-size: 0.9rem; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  input[type="text"] { flex: 1; min-width: 200px; }
+  .btn { padding: 0.6rem 1.5rem; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .flash { padding: 0.8rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
+  .flash-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+  .flash-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+  .step-labels { display: flex; gap: 4px; margin-top: 0.5rem; }
+  .step-label { font-size: 0.65rem; color: var(--text2); width: 10px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>PatentCompare</h1>
+  <p class="subtitle">特許審査拒絶理由構成支援システム</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+  <div class="flash flash-{{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endwith %}
+
+  {% if cases %}
+  <h2 style="font-size:1.1rem; margin-bottom:1rem; color:var(--text2);">案件一覧</h2>
+  {% for c in cases %}
+  <a href="/case/{{ c.case_id }}" class="card-link">
+    <div class="card">
+      <h3>{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
+      <div class="meta">
+        <span class="badge badge-blue">{{ c.field }}</span>
+        {% if c._has_excel %}<span class="badge badge-green">Excel出力済</span>{% endif %}
+        <span>引用文献: {{ c._num_citations }}件</span>
+        <span>回答: {{ c._num_responses }}件</span>
+      </div>
+      <div class="progress-dots" title="本願 / 分節 / KW / 文献 / 回答 / Excel">
+        <div class="dot {{ 'done' if c._has_hongan else '' }}"></div>
+        <div class="dot {{ 'done' if c._has_segments else '' }}"></div>
+        <div class="dot {{ 'done' if c._has_keywords else '' }}"></div>
+        <div class="dot {{ 'done' if c._num_citations > 0 else '' }}"></div>
+        <div class="dot {{ 'done' if c._num_responses > 0 else '' }}"></div>
+        <div class="dot {{ 'done' if c._has_excel else '' }}"></div>
+      </div>
+      <div class="step-labels">
+        <div class="step-label">本</div>
+        <div class="step-label">分</div>
+        <div class="step-label">K</div>
+        <div class="step-label">文</div>
+        <div class="step-label">回</div>
+        <div class="step-label">Ex</div>
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+  {% else %}
+  <div class="card" style="text-align:center; color:var(--text2); padding:3rem;">
+    案件がありません。下のフォームから新規作成してください。
+  </div>
+  {% endif %}
+
+  <div class="new-case">
+    <h2>新規案件作成</h2>
+    <form action="/case/new" method="post">
+      <div class="form-row">
+        <input type="text" name="case_id" placeholder="案件番号（例: 2024-037328）" required>
+        <select name="field">
+          <option value="cosmetics">化粧品</option>
+          <option value="laminate">積層体</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <input type="text" name="title" placeholder="発明の名称" required>
+        <button type="submit" class="btn btn-primary">作成</button>
+      </div>
+    </form>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "ポリエチレン": ["PE", "polyethylene"],
+  "ポリプロピレン": ["PP", "polypropylene"],
+  "ポリエチレンテレフタレート": ["PET", "ポリエステル", "polyethylene terephthalate"],
+  "ポリアミド": ["PA", "ナイロン", "Ny", "nylon", "polyamide"],
+  "ポリカーボネート": ["PC", "polycarbonate"],
+  "エチレン-ビニルアルコール共重合体": ["EVOH", "エバール"],
+  "アルミニウム": ["Al", "アルミ", "aluminum", "aluminium"],
+  "ステンレス": ["SUS", "stainless steel"],
+  "二軸延伸ポリプロピレン": ["OPP", "BOPP"],
+  "無延伸ポリプロピレン": ["CPP"],
+  "二軸延伸ポリエチレンテレフタレート": ["OPET", "BOPET"],
+  "ドライラミネーション": ["ドライラミ", "DL"],
+  "押出ラミネーション": ["押出ラミ", "EC"]
+}

@@ -1,0 +1,39 @@
+# PatentCompare グローバル設定
+
+# デフォルト分野
+default_field: cosmetics
+
+# 辞書パス
+dictionaries:
+  cosmetics: dictionaries/cosmetics
+  laminate: dictionaries/laminate
+  common: dictionaries/common
+
+# 案件データパス
+cases_dir: cases
+
+# テンプレートパス
+templates_dir: templates
+
+# PDF色塗りカラー定義 (RGB 0-1)
+highlight_colors:
+  1: [1.0, 0.0, 0.0]      # 赤
+  2: [0.5, 0.0, 0.5]      # 紫
+  3: [1.0, 0.0, 1.0]      # マゼンタ
+  4: [0.0, 0.0, 1.0]      # 青
+  5: [0.0, 0.5, 0.0]      # 緑
+  6: [1.0, 0.5, 0.0]      # オレンジ
+  7: [0.0, 0.5, 0.5]      # ティール
+
+# プロンプト生成設定
+prompt:
+  max_citation_chars: 50000
+  section_priority:
+    - 実施例
+    - 請求項
+    - 定義
+    - その他
+
+# Excel出力設定
+excel:
+  max_citation_columns: 10

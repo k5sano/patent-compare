@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ meta.case_id }} - PatentCompare</title>
+<style>
+  :root {
+    --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
+    --border: #475569; --text: #e2e8f0; --text2: #94a3b8;
+    --accent: #3b82f6; --accent-hover: #2563eb;
+    --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+  .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .header a { color: var(--text2); font-size: 0.9rem; }
+  .header h1 { font-size: 1.4rem; flex: 1; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; }
+  .badge-blue { background: #1e3a5f; color: #60a5fa; }
+
+  /* ステップナビ */
+  .steps { display: flex; gap: 2px; margin-bottom: 1.5rem; }
+  .step { flex: 1; padding: 0.7rem 0.5rem; text-align: center; font-size: 0.8rem; font-weight: 600;
+          background: var(--surface2); color: var(--text2); cursor: pointer; transition: all 0.2s; position: relative; }
+  .step:first-child { border-radius: 8px 0 0 8px; }
+  .step:last-child { border-radius: 0 8px 8px 0; }
+  .step.active { background: var(--accent); color: #fff; }
+  .step.done { background: #14532d; color: #4ade80; }
+  .step:hover { opacity: 0.85; }
+  .step .num { display: block; font-size: 1.1rem; }
+
+  /* パネル */
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+  .card h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+
+  /* ドロップゾーン */
+  .dropzone { border: 3px dashed var(--border); border-radius: 16px; padding: 4rem 2rem;
+              text-align: center; cursor: pointer; transition: all 0.3s; position: relative;
+              min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: rgba(59,130,246,0.15);
+              border-style: solid; transform: scale(1.01); }
+  .dropzone .icon { font-size: 3.5rem; margin-bottom: 1rem; }
+  .dropzone p { color: var(--text2); font-size: 1rem; }
+  .dropzone p strong { color: var(--text); font-size: 1.15rem; }
+  .dropzone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+  /* ページ全体ドラッグ時のオーバーレイ */
+  .page-drop-overlay { display: none; position: fixed; inset: 0; z-index: 9999;
+              background: rgba(15,23,42,0.92); align-items: center; justify-content: center; }
+  .page-drop-overlay.show { display: flex; }
+  .page-drop-overlay .inner { border: 4px dashed var(--accent); border-radius: 24px;
+              padding: 4rem 6rem; text-align: center; background: rgba(59,130,246,0.1); }
+  .page-drop-overlay .inner .icon { font-size: 5rem; margin-bottom: 1rem; }
+  .page-drop-overlay .inner p { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+
+  /* ボタン */
+  .btn { padding: 0.6rem 1.2rem; border: none; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-success { background: #16a34a; color: #fff; }
+  .btn-success:hover { background: #15803d; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem; }
+
+  /* テーブル */
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { padding: 0.5rem 0.7rem; border: 1px solid var(--border); text-align: left; }
+  th { background: var(--surface2); font-weight: 600; }
+  .j-ok { background: #14532d; color: #4ade80; text-align: center; font-size: 1.1rem; }
+  .j-partial { background: #422006; color: #fbbf24; text-align: center; font-size: 1.1rem; }
+  .j-ng { background: #450a0a; color: #fca5a5; text-align: center; font-size: 1.1rem; }
+
+  /* テキストエリア */
+  textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+             border-radius: 8px; padding: 0.8rem; font-size: 0.85rem; font-family: 'Consolas', monospace;
+             resize: vertical; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+
+  /* プロンプト表示 */
+  .prompt-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+                padding: 1rem; max-height: 400px; overflow-y: auto; font-size: 0.8rem;
+                white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+
+  /* セグメントエディタ */
+  .seg-row { display: flex; gap: 0.5rem; align-items: stretch; margin-bottom: 4px; border-radius: 8px;
+             transition: background 0.15s; }
+  .seg-row:hover { background: rgba(255,255,255,0.03); }
+  .seg-id { background: var(--accent); color: #fff; padding: 4px 8px; border-radius: 6px;
+            font-size: 0.8rem; font-weight: 700; min-width: 38px; text-align: center;
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .seg-text-edit { flex: 1; font-size: 0.9rem; line-height: 1.6; padding: 6px 10px;
+                   border: 1px solid transparent; border-radius: 6px; outline: none;
+                   color: var(--text); transition: border-color 0.2s, background 0.2s; }
+  .seg-text-edit:hover { border-color: var(--border); }
+  .seg-text-edit:focus { border-color: var(--accent); background: var(--surface2); }
+  .seg-actions { display: flex; gap: 2px; align-items: center; flex-shrink: 0; opacity: 0.3; transition: opacity 0.2s; }
+  .seg-row:hover .seg-actions { opacity: 1; }
+  .seg-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text2);
+             width: 26px; height: 26px; border-radius: 6px; cursor: pointer; font-size: 0.75rem;
+             display: flex; align-items: center; justify-content: center; transition: all 0.15s; padding: 0; }
+  .seg-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.1); }
+  .seg-btn-del:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.1); }
+  .seg-btn-add:hover { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.1); }
+
+  /* キーワードグループ */
+  .kw-group { margin-bottom: 1rem; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); }
+  .kw-header { font-weight: 700; margin-bottom: 0.5rem; }
+  .kw-tag { display: inline-block; padding: 2px 8px; margin: 2px; border-radius: 12px; font-size: 0.8rem; }
+
+  /* 引用文献カード */
+  .cit-card { background: var(--surface2); border-radius: 8px; padding: 1rem; margin-bottom: 0.8rem;
+              display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .cit-card .cit-info { flex: 1; }
+  .cit-card .cit-info h4 { font-size: 0.95rem; }
+  .cit-card .cit-info p { font-size: 0.8rem; color: var(--text2); }
+
+  /* ロード中 */
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid var(--text2);
+             border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-msg { display: none; align-items: center; gap: 0.5rem; font-size: 0.9rem; color: var(--text2); padding: 1rem 0; }
+  .loading-msg.show { display: flex; }
+
+  .flash { padding: 0.8rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
+  .flash-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
+  .flash-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
+
+  select { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+           padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem; }
+  input[type="text"] { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+                       padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<!-- ページ全体ドロップオーバーレイ -->
+<div class="page-drop-overlay" id="page-drop-overlay">
+  <div class="inner">
+    <div class="icon">&#128196;</div>
+    <p>PDFをここにドロップ</p>
+    <p style="font-size:1rem; color:var(--text2); margin-top:0.5rem;" id="drop-hint">本願PDF / 引用文献PDF</p>
+  </div>
+</div>
+
+<div class="container">
+  <div class="header">
+    <a href="/">&larr; 一覧に戻る</a>
+    <h1>
+      <span id="header-patent-number" style="cursor:pointer;" title="クリックで編集">{{ meta.patent_number or meta.case_id }}</span>
+      &mdash;
+      <span id="header-patent-title" style="cursor:pointer;" title="クリックで編集">{{ meta.patent_title or meta.title or '（題名未取得）' }}</span>
+    </h1>
+    <span class="badge badge-blue">{{ meta.field }}</span>
+    <button class="btn btn-outline" style="padding:0.3rem 0.6rem; font-size:0.75rem;" onclick="editCaseMeta()">編集</button>
+  </div>
+
+  <!-- 案件情報編集モーダル -->
+  <div id="meta-edit-modal" style="display:none; position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.7); align-items:center; justify-content:center;">
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem; width:500px; max-width:90vw;">
+      <h3 style="margin-bottom:1rem;">案件情報の編集</h3>
+      <div style="margin-bottom:0.8rem;">
+        <label style="font-size:0.85rem; color:var(--text2);">公開番号:</label>
+        <input type="text" id="edit-patent-number" value="{{ meta.patent_number or '' }}" style="width:100%; margin-top:4px;">
+      </div>
+      <div style="margin-bottom:0.8rem;">
+        <label style="font-size:0.85rem; color:var(--text2);">発明の名称:</label>
+        <input type="text" id="edit-patent-title" value="{{ meta.patent_title or '' }}" style="width:100%; margin-top:4px;">
+      </div>
+      <div class="btn-row" style="justify-content:flex-end;">
+        <button class="btn btn-outline" onclick="closeMetaModal()">キャンセル</button>
+        <button class="btn btn-primary" onclick="saveCaseMeta()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+  <div class="flash flash-{{ category }}">{{ message }}</div>
+  {% endfor %}
+  {% endwith %}
+
+  <!-- ステップナビゲーション -->
+  <div class="steps">
+    <div class="step {{ 'done' if hongan else 'active' }}" onclick="showPanel(0)">
+      <span class="num">1</span>本願PDF
+    </div>
+    <div class="step {{ 'done' if segments else '' }}" onclick="showPanel(1)">
+      <span class="num">2</span>分節
+    </div>
+    <div class="step {{ 'done' if keywords else '' }}" onclick="showPanel(2)">
+      <span class="num">3</span>キーワード
+    </div>
+    <div class="step" onclick="showPanel(3)">
+      <span class="num">4</span>引用文献
+    </div>
+    <div class="step" onclick="showPanel(4)">
+      <span class="num">5</span>対比
+    </div>
+    <div class="step" onclick="showPanel(5)">
+      <span class="num">6</span>出力
+    </div>
+  </div>
+
+  <!-- ===== Step 1: 本願PDF ===== -->
+  <div class="panel {{ 'active' if not hongan else '' }}" id="panel-0">
+    <div class="card">
+      <h2>Step 1: 本願PDFをドロップ</h2>
+      {% if hongan %}
+      <div style="margin-bottom:1rem; padding:1rem; background:var(--surface2); border-radius:8px;">
+        <strong>抽出済み:</strong> {{ hongan.patent_number }}
+        {% if hongan.patent_title %} &mdash; {{ hongan.patent_title }}{% endif %}<br>
+        請求項: {{ hongan.claims|length }}件 / 段落: {{ hongan.paragraphs|length }}件 / {{ hongan.total_pages }}ページ
+      </div>
+      <p style="color:var(--text2); font-size:0.85rem;">再度アップロードすると上書きされます。</p>
+      {% endif %}
+      <div class="dropzone" id="dropzone-hongan">
+        <div class="icon">&#128196;</div>
+        <p><strong>本願PDFをここにドラッグ&ドロップ</strong></p>
+        <p>またはクリックしてファイルを選択</p>
+        <input type="file" accept=".pdf" onchange="uploadHongan(this.files[0])">
+      </div>
+      <div class="loading-msg" id="loading-hongan">
+        <div class="spinner"></div>
+        <span>PDF解析中...</span>
+      </div>
+      <div id="result-hongan"></div>
+    </div>
+  </div>
+
+  <!-- ===== Step 2: 分節 ===== -->
+  <div class="panel" id="panel-1">
+    <div class="card">
+      <h2>Step 2: 請求項の分節</h2>
+      <p style="color:var(--text2); font-size:0.85rem; margin-bottom:1rem;">
+        自動分節の結果です。テキストを直接クリックして編集できます。行の分割・結合・削除・追加も可能です。
+      </p>
+      {% if segments %}
+      <div id="segments-editor">
+        {% for claim in segments %}
+        <div class="seg-claim-block" data-claim="{{ claim.claim_number }}">
+          <h3 style="margin-top:1.2rem; margin-bottom:0.6rem;">
+            請求項{{ claim.claim_number }}
+            <span class="badge {{ 'badge-blue' if claim.is_independent else 'badge-gray' }}">
+              {{ '独立' if claim.is_independent else '従属' }}
+            </span>
+          </h3>
+          <div class="seg-rows" data-claim="{{ claim.claim_number }}">
+            {% for seg in claim.segments %}
+            <div class="seg-row" data-seg-id="{{ seg.id }}">
+              <span class="seg-id">{{ seg.id }}</span>
+              <div class="seg-text-edit" contenteditable="true" spellcheck="false">{{ seg.text }}</div>
+              <div class="seg-actions">
+                <button class="seg-btn" title="この行の下で分割" onclick="splitSeg(this)">&#9986;</button>
+                <button class="seg-btn" title="下の行と結合" onclick="mergeSeg(this)">&#8645;</button>
+                <button class="seg-btn seg-btn-add" title="下に行を追加" onclick="addSeg(this)">+</button>
+                <button class="seg-btn seg-btn-del" title="この行を削除" onclick="delSeg(this)">&#10005;</button>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="btn-row" style="margin-top:1.2rem;">
+        <button class="btn btn-success" onclick="saveSegmentsFromEditor()">保存</button>
+        <button class="btn btn-outline" onclick="location.reload()">リセット</button>
+        <button class="btn btn-primary" onclick="saveSegmentsFromEditor().then(()=>showPanel(2))">保存して次へ &rarr;</button>
+      </div>
+      <div id="seg-save-msg" style="display:none; margin-top:0.5rem; padding:0.6rem 1rem; background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;"></div>
+      {% else %}
+      <p style="color:var(--text2);">本願PDFを先にアップロードしてください。分節は自動生成されます。</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ===== Step 3: キーワード ===== -->
+  <div class="panel" id="panel-2">
+    <div class="card">
+      <h2>Step 3: キーワードグループ</h2>
+      <div id="keywords-view">
+        {% if keywords %}
+          {% for g in keywords %}
+          <div class="kw-group" style="border-left: 4px solid {{ ['#ef4444','#a855f7','#ec4899','#3b82f6','#22c55e','#f97316','#14b8a6'][g.group_id - 1] if g.group_id <= 7 else '#6b7280' }};">
+            <div class="kw-header">
+              グループ{{ g.group_id }}: {{ g.label }}
+              <span style="color:var(--text2); font-weight:normal; font-size:0.8rem;">({{ ', '.join(g.segment_ids) }})</span>
+            </div>
+            {% for kw in g.keywords %}
+            <span class="kw-tag" style="background:var(--surface2);">{{ kw.term }} <span style="color:var(--text2); font-size:0.7rem;">{{ kw.type }}</span></span>
+            {% endfor %}
+            {% if g.search_codes and g.search_codes.fterm %}
+            <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--text2);">
+              Fterm: {% for ft in g.search_codes.fterm %}{{ ft.code }}({{ ft.desc }}) {% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        {% else %}
+          <p style="color:var(--text2);">分節データからキーワードを自動提案します。</p>
+        {% endif %}
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="suggestKeywords()">キーワード自動提案</button>
+        <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
+      </div>
+      <div class="loading-msg" id="loading-kw">
+        <div class="spinner"></div>
+        <span>キーワード提案中...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Step 4: 引用文献 ===== -->
+  <div class="panel" id="panel-3">
+    <div class="card">
+      <h2>Step 4: 引用文献PDFをドロップ</h2>
+      <div style="display:flex; gap:0.8rem; margin-bottom:1rem; flex-wrap:wrap; align-items:center;">
+        <select id="cit-role">
+          <option value="主引例">主引例</option>
+          <option value="副引例">副引例</option>
+          <option value="技術常識">技術常識</option>
+        </select>
+        <input type="text" id="cit-label" placeholder="ラベル（例: 文献1）" style="width:150px;">
+      </div>
+      <div class="dropzone" id="dropzone-citation">
+        <div class="icon">&#128218;</div>
+        <p><strong>引用文献PDFをここにドラッグ&ドロップ</strong></p>
+        <p>複数ファイル対応</p>
+        <input type="file" accept=".pdf" multiple onchange="uploadCitations(this.files)">
+      </div>
+      <div class="loading-msg" id="loading-citation">
+        <div class="spinner"></div>
+        <span>PDF解析中...</span>
+      </div>
+      <div id="citations-list" style="margin-top:1rem;">
+        {% for cit in citations %}
+        <div class="cit-card" id="cit-card-{{ cit.id }}">
+          <div class="cit-info">
+            <h4>{{ cit.label }} ({{ cit.id }})</h4>
+            <p>{{ cit.role }}
+              {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
+            </p>
+          </div>
+          <button class="btn btn-danger" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+                  onclick="deleteCitation('{{ cit.id }}')">削除</button>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="btn-row">
+        {% if citations %}
+        <button class="btn btn-danger" onclick="clearAllCitations()">全文献クリア</button>
+        {% endif %}
+        <button class="btn btn-outline" onclick="showPanel(4)">次へ: 対比 &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Step 5: 対比 ===== -->
+  <div class="panel" id="panel-4">
+    <div class="card">
+      <h2>Step 5: 対比プロンプト生成 & 回答取り込み</h2>
+
+      <!-- 文献選択（複数選択対応） -->
+      <div style="margin-bottom:1rem;">
+        <label style="font-size:0.9rem; color:var(--text2);">対象文献（複数選択可）:</label>
+        <div id="citation-checkboxes" style="margin-top:0.5rem;">
+          {% for cit in citations %}
+          <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; cursor:pointer;">
+            <input type="checkbox" class="cit-checkbox" value="{{ cit.id }}" checked
+                   style="width:18px; height:18px; accent-color:var(--accent);">
+            <span>{{ cit.label }} ({{ cit.id }}) - {{ cit.role }}</span>
+            {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
+          </label>
+          {% endfor %}
+        </div>
+        {% if citations|length > 1 %}
+        <div style="margin-top:0.3rem; font-size:0.8rem;">
+          <a href="#" onclick="toggleAllCitations(true); return false;">全選択</a> /
+          <a href="#" onclick="toggleAllCitations(false); return false;">全解除</a>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- プロンプト生成 -->
+      <div id="prompt-section">
+        <div class="btn-row" style="margin-top:0; margin-bottom:0.8rem;">
+          <button class="btn btn-primary" onclick="generatePrompt()">プロンプト生成</button>
+          <button class="btn btn-success" onclick="copyPrompt()">クリップボードにコピー</button>
+          <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
+        </div>
+        <div class="prompt-box" id="prompt-text" style="display:none;"></div>
+
+        <!-- 回答入力 -->
+        <h3 style="font-size:1rem; margin: 1.5rem 0 0.5rem;">Claude回答を貼り付け</h3>
+        <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.5rem;">
+          複数文献を選択した場合、Claudeは全文献分の結果をまとめて返します。自動で文献ごとに分割保存されます。
+        </p>
+        <textarea id="response-text" rows="12" placeholder="Claudeの回答をここに貼り付けてください..."></textarea>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="parseResponse()">回答をパース</button>
+        </div>
+        <div class="loading-msg" id="loading-parse">
+          <div class="spinner"></div>
+          <span>パース中...</span>
+        </div>
+        <div id="parse-result" style="margin-top:1rem;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Step 6: 出力 ===== -->
+  <div class="panel" id="panel-5">
+    <div class="card">
+      <h2>Step 6: 対比表Excel出力</h2>
+
+      <!-- 対比結果サマリ -->
+      <div id="comparison-summary">
+        {% if citations %}
+        <table style="margin-bottom:1.5rem;">
+          <thead>
+            <tr>
+              <th>構成要件</th>
+              {% for cit in citations %}
+              <th>{{ cit.label }}</th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody id="summary-tbody">
+            <tr><td colspan="{{ citations|length + 1 }}" style="text-align:center; color:var(--text2);">
+              回答データ読み込み中...
+            </td></tr>
+          </tbody>
+        </table>
+        {% endif %}
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-success" onclick="exportExcel()">Excel出力</button>
+      </div>
+      <div class="loading-msg" id="loading-export">
+        <div class="spinner"></div>
+        <span>Excel生成中...</span>
+      </div>
+      <div id="export-result" style="margin-top:1rem;"></div>
+
+      {% if excel_files %}
+      <h3 style="margin-top:1.5rem; font-size:1rem;">ダウンロード</h3>
+      {% for ef in excel_files %}
+      <a href="/case/{{ case_id }}/download/{{ ef.name }}" class="btn btn-outline" style="margin-top:0.5rem; display:inline-block;">
+        &#128196; {{ ef.name }}
+      </a>
+      {% endfor %}
+      {% endif %}
+    </div>
+
+    <!-- 案件削除 -->
+    <div class="card" style="border-color: #7f1d1d; margin-top:2rem;">
+      <h2 style="color:var(--red);">案件削除</h2>
+      <form action="/case/{{ case_id }}/delete" method="post"
+            onsubmit="return confirm('本当に削除しますか？この操作は取り消せません。')">
+        <button type="submit" class="btn btn-danger">この案件を削除</button>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const CASE_ID = "{{ case_id }}";
+const panels = document.querySelectorAll('.panel');
+const steps = document.querySelectorAll('.step');
+let currentPanel = 0;
+
+function showPanel(idx) {
+  currentPanel = idx;
+  panels.forEach((p, i) => {
+    p.classList.toggle('active', i === idx);
+  });
+  steps.forEach((s, i) => {
+    if (!s.classList.contains('done')) {
+      s.classList.toggle('active', i === idx);
+    }
+  });
+  if (idx === 5) loadComparisonSummary();
+}
+
+// 初期表示: 最初の未完了ステップ
+{% if not hongan %}showPanel(0);
+{% elif not segments %}showPanel(1);
+{% elif not keywords %}showPanel(2);
+{% elif not citations %}showPanel(3);
+{% else %}showPanel(4);{% endif %}
+
+// ================================================================
+// ページ全体のドラッグ&ドロップ制御
+// ブラウザのデフォルト動作（PDFを開く）を完全に抑止
+// ================================================================
+let dragCounter = 0;
+const overlay = document.getElementById('page-drop-overlay');
+const dropHint = document.getElementById('drop-hint');
+
+// ページ全体でデフォルト動作を完全にブロック
+document.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+}, false);
+
+document.addEventListener('dragenter', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dragCounter++;
+  if (dragCounter === 1) {
+    // どのステップにいるかでヒントを変える
+    const hasHongan = {{ 'true' if hongan else 'false' }};
+    if (!hasHongan || currentPanel === 0) {
+      dropHint.textContent = 'ドロップすると本願PDFとして読み込みます';
+    } else if (currentPanel === 3) {
+      dropHint.textContent = 'ドロップすると引用文献PDFとして読み込みます';
+    } else {
+      dropHint.textContent = 'Step1 = 本願PDF / Step4 = 引用文献PDF';
+    }
+    overlay.classList.add('show');
+  }
+}, false);
+
+document.addEventListener('dragleave', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    overlay.classList.remove('show');
+  }
+}, false);
+
+document.addEventListener('drop', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  dragCounter = 0;
+  overlay.classList.remove('show');
+
+  const files = e.dataTransfer.files;
+  if (!files || files.length === 0) return;
+
+  // PDFかチェック
+  const pdfFiles = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (pdfFiles.length === 0) {
+    alert('PDFファイルをドロップしてください。');
+    return;
+  }
+
+  // 本願がまだない or Step1にいる → 本願としてアップロード
+  const hasHongan = {{ 'true' if hongan else 'false' }};
+  if (!hasHongan || currentPanel === 0) {
+    showPanel(0);
+    uploadHongan(pdfFiles[0]);
+  } else {
+    // それ以外 → 引用文献としてアップロード
+    showPanel(3);
+    uploadCitations(pdfFiles);
+  }
+}, false);
+
+// 個別ドロップゾーン内のイベント（視覚フィードバック用）
+document.querySelectorAll('.dropzone').forEach(dz => {
+  dz.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragleave', e => { e.stopPropagation(); dz.classList.remove('dragover'); });
+});
+
+// ===== 本願アップロード =====
+async function uploadHongan(file) {
+  if (!file) return;
+  const loading = document.getElementById('loading-hongan');
+  loading.classList.add('show');
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/upload/hongan`, { method: 'POST', body: fd });
+    const data = await resp.json();
+    loading.classList.remove('show');
+
+    if (data.success) {
+      const titlePart = data.patent_title ? ` — ${data.patent_title}` : '';
+      document.getElementById('result-hongan').innerHTML =
+        `<div style="padding:1rem; background:#14532d; border-radius:8px; margin-top:1rem; color:#4ade80;">
+          抽出完了: ${data.patent_number}${titlePart} / 請求項${data.num_claims}件 / 段落${data.num_paragraphs}件
+        </div>`;
+      steps[0].classList.add('done');
+      steps[1].classList.add('done');
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      document.getElementById('result-hongan').innerHTML =
+        `<div style="padding:1rem; background:#450a0a; border-radius:8px; margin-top:1rem; color:#fca5a5;">
+          エラー: ${data.error}
+        </div>`;
+    }
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+
+// ===== 引用文献アップロード =====
+async function uploadCitations(files) {
+  const loading = document.getElementById('loading-citation');
+  loading.classList.add('show');
+
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('role', document.getElementById('cit-role').value);
+    fd.append('label', document.getElementById('cit-label').value || '');
+
+    try {
+      const resp = await fetch(`/case/${CASE_ID}/upload/citation`, { method: 'POST', body: fd });
+      const data = await resp.json();
+      if (data.success) {
+        const list = document.getElementById('citations-list');
+        list.innerHTML += `<div class="cit-card"><div class="cit-info">
+          <h4>${data.doc_id}</h4>
+          <p>請求項${data.num_claims}件 / 段落${data.num_paragraphs}件</p>
+        </div></div>`;
+      }
+    } catch(e) {
+      alert('エラー: ' + e.message);
+    }
+  }
+  loading.classList.remove('show');
+  setTimeout(() => location.reload(), 500);
+}
+
+// ===== 引用文献削除 =====
+async function deleteCitation(citId) {
+  if (!confirm(`文献 "${citId}" を削除しますか？\n（関連する回答データも削除されます）`)) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/citation/${citId}`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+      const card = document.getElementById(`cit-card-${citId}`);
+      if (card) card.remove();
+      location.reload();
+    } else {
+      alert('削除失敗: ' + (data.error || ''));
+    }
+  } catch(e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
+async function clearAllCitations() {
+  if (!confirm('全ての引用文献と回答データを削除しますか？\nこの操作は取り消せません。')) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/citations/clear`, { method: 'DELETE' });
+    const data = await resp.json();
+    if (data.success) {
+      location.reload();
+    } else {
+      alert('クリア失敗: ' + (data.error || ''));
+    }
+  } catch(e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
+// ===== 分節エディタ =====
+function renumberSegIds(claimBlock) {
+  const rows = claimBlock.querySelectorAll('.seg-row');
+  const claimNum = claimBlock.dataset.claim;
+  const alpha = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  rows.forEach((row, i) => {
+    const id = i < 26 ? `${claimNum}${alpha[i]}` : `${claimNum}A${i - 25}`;
+    row.dataset.segId = id;
+    row.querySelector('.seg-id').textContent = id;
+  });
+}
+
+function splitSeg(btn) {
+  const row = btn.closest('.seg-row');
+  const textEl = row.querySelector('.seg-text-edit');
+  const sel = window.getSelection();
+  let splitPos = textEl.textContent.length;
+  // カーソル位置で分割（選択がテキスト内にあれば）
+  if (sel.rangeCount > 0 && textEl.contains(sel.anchorNode)) {
+    splitPos = sel.anchorOffset;
+  }
+  const fullText = textEl.textContent;
+  const before = fullText.substring(0, splitPos).trim();
+  const after = fullText.substring(splitPos).trim();
+  if (!before || !after) {
+    // カーソルが端にある場合は空行を追加
+    addSeg(btn);
+    return;
+  }
+  textEl.textContent = before;
+  // 新しい行を挿入
+  const newRow = row.cloneNode(true);
+  newRow.querySelector('.seg-text-edit').textContent = after;
+  row.parentNode.insertBefore(newRow, row.nextSibling);
+  renumberSegIds(row.closest('.seg-claim-block'));
+}
+
+function mergeSeg(btn) {
+  const row = btn.closest('.seg-row');
+  const next = row.nextElementSibling;
+  if (!next || !next.classList.contains('seg-row')) { return; }
+  const thisText = row.querySelector('.seg-text-edit').textContent.trim();
+  const nextText = next.querySelector('.seg-text-edit').textContent.trim();
+  row.querySelector('.seg-text-edit').textContent = thisText + ' ' + nextText;
+  next.remove();
+  renumberSegIds(row.closest('.seg-claim-block'));
+}
+
+function addSeg(btn) {
+  const row = btn.closest('.seg-row');
+  const newRow = row.cloneNode(true);
+  newRow.querySelector('.seg-text-edit').textContent = '';
+  row.parentNode.insertBefore(newRow, row.nextSibling);
+  renumberSegIds(row.closest('.seg-claim-block'));
+  // 新行にフォーカス
+  newRow.querySelector('.seg-text-edit').focus();
+}
+
+function delSeg(btn) {
+  const row = btn.closest('.seg-row');
+  const block = row.closest('.seg-claim-block');
+  const rows = block.querySelectorAll('.seg-row');
+  if (rows.length <= 1) { alert('最後の1行は削除できません'); return; }
+  row.remove();
+  renumberSegIds(block);
+}
+
+async function saveSegmentsFromEditor() {
+  const blocks = document.querySelectorAll('.seg-claim-block');
+  const segments = [];
+  blocks.forEach(block => {
+    const claimNum = parseInt(block.dataset.claim);
+    const rows = block.querySelectorAll('.seg-row');
+    const segs = [];
+    rows.forEach(row => {
+      const id = row.querySelector('.seg-id').textContent.trim();
+      const text = row.querySelector('.seg-text-edit').textContent.trim();
+      if (text) segs.push({ id, text });
+    });
+    // 元データからclaim情報を復元
+    const origData = {{ segments|tojson if segments else '[]' }};
+    const orig = origData.find(c => c.claim_number === claimNum) || {};
+    segments.push({
+      claim_number: claimNum,
+      is_independent: orig.is_independent !== undefined ? orig.is_independent : true,
+      dependencies: orig.dependencies || [],
+      full_text: orig.full_text || '',
+      segments: segs,
+    });
+  });
+  try {
+    await fetch(`/case/${CASE_ID}/segments`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(segments)
+    });
+    const msg = document.getElementById('seg-save-msg');
+    msg.textContent = '保存しました';
+    msg.style.display = 'block';
+    setTimeout(() => msg.style.display = 'none', 2000);
+  } catch(e) {
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+// ===== キーワード提案 =====
+async function suggestKeywords() {
+  const loading = document.getElementById('loading-kw');
+  loading.classList.add('show');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/suggest`, { method: 'POST' });
+    const data = await resp.json();
+    loading.classList.remove('show');
+    location.reload();
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+
+// ===== 対比（複数文献対応） =====
+function getSelectedCitationIds() {
+  return Array.from(document.querySelectorAll('.cit-checkbox:checked')).map(cb => cb.value);
+}
+function toggleAllCitations(checked) {
+  document.querySelectorAll('.cit-checkbox').forEach(cb => cb.checked = checked);
+}
+
+async function generatePrompt() {
+  const citIds = getSelectedCitationIds();
+  if (citIds.length === 0) { alert('対象文献を1つ以上選択してください'); return; }
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/prompt`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ citation_ids: citIds })
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); return; }
+    document.getElementById('prompt-text').textContent = data.prompt;
+    document.getElementById('prompt-text').style.display = 'block';
+    const label = data.num_citations > 1 ? `${data.num_citations}件の文献` : '1件の文献';
+    document.getElementById('prompt-charcount').textContent =
+      `${data.char_count.toLocaleString()} 文字 (${label})`;
+  } catch(e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
+function copyPrompt() {
+  const text = document.getElementById('prompt-text').textContent;
+  if (!text) { alert('先にプロンプトを生成してください'); return; }
+  navigator.clipboard.writeText(text).then(() => {
+    alert('クリップボードにコピーしました。Claudeチャットに貼り付けてください。');
+  });
+}
+
+async function parseResponse() {
+  const text = document.getElementById('response-text').value;
+  if (!text.trim()) { alert('回答を貼り付けてください'); return; }
+
+  const loading = document.getElementById('loading-parse');
+  loading.classList.add('show');
+
+  try {
+    // 複数文献対応エンドポイントを使用
+    const resp = await fetch(`/case/${CASE_ID}/response`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: text })
+    });
+    const data = await resp.json();
+    loading.classList.remove('show');
+
+    const result = document.getElementById('parse-result');
+    result.innerHTML = '';
+
+    if (data.errors && data.errors.length > 0) {
+      result.innerHTML += `<div style="padding:1rem; background:#422006; border-radius:8px; color:#fbbf24; margin-bottom:0.5rem;">
+        <strong>警告:</strong><br>${data.errors.join('<br>')}
+      </div>`;
+    }
+    if (data.success) {
+      const docs = data.saved_docs || [];
+      result.innerHTML += `<div style="padding:1rem; background:#14532d; border-radius:8px; color:#4ade80;">
+        パース成功! ${data.num_docs}件の文献の対比結果を保存しました。<br>
+        保存先: ${docs.join(', ')}
+      </div>`;
+    } else if (!data.errors || data.errors.length === 0) {
+      result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
+        パース失敗: JSONを抽出できませんでした。
+      </div>`;
+    }
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+
+// ===== 対比サマリ読み込み =====
+async function loadComparisonSummary() {
+  // segments と responses をフェッチしてテーブル構築
+  try {
+    const segResp = await fetch(`/case/${CASE_ID}/segments`);
+    if (!segResp.ok) return;
+    const segs = await segResp.json();
+
+    const tbody = document.getElementById('summary-tbody');
+    if (!tbody) return;
+
+    // 引用文献IDのリスト (meta.citationsから)
+    const citIds = [{% for cit in citations %}"{{ cit.id }}",{% endfor %}];
+
+    // 各文献の回答を取得
+    const responses = {};
+    for (const citId of citIds) {
+      try {
+        const r = await fetch(`/case/${CASE_ID}/prompt/${citId}`); // trick: use existing endpoint
+      } catch(e) {}
+    }
+
+    // 簡易: ページリロード後にサーバサイドで描画すべきだが、
+    // ここではシンプルにページリロードで対応
+    tbody.innerHTML = '<tr><td colspan="99" style="text-align:center; color:var(--text2);">Step 5で回答を取り込むと、ここに対比サマリが表示されます。<br>Excel出力でフル版を生成してください。</td></tr>';
+  } catch(e) {}
+}
+
+// ===== 案件情報編集 =====
+function editCaseMeta() {
+  document.getElementById('meta-edit-modal').style.display = 'flex';
+}
+function closeMetaModal() {
+  document.getElementById('meta-edit-modal').style.display = 'none';
+}
+async function saveCaseMeta() {
+  const patentNumber = document.getElementById('edit-patent-number').value.trim();
+  const patentTitle = document.getElementById('edit-patent-title').value.trim();
+  try {
+    await fetch(`/case/${CASE_ID}/meta`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ patent_number: patentNumber, patent_title: patentTitle })
+    });
+    document.getElementById('header-patent-number').textContent = patentNumber || CASE_ID;
+    document.getElementById('header-patent-title').textContent = patentTitle || '（題名未取得）';
+    closeMetaModal();
+  } catch(e) {
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+// ===== Excel出力 =====
+async function exportExcel() {
+  const loading = document.getElementById('loading-export');
+  loading.classList.add('show');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/export/excel`, { method: 'POST' });
+    const data = await resp.json();
+    loading.classList.remove('show');
+
+    const result = document.getElementById('export-result');
+    if (data.success) {
+      result.innerHTML = `<div style="padding:1rem; background:#14532d; border-radius:8px; color:#4ade80;">
+        Excel出力完了!
+        <a href="/case/${CASE_ID}/download/${data.filename}" style="color:#fff; text-decoration:underline; margin-left:1rem;">ダウンロード</a>
+      </div>`;
+    } else {
+      result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
+        エラー: ${data.error}
+      </div>`;
+    }
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+</script>
+</body>
+</html>
