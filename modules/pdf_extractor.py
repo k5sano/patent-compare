@@ -22,7 +22,7 @@ PARA_PATTERNS = {
     "WO": re.compile(r'\[(\d{4})\]'),
 }
 
-# --- セクション判定キーワード ---
+# --- セクション判定キーワード（日本語） ---
 SECTION_KEYWORDS = [
     (re.compile(r'技術分野'), "技術分野"),
     (re.compile(r'背景技術|従来の技術'), "背景技術"),
@@ -32,6 +32,18 @@ SECTION_KEYWORDS = [
     (re.compile(r'実施の形態|実施形態|発明の詳細'), "実施形態"),
     (re.compile(r'実施例'), "実施例"),
     (re.compile(r'比較例'), "比較例"),
+]
+
+# --- セクション判定キーワード（英語 → 日本語名に統一） ---
+SECTION_KEYWORDS_EN = [
+    (re.compile(r'TECHNICAL FIELD|FIELD OF THE INVENTION', re.I), "技術分野"),
+    (re.compile(r'BACKGROUND|PRIOR ART|RELATED ART', re.I), "背景技術"),
+    (re.compile(r'SUMMARY OF THE INVENTION|SUMMARY', re.I), "手段"),
+    (re.compile(r'BRIEF DESCRIPTION OF.*DRAWING', re.I), "図面"),
+    (re.compile(r'DETAILED DESCRIPTION', re.I), "実施形態"),
+    (re.compile(r'EXAMPLE(?:S)?(?!\s*\d)', re.I), "実施例"),
+    (re.compile(r'COMPARATIVE EXAMPLE', re.I), "比較例"),
+    (re.compile(r'CLAIMS', re.I), "請求項"),
 ]
 
 # --- 請求項パターン ---
@@ -46,27 +58,46 @@ DEPENDENCY_PATTERN = re.compile(
     r'|請求項(\d+)に記載の'
 )
 
+# --- 英語請求項パターン ---
+CLAIM_PATTERN_EN = re.compile(r'\n\s*(\d+)\.\s+')
+CLAIM_SECTION_START_EN = re.compile(
+    r'(?:What is claimed is|CLAIMS|The Claims|I claim|We claim)\s*:?\s*\n', re.I
+)
+DEPENDENCY_PATTERN_EN = re.compile(
+    r'claim\s+(\d+)'
+    r'|claims?\s+(\d+)\s*[-–to]+\s*(\d+)'
+    r'|any\s+(?:one\s+)?of\s+claims\s+(\d+)',
+    re.I,
+)
+
 # --- 表の検出パターン ---
 TABLE_PATTERN = re.compile(r'【(表\d+)】|【(Table\s*\d+)】|\[(表\d+)\]|\[(Table\s*\d+)\]')
 
 
 def detect_format(text):
     """特許公報のフォーマットを判定"""
+    # 日本語段落番号 【XXXX】 があれば JP
     if re.search(r'【\d{4}】', text):
         return "JP"
+    # US 特許: Col.X 形式 or CLAIMS セクション + "1. A/An" 形式
     if re.search(r'Col\.?\s*\d+', text):
         return "US"
+    # WO/EP: [XXXX] 段落番号
     if re.search(r'\[\d{4}\]', text):
         return "WO"
+    # 英語特許の一般検出: CLAIMS/ABSTRACT/DESCRIPTION 等のヘッダー
+    if re.search(r'\b(?:CLAIMS|ABSTRACT|DETAILED DESCRIPTION|FIELD OF THE INVENTION)\b', text):
+        return "US"
     return "JP"  # デフォルト
 
 
-def extract_text_from_pdf(pdf_path, ocr_threshold=200):
+def extract_text_from_pdf(pdf_path, ocr_threshold=200, ocr_lang='jpn'):
     """PDFからページごとのテキストを抽出（画像ページはOCRフォールバック）
 
     Parameters:
         pdf_path: PDFファイルパス
         ocr_threshold: このバイト数以下のページはOCR対象とする
+        ocr_lang: OCR言語 ('jpn' or 'eng')
     """
     import subprocess
     import tempfile
@@ -93,7 +124,7 @@ def extract_text_from_pdf(pdf_path, ocr_threshold=200):
     # 2nd pass: 必要なページだけOCR
     if ocr_pages:
         for page_num in ocr_pages:
-            ocr_text = _ocr_page(doc[page_num], page_num)
+            ocr_text = _ocr_page(doc[page_num], page_num, lang=ocr_lang)
             if ocr_text and len(ocr_text.strip()) > len(pages[page_num]["text"].strip()):
                 # OCR結果のほうが情報量が多ければ置換
                 pages[page_num]["text"] = ocr_text
@@ -103,8 +134,14 @@ def extract_text_from_pdf(pdf_path, ocr_threshold=200):
     return pages
 
 
-def _ocr_page(page, page_num):
-    """1ページをOCRしてテキストを返す"""
+def _ocr_page(page, page_num, lang='jpn'):
+    """1ページをOCRしてテキストを返す
+
+    Parameters:
+        page: fitz.Page
+        page_num: ページ番号（0-indexed）
+        lang: Tesseract言語コード ('jpn' or 'eng')
+    """
     import subprocess
     import tempfile
     import os
@@ -117,7 +154,7 @@ def _ocr_page(page, page_num):
 
         out_base = os.path.join(tempfile.gettempdir(), f'patent_ocr_out_p{page_num}')
         subprocess.run(
-            ['tesseract', img_path, out_base, '-l', 'jpn', '--psm', '6'],
+            ['tesseract', img_path, out_base, '-l', lang, '--psm', '6'],
             capture_output=True, timeout=60
         )
         out_file = out_base + '.txt'
@@ -168,13 +205,20 @@ def detect_patent_number(pages_text):
     return None
 
 
-def detect_patent_title(pages_text, pdf_path=None):
+def detect_patent_title(pages_text, pdf_path=None, fmt="JP"):
     """発明の名称を検出（テキスト抽出 → OCRフォールバック）"""
     full_text = "\n".join(p["text"] for p in pages_text[:5])
 
+    # 日本語パターン（JP および翻訳文付き英語公報）
     title = _find_title_in_text(full_text)
     if title:
         return title
+
+    # 英語パターン
+    if fmt != "JP":
+        title = _find_title_in_text_en(full_text)
+        if title:
+            return title
 
     # テキストで見つからない場合: OCRで1ページ目を読み取り
     if pdf_path:
@@ -183,6 +227,10 @@ def detect_patent_title(pages_text, pdf_path=None):
             title = _find_title_in_text(ocr_text)
             if title:
                 return title
+            if fmt != "JP":
+                title = _find_title_in_text_en(ocr_text)
+                if title:
+                    return title
 
     return None
 
@@ -226,6 +274,35 @@ def _find_title_in_text(text):
     return None
 
 
+def _find_title_in_text_en(text):
+    """英語テキストからタイトルを検索"""
+    # パターン1: (54) の後の行（英語公報共通）
+    m = re.search(r'\(54\)\s*(.+?)(?:\n\(|\n\n)', text, re.DOTALL)
+    if m:
+        title = m.group(1).strip().replace('\n', ' ')
+        title = re.sub(r'\s+', ' ', title)
+        if len(title) > 3:
+            return title
+
+    # パターン2: "Title:" の後
+    m = re.search(r'Title\s*:\s*(.+?)(?:\n\n|\n[A-Z])', text, re.DOTALL)
+    if m:
+        title = m.group(1).strip().replace('\n', ' ')
+        title = re.sub(r'\s+', ' ', title)
+        if len(title) > 3:
+            return title
+
+    # パターン3: ABSTRACT 直前の大文字行
+    m = re.search(r'\n\s*([A-Z][A-Z\s,\-]+[A-Z])\s*\n\s*ABSTRACT', text)
+    if m:
+        title = m.group(1).strip()
+        # セクションヘッダーを除外
+        if title not in ('CLAIMS', 'DESCRIPTION', 'DRAWINGS', 'ABSTRACT'):
+            return title
+
+    return None
+
+
 def _ocr_first_pages(pdf_path, max_pages=1):
     """PDFの冒頭ページをOCRしてテキストを返す"""
     try:
@@ -241,13 +318,24 @@ def _ocr_first_pages(pdf_path, max_pages=1):
         return None
 
 
-def classify_section(text, current_section):
-    """段落テキストからセクション名を判定"""
-    # 段落冒頭のキーワードで判定
-    check_text = text[:50] if len(text) > 50 else text
-    for pattern, section_name in SECTION_KEYWORDS:
+def classify_section(text, current_section, fmt="JP"):
+    """段落テキストからセクション名を判定
+
+    Parameters:
+        text: 段落テキスト
+        current_section: 現在のセクション名
+        fmt: フォーマット ("JP" / "US" / "WO")
+    """
+    check_text = text[:80] if len(text) > 80 else text
+    keywords = SECTION_KEYWORDS if fmt == "JP" else SECTION_KEYWORDS_EN
+    for pattern, section_name in keywords:
         if pattern.search(check_text):
             return section_name
+    # 英語フォーマットでも日本語キーワードが含まれる場合がある（翻訳文等）
+    if fmt != "JP":
+        for pattern, section_name in SECTION_KEYWORDS:
+            if pattern.search(check_text):
+                return section_name
     return current_section
 
 
@@ -290,14 +378,67 @@ def parse_claims_jp(full_text):
     return claims
 
 
+def parse_claims_en(full_text):
+    """英語特許の請求項を抽出"""
+    claims = []
+
+    # CLAIMSセクションを特定
+    claim_start = CLAIM_SECTION_START_EN.search(full_text)
+    if claim_start:
+        claim_area = full_text[claim_start.end():]
+    else:
+        # フォールバック: 末尾に "1. " パターンがあれば使う
+        claim_area = full_text
+
+    # 個別の請求項を抽出: "1. A method..." 形式
+    claim_matches = list(CLAIM_PATTERN_EN.finditer(claim_area))
+    if not claim_matches:
+        return claims
+
+    for i, match in enumerate(claim_matches):
+        claim_num = int(match.group(1))
+        start = match.end()
+        end = claim_matches[i + 1].start() if i + 1 < len(claim_matches) else len(claim_area)
+        claim_text = claim_area[start:end].strip()
+        # 改行を整理
+        claim_text = re.sub(r'\s+', ' ', claim_text).strip()
+
+        # 従属先を検出
+        dependencies = _detect_dependencies_en(claim_text)
+        is_independent = len(dependencies) == 0
+
+        claims.append({
+            "number": claim_num,
+            "text": claim_text,
+            "dependencies": dependencies,
+            "is_independent": is_independent,
+        })
+
+    return claims
+
+
 def _detect_dependencies(claim_text):
-    """請求項テキストから従属先の請求項番号を検出"""
+    """請求項テキストから従属先の請求項番号を検出（日本語）"""
     deps = set()
     for m in DEPENDENCY_PATTERN.finditer(claim_text):
         groups = m.groups()
         for g in groups:
             if g is not None:
                 deps.add(int(g))
+    return sorted(deps)
+
+
+def _detect_dependencies_en(claim_text):
+    """英語請求項テキストから従属先の請求項番号を検出"""
+    deps = set()
+    for m in DEPENDENCY_PATTERN_EN.finditer(claim_text):
+        groups = m.groups()
+        for g in groups:
+            if g is not None:
+                try:
+                    deps.add(int(g))
+                except ValueError:
+                    pass
     return sorted(deps)
 
 
@@ -343,6 +484,104 @@ def parse_paragraphs_jp(full_text, pages):
             "section": current_section,
             "text": para_text.strip(),
         })
+
+    return paragraphs
+
+
+def parse_paragraphs_en(full_text, pages, fmt="US"):
+    """英語特許の段落を抽出
+
+    Parameters:
+        full_text: 全ページ結合テキスト
+        pages: ページデータリスト
+        fmt: "US" or "WO"
+    """
+    paragraphs = []
+    current_section = "実施形態"
+
+    # ページごとの位置マッピング
+    page_offsets = []
+    offset = 0
+    for p in pages:
+        page_offsets.append({"page": p["page"], "start": offset, "end": offset + len(p["text"])})
+        offset += len(p["text"]) + 1
+
+    # US/WO: [XXXX] 段落番号パターン
+    para_pattern = re.compile(r'\[(\d{4})\]')
+    matches = list(para_pattern.finditer(full_text))
+
+    if matches:
+        # 段落番号あり
+        for i, match in enumerate(matches):
+            para_id = match.group(1)
+            start = match.end()
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(full_text)
+            para_text = full_text[start:end].strip()
+
+            # セクション判定（英語キーワード使用）
+            current_section = classify_section(para_text, current_section, fmt=fmt)
+
+            # ページ特定
+            page_num = 1
+            for po in page_offsets:
+                if po["start"] <= match.start() < po["end"]:
+                    page_num = po["page"]
+                    break
+
+            if not _looks_like_table(para_text):
+                para_text = re.sub(r'(?<!\n)\n(?!\n)', ' ', para_text)
+
+            paragraphs.append({
+                "id": para_id,
+                "page": page_num,
+                "section": current_section,
+                "text": para_text.strip(),
+            })
+    else:
+        # 段落番号なし: セクションヘッダーで分割し、空行で段落分割して連番を振る
+        # まずセクションヘッダーで大きく分割
+        section_pattern = re.compile(
+            r'\n\s*(TECHNICAL FIELD|FIELD OF THE INVENTION|BACKGROUND|PRIOR ART'
+            r'|SUMMARY OF THE INVENTION|SUMMARY|BRIEF DESCRIPTION OF.*?DRAWINGS?'
+            r'|DETAILED DESCRIPTION|EXAMPLES?|COMPARATIVE EXAMPLE|CLAIMS'
+            r'|ABSTRACT)\s*\n',
+            re.I,
+        )
+        para_num = 1
+        # 空行2つ以上で段落分割
+        raw_paras = re.split(r'\n\s*\n', full_text)
+        for raw_para in raw_paras:
+            text = raw_para.strip()
+            if not text or len(text) < 5:
+                continue
+
+            # セクションヘッダー検出
+            current_section = classify_section(text, current_section, fmt=fmt)
+
+            # ヘッダーだけの段落はスキップ
+            if section_pattern.fullmatch('\n' + text + '\n'):
+                continue
+
+            # ページ特定
+            pos = full_text.find(raw_para)
+            page_num = 1
+            if pos >= 0:
+                for po in page_offsets:
+                    if po["start"] <= pos < po["end"]:
+                        page_num = po["page"]
+                        break
+
+            if not _looks_like_table(text):
+                text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
+
+            para_id = f"{para_num:04d}"
+            paragraphs.append({
+                "id": para_id,
+                "page": page_num,
+                "section": current_section,
+                "text": text.strip(),
+            })
+            para_num += 1
 
     return paragraphs
 
@@ -393,12 +632,17 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
     """
     pdf_path = Path(pdf_path)
 
-    # PDF全ページテキスト抽出
+    # PDF全ページテキスト抽出（1st pass: フォーマット判定用にデフォルト言語で）
     pages = extract_text_from_pdf(str(pdf_path))
     full_text = "\n".join(p["text"] for p in pages)
 
     # フォーマット判定
     fmt = detect_format(full_text)
+
+    # 英語フォーマットの場合、OCR言語を切り替えて再抽出
+    if fmt != "JP":
+        pages = extract_text_from_pdf(str(pdf_path), ocr_lang='eng')
+        full_text = "\n".join(p["text"] for p in pages)
 
     # 特許番号検出
     patent_number = detect_patent_number(pages)
@@ -406,16 +650,15 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
         patent_number = pdf_path.stem
 
     # 発明の名称検出（テキストで見つからなければOCRにフォールバック）
-    patent_title = detect_patent_title(pages, pdf_path=pdf_path)
+    patent_title = detect_patent_title(pages, pdf_path=pdf_path, fmt=fmt)
 
-    # 請求項抽出
+    # 請求項・段落抽出（フォーマット別分岐）
     if fmt == "JP":
         claims = parse_claims_jp(full_text)
         paragraphs = parse_paragraphs_jp(full_text, pages)
     else:
-        # US/WO はPhase 1bで対応。暫定でJPパーサーを使用
-        claims = parse_claims_jp(full_text)
-        paragraphs = parse_paragraphs_jp(full_text, pages)
+        claims = parse_claims_en(full_text)
+        paragraphs = parse_paragraphs_en(full_text, pages, fmt=fmt)
 
     # テーブル検出
     tables = detect_tables(paragraphs)

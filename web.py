@@ -83,31 +83,100 @@ def index():
 
 @app.route("/case/new", methods=["POST"])
 def new_case():
-    case_id = request.form.get("case_id", "").strip()
-    title = request.form.get("title", "").strip()
-    field = request.form.get("field", "cosmetics")
+    """新規案件作成: 公開番号から本願PDFを自動DL・抽出"""
+    import re as _re
+    from modules.patent_downloader import download_patent_pdf
+    from modules.pdf_extractor import extract_patent_pdf
+    from modules.claim_segmenter import segment_claims
 
-    if not case_id:
-        flash("案件番号を入力してください。", "error")
-        return redirect(url_for("index"))
+    data = request.get_json() or {}
+    case_number = (data.get("case_number") or "").strip()
+    month = data.get("month", "")
+    field = data.get("field", "cosmetics")
 
+    if not case_number:
+        return jsonify({"error": "案件番号を入力してください"}), 400
+
+    # case_number: "2025-47348" → case_id: "2025-47348"
+    case_id = case_number
     case_dir = get_case_dir(case_id)
     if case_dir.exists():
-        flash(f"案件 '{case_id}' は既に存在します。", "error")
-        return redirect(url_for("index"))
+        return jsonify({"error": f"案件 '{case_id}' は既に存在します", "case_id": case_id}), 409
 
+    # 公開番号 → Google Patents用ID: "2025-47348" → "JP2025047348A"
+    m = _re.match(r'(\d{4})-(\d+)', case_number)
+    if m:
+        year, serial = m.group(1), m.group(2)
+        jp_id = f"JP{year}{serial.zfill(6)}A"
+    else:
+        # ハイフンなしや他のフォーマットの場合はそのまま試行
+        jp_id = case_number
+
+    # ディレクトリ作成
     for sub in ["input", "citations", "prompts", "responses", "output"]:
         (case_dir / sub).mkdir(parents=True, exist_ok=True)
 
+    # 初期メタ情報を保存（DL失敗時にも案件は残る）
     meta = {
         "case_id": case_id,
-        "title": title,
+        "title": "",
         "field": field,
+        "month": month,
         "citations": [],
     }
     save_case_meta(case_id, meta)
-    flash(f"案件 '{case_id}' を作成しました。", "success")
-    return redirect(url_for("case_detail", case_id=case_id))
+
+    # PDF自動ダウンロード
+    dl_result = download_patent_pdf(jp_id, case_dir / "input", timeout=60)
+    if not dl_result["success"]:
+        return jsonify({
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": False,
+            "error": dl_result.get("error", "PDFダウンロード失敗"),
+            "google_patents_url": dl_result.get("google_patents_url", ""),
+        })
+
+    # PDF抽出
+    try:
+        result = extract_patent_pdf(dl_result["path"], "hongan")
+        with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+        # メタ情報更新
+        patent_number = result.get("patent_number", "")
+        patent_title = result.get("patent_title", "")
+        meta["patent_number"] = patent_number
+        meta["patent_title"] = patent_title
+        meta["title"] = patent_title
+        save_case_meta(case_id, meta)
+
+        # 自動分節
+        num_segments = 0
+        if result.get("claims"):
+            segs = segment_claims(result["claims"])
+            with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+                json.dump(segs, f, ensure_ascii=False, indent=2)
+            num_segments = sum(len(c.get("segments", [])) for c in segs)
+
+        return jsonify({
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": True,
+            "patent_number": patent_number,
+            "patent_title": patent_title,
+            "num_claims": len(result.get("claims", [])),
+            "num_paragraphs": len(result.get("paragraphs", [])),
+            "num_segments": num_segments,
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": True,
+            "error": f"PDF抽出エラー: {str(e)}",
+        })
 
 
 @app.route("/case/<case_id>")
@@ -338,6 +407,164 @@ def suggest_keywords(case_id):
     return jsonify(result)
 
 
+@app.route("/case/<case_id>/keywords", methods=["GET"])
+def get_keywords(case_id):
+    """キーワードデータを取得"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+    with open(kw_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
+
+
+@app.route("/case/<case_id>/keywords/add", methods=["POST"])
+def add_keyword(case_id):
+    """キーワードをグループに追加"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+    term = (data.get("term") or "").strip()
+    if not term:
+        return jsonify({"error": "キーワードを入力してください"}), 400
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            group["keywords"].append({
+                "term": term,
+                "source": "手動",
+                "type": "手動追加",
+            })
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/keywords/delete", methods=["POST"])
+def delete_keyword(case_id):
+    """キーワードをグループから削除"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+    term = data.get("term", "")
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            group["keywords"] = [
+                kw for kw in group["keywords"] if kw["term"] != term
+            ]
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/keywords/group/add", methods=["POST"])
+def add_keyword_group(case_id):
+    """キーワードグループを新規追加"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+
+    groups = []
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            groups = json.load(f)
+
+    data = request.get_json() or {}
+    label = (data.get("label") or "").strip() or "新規グループ"
+    segment_ids = data.get("segment_ids", [])
+
+    new_id = max((g["group_id"] for g in groups), default=0) + 1
+    groups.append({
+        "group_id": new_id,
+        "label": label,
+        "segment_ids": segment_ids,
+        "keywords": [],
+        "search_codes": {},
+    })
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True, "group_id": new_id})
+
+
+@app.route("/case/<case_id>/keywords/group/delete", methods=["POST"])
+def delete_keyword_group(case_id):
+    """キーワードグループを削除"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    groups = [g for g in groups if g["group_id"] != group_id]
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/keywords/group/update", methods=["POST"])
+def update_keyword_group(case_id):
+    """キーワードグループのラベル・関連分節を更新"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            if "label" in data:
+                group["label"] = data["label"]
+            if "segment_ids" in data:
+                group["segment_ids"] = data["segment_ids"]
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
 @app.route("/case/<case_id>/prompt", methods=["POST"])
 def generate_prompt_multi(case_id):
     """複数文献対応のプロンプト生成"""
@@ -505,6 +732,18 @@ def save_response_single(case_id, citation_id):
     })
 
 
+@app.route("/case/<case_id>/response/<citation_id>", methods=["GET"])
+def get_response(case_id, citation_id):
+    """引用文献の対比結果JSONを返す"""
+    case_dir = get_case_dir(case_id)
+    resp_path = case_dir / "responses" / f"{citation_id}.json"
+    if not resp_path.exists():
+        return jsonify({"error": "回答データがありません"}), 404
+    with open(resp_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
+
+
 @app.route("/case/<case_id>/export/excel", methods=["POST"])
 def export_excel(case_id):
     from modules.excel_writer import write_comparison_table
@@ -556,6 +795,382 @@ def download_file(case_id, filename):
         flash("ファイルが見つかりません。", "error")
         return redirect(url_for("case_detail", case_id=case_id))
     return send_file(str(file_path), as_attachment=True)
+
+
+@app.route("/case/<case_id>/annotate/<citation_id>", methods=["POST"])
+def annotate_citation(case_id, citation_id):
+    """引用文献PDFに対比結果の注釈を追加"""
+    from modules.pdf_annotator import annotate_citation_pdf
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    # 対比結果
+    resp_path = case_dir / "responses" / f"{citation_id}.json"
+    if not resp_path.exists():
+        return jsonify({"error": f"対比結果がありません: {citation_id}"}), 404
+
+    with open(resp_path, "r", encoding="utf-8") as f:
+        response_data = json.load(f)
+
+    # 引用文献構造化データ
+    cit_path = case_dir / "citations" / f"{citation_id}.json"
+    if not cit_path.exists():
+        return jsonify({"error": f"引用文献データがありません: {citation_id}"}), 404
+
+    with open(cit_path, "r", encoding="utf-8") as f:
+        citation_data = json.load(f)
+
+    # 元PDF検索: input/ 内から該当ファイルを探す
+    pdf_path = _find_citation_pdf(case_dir / "input", citation_id)
+    if not pdf_path:
+        return jsonify({"error": f"引用文献PDFが見つかりません: {citation_id}"}), 404
+
+    # キーワード
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    # 注釈PDF生成
+    import re
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
+    output_path = case_dir / "output" / f"{safe_name}_annotated.pdf"
+    (case_dir / "output").mkdir(parents=True, exist_ok=True)
+
+    try:
+        result = annotate_citation_pdf(
+            pdf_path, output_path, response_data, citation_data, keywords)
+        return jsonify({
+            "success": True,
+            "filename": output_path.name,
+            "labels": result["labels"],
+            "highlights": result["highlights"],
+            "bookmarks": result["bookmarks"],
+        })
+    except Exception as e:
+        return jsonify({"error": f"注釈生成エラー: {str(e)}"}), 500
+
+
+@app.route("/case/<case_id>/annotate/all", methods=["POST"])
+def annotate_all_citations(case_id):
+    """全引用文献の注釈PDFを一括生成"""
+    from modules.pdf_annotator import annotate_citation_pdf
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    import re
+    results = []
+    for cit in meta.get("citations", []):
+        cit_id = cit["id"]
+        resp_path = case_dir / "responses" / f"{cit_id}.json"
+        cit_path = case_dir / "citations" / f"{cit_id}.json"
+        pdf_path = _find_citation_pdf(case_dir / "input", cit_id)
+
+        if not resp_path.exists() or not cit_path.exists() or not pdf_path:
+            results.append({"citation_id": cit_id, "success": False,
+                            "error": "必要なファイルがありません"})
+            continue
+
+        with open(resp_path, "r", encoding="utf-8") as f:
+            response_data = json.load(f)
+        with open(cit_path, "r", encoding="utf-8") as f:
+            citation_data = json.load(f)
+
+        safe_name = re.sub(r'[<>:"/\\|?*]', '_', cit_id)
+        output_path = case_dir / "output" / f"{safe_name}_annotated.pdf"
+
+        try:
+            result = annotate_citation_pdf(
+                pdf_path, output_path, response_data, citation_data, keywords)
+            results.append({
+                "citation_id": cit_id, "success": True,
+                "filename": output_path.name, **result,
+            })
+        except Exception as e:
+            results.append({"citation_id": cit_id, "success": False,
+                            "error": str(e)})
+
+    success_count = sum(1 for r in results if r["success"])
+    return jsonify({"results": results, "success_count": success_count})
+
+
+def _find_citation_pdf(input_dir, citation_id):
+    """input/ディレクトリから引用文献IDに対応するPDFを探す"""
+    import re
+    if not input_dir.exists():
+        return None
+
+    # 全角数字→半角変換
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+
+    # citation_idから数字部分を抽出（全角も対応）
+    cid_hw = citation_id.translate(fw2hw)
+    normalized = re.sub(r'[\s\-/]', '', cid_hw)
+    digits = re.sub(r'[^\d]', '', cid_hw)
+
+    for pdf_file in input_dir.glob("*.pdf"):
+        stem = pdf_file.stem
+        stem_hw = stem.translate(fw2hw)
+        stem_normalized = re.sub(r'[\s\-/]', '', stem_hw)
+        # 完全一致
+        if stem_normalized == normalized:
+            return pdf_file
+        # 番号部分が含まれるか
+        if len(digits) >= 6 and digits in stem_normalized:
+            return pdf_file
+
+    return None
+
+
+@app.route("/case/<case_id>/search/prompt", methods=["POST"])
+def search_prompt(case_id):
+    """先行技術検索プロンプトを生成"""
+    from modules.search_prompt_generator import generate_search_prompt
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません。Step 2を完了してください。"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_search_prompt(segs, keywords, field)
+
+    # ファイルに保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = prompts_dir / "search_prompt.txt"
+    with open(prompt_path, "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    return jsonify({
+        "prompt": prompt_text,
+        "char_count": len(prompt_text),
+    })
+
+
+@app.route("/case/<case_id>/search/response", methods=["POST"])
+def search_response(case_id):
+    """先行技術検索の回答をパース"""
+    from modules.search_prompt_generator import parse_search_response
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    raw_text = request.get_json().get("text", "")
+    if not raw_text.strip():
+        return jsonify({"error": "テキストが空です"}), 400
+
+    candidates, errors = parse_search_response(raw_text)
+
+    if candidates:
+        # search_candidates.json に保存
+        from datetime import datetime
+        save_data = {
+            "generated_at": datetime.now().isoformat(),
+            "candidates": candidates,
+        }
+        with open(case_dir / "search_candidates.json", "w", encoding="utf-8") as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "success": candidates is not None,
+        "candidates": candidates or [],
+        "errors": errors,
+    })
+
+
+@app.route("/case/<case_id>/search/download", methods=["POST"])
+def search_download(case_id):
+    """候補文献のPDFをダウンロードして引用文献に登録"""
+    from modules.patent_downloader import download_patent_pdf
+    from modules.pdf_extractor import extract_patent_pdf
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    data = request.get_json() or {}
+    patent_ids = data.get("patent_ids", [])
+    if not patent_ids and data.get("patent_id"):
+        patent_ids = [data["patent_id"]]
+
+    if not patent_ids:
+        return jsonify({"error": "patent_id を指定してください"}), 400
+
+    results = []
+    for patent_id in patent_ids:
+        role = data.get("role", "主引例")
+
+        # PDFダウンロード試行
+        dl_result = download_patent_pdf(patent_id, case_dir / "input")
+
+        if dl_result["success"]:
+            # PDF抽出
+            try:
+                extracted = extract_patent_pdf(dl_result["path"], "citation")
+                doc_id = extracted.get("patent_number", patent_id)
+                extracted["role"] = role
+                extracted["label"] = doc_id
+
+                # citations/ に保存
+                (case_dir / "citations").mkdir(parents=True, exist_ok=True)
+                with open(case_dir / "citations" / f"{doc_id}.json", "w", encoding="utf-8") as f:
+                    json.dump(extracted, f, ensure_ascii=False, indent=2)
+
+                # case.yaml 更新
+                citations = meta.get("citations", [])
+                if not any(c["id"] == doc_id for c in citations):
+                    citations.append({"id": doc_id, "role": role, "label": doc_id})
+                    meta["citations"] = citations
+                    save_case_meta(case_id, meta)
+
+                results.append({
+                    "patent_id": patent_id,
+                    "doc_id": doc_id,
+                    "success": True,
+                    "num_claims": len(extracted.get("claims", [])),
+                    "num_paragraphs": len(extracted.get("paragraphs", [])),
+                })
+            except Exception as e:
+                results.append({
+                    "patent_id": patent_id,
+                    "success": False,
+                    "error": f"PDF抽出エラー: {str(e)}",
+                    "google_patents_url": dl_result.get("google_patents_url", ""),
+                })
+        else:
+            results.append({
+                "patent_id": patent_id,
+                "success": False,
+                "error": dl_result.get("error", "ダウンロード失敗"),
+                "google_patents_url": dl_result.get("google_patents_url", ""),
+            })
+
+    # search_candidates.json のステータス更新
+    candidates_path = case_dir / "search_candidates.json"
+    if candidates_path.exists():
+        with open(candidates_path, "r", encoding="utf-8") as f:
+            cand_data = json.load(f)
+        for r in results:
+            for c in cand_data.get("candidates", []):
+                if c["patent_id"] == r["patent_id"]:
+                    c["status"] = "downloaded" if r["success"] else "failed"
+        with open(candidates_path, "w", encoding="utf-8") as f:
+            json.dump(cand_data, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"results": results})
+
+
+@app.route("/case/<case_id>/inventive-step/prompt", methods=["POST"])
+def inventive_step_prompt(case_id):
+    """進歩性判断プロンプトを生成"""
+    from modules.inventive_step_analyzer import generate_inventive_step_prompt
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    # 全回答データ読み込み
+    responses = {}
+    responses_dir = case_dir / "responses"
+    if responses_dir.exists():
+        for rfile in responses_dir.glob("*.json"):
+            with open(rfile, "r", encoding="utf-8") as f:
+                responses[rfile.stem] = json.load(f)
+
+    if not responses:
+        return jsonify({"error": "対比結果がありません。Step 5を完了してください。"}), 400
+
+    # 引用文献メタ情報
+    citations_meta = {}
+    for cit in meta.get("citations", []):
+        cit_path = case_dir / "citations" / f"{cit['id']}.json"
+        if cit_path.exists():
+            with open(cit_path, "r", encoding="utf-8") as f:
+                citations_meta[cit["id"]] = json.load(f)
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_inventive_step_prompt(segs, responses, citations_meta, keywords, field)
+
+    # ファイルに保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "inventive_step_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    return jsonify({
+        "prompt": prompt_text,
+        "char_count": len(prompt_text),
+    })
+
+
+@app.route("/case/<case_id>/inventive-step/response", methods=["POST"])
+def inventive_step_response(case_id):
+    """進歩性判断の回答をパース"""
+    from modules.inventive_step_analyzer import parse_inventive_step_response
+
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    raw_text = request.get_json().get("text", "")
+    if not raw_text.strip():
+        return jsonify({"error": "テキストが空です"}), 400
+
+    data, errors = parse_inventive_step_response(raw_text)
+
+    if data:
+        with open(case_dir / "inventive_step.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "success": data is not None,
+        "data": data,
+        "errors": errors,
+    })
 
 
 @app.route("/case/<case_id>/meta", methods=["POST"])
