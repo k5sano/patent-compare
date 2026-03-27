@@ -91,6 +91,7 @@ def new_case():
 
     data = request.get_json() or {}
     case_number = (data.get("case_number") or "").strip()
+    year = data.get("year", "")
     month = data.get("month", "")
     field = data.get("field", "cosmetics")
 
@@ -121,6 +122,7 @@ def new_case():
         "case_id": case_id,
         "title": "",
         "field": field,
+        "year": year,
         "month": month,
         "citations": [],
     }
@@ -1181,7 +1183,7 @@ def update_case_meta(case_id):
         return jsonify({"error": "案件が見つかりません"}), 404
 
     data = request.get_json() or {}
-    for key in ["patent_number", "patent_title", "title", "field"]:
+    for key in ["patent_number", "patent_title", "title", "field", "year", "month"]:
         if key in data:
             meta[key] = data[key]
     save_case_meta(case_id, meta)

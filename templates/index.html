@@ -46,9 +46,58 @@
   .flash-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
   .step-labels { display: flex; gap: 4px; margin-top: 0.5rem; }
   .step-label { font-size: 0.65rem; color: var(--text2); width: 10px; text-align: center; }
+  .btn-edit-case { position:absolute; top:1.2rem; right:1.2rem; background:var(--surface2); border:1px solid var(--border);
+    color:var(--text2); width:32px; height:32px; border-radius:8px; cursor:pointer; font-size:1rem; z-index:2;
+    display:flex; align-items:center; justify-content:center; transition:all 0.15s; }
+  .btn-edit-case:hover { border-color:var(--accent); color:var(--accent); background:rgba(59,130,246,0.1); }
+  .modal-overlay { display:none; position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; }
+  .modal-overlay.show { display:flex; }
+  .modal-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:1.5rem; width:460px; max-width:90vw; }
+  .modal-box h3 { margin-bottom:1rem; font-size:1.1rem; }
+  .modal-field { margin-bottom:0.8rem; }
+  .modal-field label { display:block; font-size:0.85rem; color:var(--text2); margin-bottom:4px; }
+  .modal-field input, .modal-field select { width:100%; }
+  .modal-row { display:flex; gap:0.8rem; }
+  .modal-row .modal-field { flex:1; }
+  .modal-btns { display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem; }
 </style>
 </head>
 <body>
+
+<!-- 案件編集モーダル -->
+<div class="modal-overlay" id="edit-modal" onclick="if(event.target===this)closeEditModal()">
+  <div class="modal-box">
+    <h3>案件情報の編集</h3>
+    <input type="hidden" id="edit-case-id">
+    <div class="modal-row">
+      <div class="modal-field">
+        <label>年度</label>
+        <select id="edit-year"></select>
+      </div>
+      <div class="modal-field">
+        <label>月</label>
+        <select id="edit-month">
+          <option value="">未設定</option>
+          <option value="1">1月</option><option value="2">2月</option>
+          <option value="3">3月</option><option value="4">4月</option>
+          <option value="5">5月</option><option value="6">6月</option>
+          <option value="7">7月</option><option value="8">8月</option>
+          <option value="9">9月</option><option value="10">10月</option>
+          <option value="11">11月</option><option value="12">12月</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-field">
+      <label>発明の名称</label>
+      <input type="text" id="edit-title">
+    </div>
+    <div class="modal-btns">
+      <button class="btn" style="background:var(--surface2); color:var(--text);" onclick="closeEditModal()">キャンセル</button>
+      <button class="btn btn-primary" onclick="saveEditModal()">保存</button>
+    </div>
+  </div>
+</div>
+
 <div class="container">
   <h1>PatentCompare</h1>
   <p class="subtitle">特許審査拒絶理由構成支援システム</p>
@@ -59,47 +108,76 @@
   {% endfor %}
   {% endwith %}
 
+  <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1rem; flex-wrap:wrap;">
+    <h2 style="font-size:1.1rem; color:var(--text2); margin:0;">案件一覧</h2>
+    <select id="filter-year" onchange="filterCases()" style="padding:0.3rem 0.5rem; font-size:0.85rem;">
+      <option value="">全年</option>
+    </select>
+    <select id="filter-month" onchange="filterCases()" style="padding:0.3rem 0.5rem; font-size:0.85rem;">
+      <option value="">全月</option>
+      <option value="1">1月</option><option value="2">2月</option>
+      <option value="3">3月</option><option value="4">4月</option>
+      <option value="5">5月</option><option value="6">6月</option>
+      <option value="7">7月</option><option value="8">8月</option>
+      <option value="9">9月</option><option value="10">10月</option>
+      <option value="11">11月</option><option value="12">12月</option>
+    </select>
+    <span id="filter-count" style="font-size:0.8rem; color:var(--text2);"></span>
+  </div>
+
+  <div id="cases-list">
   {% if cases %}
-  <h2 style="font-size:1.1rem; margin-bottom:1rem; color:var(--text2);">案件一覧</h2>
   {% for c in cases %}
-  <a href="/case/{{ c.case_id }}" class="card-link">
-    <div class="card">
-      <h3>{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
-      <div class="meta">
-        <span class="badge badge-blue">{{ c.field }}</span>
-        {% if c._has_excel %}<span class="badge badge-green">Excel出力済</span>{% endif %}
-        <span>引用文献: {{ c._num_citations }}件</span>
-        <span>回答: {{ c._num_responses }}件</span>
+  <div class="case-item" data-year="{{ c.year|default('', true) }}" data-month="{{ c.month|default('', true) }}"
+       data-case-id="{{ c.case_id }}" data-title="{{ c.patent_title or c.title }}"
+       style="position:relative;">
+    <a href="/case/{{ c.case_id }}" class="card-link">
+      <div class="card" style="padding-right:4rem;">
+        <h3 class="case-title-display">{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
+        <div class="meta">
+          <span class="badge badge-blue">{{ c.field }}</span>
+          {% if c.year or c.month %}<span class="badge badge-gray case-ym-display">{{ c.year|default('', true) }}{% if c.year and c.month %}/{% endif %}{{ (c.month ~ '月') if c.month else '' }}</span>{% endif %}
+          {% if not c.year and not c.month %}<span class="badge badge-gray case-ym-display" style="display:none;"></span>{% endif %}
+          {% if c._has_excel %}<span class="badge badge-green">Excel出力済</span>{% endif %}
+          <span>引用文献: {{ c._num_citations }}件</span>
+          <span>回答: {{ c._num_responses }}件</span>
+        </div>
+        <div class="progress-dots" title="本願 / 分節 / KW / 文献 / 回答 / Excel">
+          <div class="dot {{ 'done' if c._has_hongan else '' }}"></div>
+          <div class="dot {{ 'done' if c._has_segments else '' }}"></div>
+          <div class="dot {{ 'done' if c._has_keywords else '' }}"></div>
+          <div class="dot {{ 'done' if c._num_citations > 0 else '' }}"></div>
+          <div class="dot {{ 'done' if c._num_responses > 0 else '' }}"></div>
+          <div class="dot {{ 'done' if c._has_excel else '' }}"></div>
+        </div>
+        <div class="step-labels">
+          <div class="step-label">本</div>
+          <div class="step-label">分</div>
+          <div class="step-label">K</div>
+          <div class="step-label">文</div>
+          <div class="step-label">回</div>
+          <div class="step-label">Ex</div>
+        </div>
       </div>
-      <div class="progress-dots" title="本願 / 分節 / KW / 文献 / 回答 / Excel">
-        <div class="dot {{ 'done' if c._has_hongan else '' }}"></div>
-        <div class="dot {{ 'done' if c._has_segments else '' }}"></div>
-        <div class="dot {{ 'done' if c._has_keywords else '' }}"></div>
-        <div class="dot {{ 'done' if c._num_citations > 0 else '' }}"></div>
-        <div class="dot {{ 'done' if c._num_responses > 0 else '' }}"></div>
-        <div class="dot {{ 'done' if c._has_excel else '' }}"></div>
-      </div>
-      <div class="step-labels">
-        <div class="step-label">本</div>
-        <div class="step-label">分</div>
-        <div class="step-label">K</div>
-        <div class="step-label">文</div>
-        <div class="step-label">回</div>
-        <div class="step-label">Ex</div>
-      </div>
-    </div>
-  </a>
+    </a>
+    <button class="btn-edit-case" title="編集"
+            onclick="event.stopPropagation(); openEditModal('{{ c.case_id }}', '{{ c.year|default('', true) }}', '{{ c.month|default('', true) }}', this.closest('.case-item').dataset.title)">&#9998;</button>
+  </div>
   {% endfor %}
   {% else %}
   <div class="card" style="text-align:center; color:var(--text2); padding:3rem;">
     案件がありません。下のフォームから新規作成してください。
   </div>
   {% endif %}
+  </div>
 
   <div class="new-case">
     <h2>新規案件作成</h2>
     <div class="form-row">
-      <select id="new-month" style="width:90px;">
+      <select id="new-year" style="width:100px;">
+        <option value="">年度</option>
+      </select>
+      <select id="new-month" style="width:80px;">
         <option value="">月</option>
         <option value="1">1月</option><option value="2">2月</option>
         <option value="3">3月</option><option value="4">4月</option>
@@ -132,6 +210,7 @@ async function createCase() {
   const caseNumber = document.getElementById('new-case-number').value.trim();
   if (!caseNumber) { alert('公開番号を入力してください'); return; }
 
+  const year = document.getElementById('new-year').value;
   const month = document.getElementById('new-month').value;
   const field = document.getElementById('new-field').value;
   const btn = document.getElementById('btn-create');
@@ -146,7 +225,7 @@ async function createCase() {
     const resp = await fetch('/case/new', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ case_number: caseNumber, month: month, field: field })
+      body: JSON.stringify({ case_number: caseNumber, year: year, month: month, field: field })
     });
     const data = await resp.json();
     loading.style.display = 'none';
@@ -194,6 +273,133 @@ async function createCase() {
 document.getElementById('new-case-number').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') { e.preventDefault(); createCase(); }
 });
+
+// ===== 案件編集モーダル =====
+function openEditModal(caseId, year, month, title) {
+  document.getElementById('edit-case-id').value = caseId;
+  document.getElementById('edit-year').value = year;
+  document.getElementById('edit-month').value = month;
+  document.getElementById('edit-title').value = title;
+  document.getElementById('edit-modal').classList.add('show');
+  document.getElementById('edit-title').focus();
+}
+function closeEditModal() {
+  document.getElementById('edit-modal').classList.remove('show');
+}
+async function saveEditModal() {
+  const caseId = document.getElementById('edit-case-id').value;
+  const year = document.getElementById('edit-year').value;
+  const month = document.getElementById('edit-month').value;
+  const title = document.getElementById('edit-title').value.trim();
+  try {
+    const resp = await fetch(`/case/${caseId}/meta`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ year: year, month: month, patent_title: title, title: title })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      // DOM更新
+      const item = document.querySelector(`.case-item[data-case-id="${caseId}"]`);
+      if (item) {
+        item.dataset.year = year;
+        item.dataset.month = month;
+        item.dataset.title = title;
+        // タイトル更新
+        const h3 = item.querySelector('.case-title-display');
+        if (h3) {
+          const num = h3.textContent.split(' \u2014 ')[0];
+          h3.textContent = num + ' \u2014 ' + (title || '');
+        }
+        // 年月バッジ更新
+        const ymBadge = item.querySelector('.case-ym-display');
+        if (ymBadge) {
+          let ymText = year;
+          if (year && month) ymText += '/';
+          if (month) ymText += month + '月';
+          ymBadge.textContent = ymText;
+          ymBadge.style.display = ymText ? '' : 'none';
+        }
+      }
+      closeEditModal();
+      filterCases();
+    } else {
+      alert(data.error || '保存失敗');
+    }
+  } catch(e) {
+    alert('エラー: ' + e.message);
+  }
+}
+// Escキーでモーダル閉じる
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeEditModal();
+});
+
+// ===== 年度プルダウン生成（フィルタ＆新規作成共通） =====
+(function() {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  // フィルタ用: 案件データから年を収集 + 前後の年も追加
+  const items = document.querySelectorAll('.case-item');
+  const years = new Set();
+  items.forEach(el => {
+    const y = el.dataset.year;
+    if (y) years.add(y);
+  });
+  for (let y = currentYear + 1; y >= currentYear - 5; y--) years.add(String(y));
+
+  const sorted = Array.from(years).sort().reverse();
+
+  // フィルタ年プルダウン
+  const filterYear = document.getElementById('filter-year');
+  sorted.forEach(y => {
+    const opt = document.createElement('option');
+    opt.value = y; opt.textContent = y + '年';
+    filterYear.appendChild(opt);
+  });
+
+  // 新規作成の年プルダウン
+  const newYear = document.getElementById('new-year');
+  sorted.forEach(y => {
+    const opt = document.createElement('option');
+    opt.value = y; opt.textContent = y + '年';
+    if (y === String(currentYear)) opt.selected = true;
+    newYear.appendChild(opt);
+  });
+
+  // 編集モーダルの年プルダウン
+  const editYear = document.getElementById('edit-year');
+  const editOptBlank = document.createElement('option');
+  editOptBlank.value = ''; editOptBlank.textContent = '未設定';
+  editYear.appendChild(editOptBlank);
+  sorted.forEach(y => {
+    const opt = document.createElement('option');
+    opt.value = y; opt.textContent = y + '年';
+    editYear.appendChild(opt);
+  });
+
+  filterCases();
+})();
+
+function filterCases() {
+  const year = document.getElementById('filter-year').value;
+  const month = document.getElementById('filter-month').value;
+  const items = document.querySelectorAll('.case-item');
+  let shown = 0;
+  items.forEach(el => {
+    const matchY = !year || el.dataset.year === year;
+    const matchM = !month || el.dataset.month === month;
+    const visible = matchY && matchM;
+    el.style.display = visible ? '' : 'none';
+    if (visible) shown++;
+  });
+  const total = items.length;
+  const countEl = document.getElementById('filter-count');
+  if (year || month) {
+    countEl.textContent = `${shown} / ${total}件`;
+  } else {
+    countEl.textContent = total > 0 ? `${total}件` : '';
+  }
+}
 </script>
 </body>
 </html>
