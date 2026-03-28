@@ -193,6 +193,21 @@
            padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem; }
   input[type="text"] { background: var(--surface2); border: 1px solid var(--border); color: var(--text);
                        padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem; }
+
+  /* Claude CLI 直接実行 */
+  .btn-execute { background: #7c3aed; color: #fff; }
+  .btn-execute:hover { background: #6d28d9; }
+  .btn-execute:disabled { opacity: 0.4; cursor: not-allowed; }
+  .execute-progress { display: none; padding: 1rem; background: var(--surface2); border-radius: 8px; margin-top: 0.5rem; }
+  .execute-progress.show { display: block; }
+  .execute-progress .ep-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-top: 0.5rem; }
+  .execute-progress .ep-bar-fill { height: 100%; background: #7c3aed; width: 0%;
+    animation: ep-indeterminate 2s ease-in-out infinite; }
+  @keyframes ep-indeterminate {
+    0% { width: 0%; margin-left: 0; }
+    50% { width: 60%; margin-left: 20%; }
+    100% { width: 0%; margin-left: 100%; }
+  }
 </style>
 </head>
 <body>
@@ -417,12 +432,22 @@
                   {% if not segments or not keywords %}disabled title="分節とキーワードが必要です"{% endif %}>
             検索プロンプト生成</button>
           <button class="btn btn-success" id="btn-copy-search" onclick="copySearchPrompt()" style="display:none;">コピー</button>
+          <button class="btn btn-execute" onclick="executeSearch()" style="display:none;"
+                  {% if not segments or not keywords %}disabled{% endif %}>&#9889; 直接実行</button>
           <span id="search-prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>
         <div class="prompt-box" id="search-prompt-text" style="display:none; margin-top:0.8rem; max-height:250px;"></div>
         <div class="loading-msg" id="loading-search-prompt">
           <div class="spinner"></div>
           <span>プロンプト生成中...</span>
+        </div>
+        <div class="execute-progress" id="exec-search-progress">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <div class="spinner"></div>
+            <span>Claude CLIで先行技術を検索中...</span>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">処理に数分かかることがあります。</div>
+          <div class="ep-bar"><div class="ep-bar-fill"></div></div>
         </div>
 
         <!-- 回答貼り付け -->
@@ -546,9 +571,18 @@
         <div class="btn-row" style="margin-top:0; margin-bottom:0.8rem;">
           <button class="btn btn-primary" onclick="generatePrompt()">プロンプト生成</button>
           <button class="btn btn-success" onclick="copyPrompt()">クリップボードにコピー</button>
+          <button class="btn btn-execute" onclick="executeCompare()" style="display:none;">&#9889; 直接実行</button>
           <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>
         <div class="prompt-box" id="prompt-text" style="display:none;"></div>
+        <div class="execute-progress" id="exec-compare-progress">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <div class="spinner"></div>
+            <span id="exec-compare-status">Claude CLIで対比分析中...</span>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">文献数によっては10分程度かかることがあります。</div>
+          <div class="ep-bar"><div class="ep-bar-fill"></div></div>
+        </div>
 
         <!-- 回答入力 -->
         <h3 style="font-size:1rem; margin: 1.5rem 0 0.5rem;">Claude回答を貼り付け</h3>
@@ -632,12 +666,21 @@
       <div class="btn-row" style="margin-top:0;">
         <button class="btn btn-primary" onclick="generateInventiveStepPrompt()">進歩性判断プロンプト生成</button>
         <button class="btn btn-success" id="btn-copy-inv" onclick="copyInventiveStepPrompt()" style="display:none;">コピー</button>
+        <button class="btn btn-execute" onclick="executeInventiveStep()" style="display:none;">&#9889; 直接実行</button>
         <span id="inv-prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
       </div>
       <div class="prompt-box" id="inv-prompt-text" style="display:none; margin-top:0.8rem; max-height:300px;"></div>
       <div class="loading-msg" id="loading-inv-prompt">
         <div class="spinner"></div>
         <span>プロンプト生成中...</span>
+      </div>
+      <div class="execute-progress" id="exec-inv-progress">
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <div class="spinner"></div>
+          <span>Claude CLIで進歩性判断中...</span>
+        </div>
+        <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">処理に数分かかることがあります。</div>
+        <div class="ep-bar"><div class="ep-bar-fill"></div></div>
       </div>
 
       <!-- 回答入力 -->
@@ -1891,6 +1934,165 @@ async function annotateAll() {
   } catch(e) {
     loading.classList.remove('show');
     alert('エラー: ' + e.message);
+  }
+}
+
+// ================================================================
+// Claude CLI 直接実行
+// ================================================================
+
+// ページロード時にClaude CLI利用可能かチェック → ボタン表示
+(async function checkClaudeAvailability() {
+  try {
+    const resp = await fetch('/api/claude-status');
+    const data = await resp.json();
+    if (data.available) {
+      document.querySelectorAll('.btn-execute').forEach(btn => {
+        btn.style.display = 'inline-block';
+      });
+    }
+  } catch(e) { /* Claude未対応環境ではボタン非表示のまま */ }
+})();
+
+// --- Step 3: 先行技術検索 直接実行 ---
+async function executeSearch() {
+  const btn = event.target.closest('.btn-execute');
+  const progress = document.getElementById('exec-search-progress');
+  btn.disabled = true;
+  progress.classList.add('show');
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    progress.classList.remove('show');
+    btn.disabled = false;
+
+    if (data.error) { alert('エラー: ' + data.error); return; }
+
+    const errDiv = document.getElementById('search-parse-errors');
+    if (errDiv) {
+      errDiv.innerHTML = '';
+      if (data.errors && data.errors.length > 0) {
+        errDiv.innerHTML = `<div style="padding:0.8rem; background:#422006; border-radius:8px; color:#fbbf24; font-size:0.85rem;">
+          <strong>警告:</strong><br>${data.errors.join('<br>')}
+        </div>`;
+      }
+    }
+
+    if (data.success && data.candidates.length > 0) {
+      searchCandidates = data.candidates;
+      renderCandidatesList(searchCandidates);
+      document.getElementById('search-candidates').style.display = 'block';
+    }
+
+    document.getElementById('search-prompt-charcount').textContent =
+      `直接実行完了: ${(data.char_count || 0).toLocaleString()}文字 → ${data.candidates.length}件の候補`;
+  } catch(e) {
+    progress.classList.remove('show');
+    btn.disabled = false;
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+// --- Step 5: 対比 直接実行 ---
+async function executeCompare() {
+  const citIds = getSelectedCitationIds();
+  if (citIds.length === 0) { alert('対象文献を1つ以上選択してください'); return; }
+
+  const btn = event.target.closest('.btn-execute');
+  const progress = document.getElementById('exec-compare-progress');
+  btn.disabled = true;
+  progress.classList.add('show');
+  document.getElementById('exec-compare-status').textContent =
+    `Claude CLIで${citIds.length}件の文献を対比分析中...`;
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ citation_ids: citIds })
+    });
+    const data = await resp.json();
+    progress.classList.remove('show');
+    btn.disabled = false;
+
+    if (data.error) { alert('エラー: ' + data.error); return; }
+
+    const result = document.getElementById('parse-result');
+    result.innerHTML = '';
+
+    if (data.errors && data.errors.length > 0) {
+      result.innerHTML += `<div style="padding:1rem; background:#422006; border-radius:8px; color:#fbbf24; margin-bottom:0.5rem;">
+        <strong>警告:</strong><br>${data.errors.join('<br>')}
+      </div>`;
+    }
+    if (data.success) {
+      const docs = data.saved_docs || [];
+      result.innerHTML += `<div style="padding:1rem; background:#14532d; border-radius:8px; color:#4ade80;">
+        直接実行完了! ${data.num_docs}件の対比結果を保存しました。<br>
+        保存先: ${docs.join(', ')}<br>
+        <span style="font-size:0.8rem; color:var(--text2);">
+          プロンプト: ${(data.char_count || 0).toLocaleString()}文字 /
+          応答: ${(data.response_length || 0).toLocaleString()}文字
+        </span>
+      </div>`;
+    } else if (!data.errors || data.errors.length === 0) {
+      result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
+        パース失敗: Claudeの応答からJSONを抽出できませんでした。
+      </div>`;
+    }
+  } catch(e) {
+    progress.classList.remove('show');
+    btn.disabled = false;
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+// --- Step 6: 進歩性判断 直接実行 ---
+async function executeInventiveStep() {
+  const btn = event.target.closest('.btn-execute');
+  const progress = document.getElementById('exec-inv-progress');
+  btn.disabled = true;
+  progress.classList.add('show');
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/inventive-step/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    progress.classList.remove('show');
+    btn.disabled = false;
+
+    if (data.error) { alert('エラー: ' + data.error); return; }
+
+    const result = document.getElementById('inv-result');
+    result.innerHTML = '';
+
+    if (data.errors && data.errors.length > 0) {
+      result.innerHTML += `<div style="padding:0.8rem; background:#422006; border-radius:8px; color:#fbbf24; margin-bottom:0.5rem; font-size:0.85rem;">
+        <strong>警告:</strong><br>${data.errors.join('<br>')}
+      </div>`;
+    }
+
+    if (data.success && data.data) {
+      result.innerHTML += renderInventiveStepResult(data.data);
+      document.getElementById('inv-prompt-charcount').textContent =
+        `直接実行完了: ${(data.char_count || 0).toLocaleString()}文字`;
+    } else if (!data.success) {
+      result.innerHTML += `<div style="padding:0.8rem; background:#450a0a; border-radius:8px; color:#fca5a5; font-size:0.85rem;">
+        パース失敗: 進歩性分析のJSONを抽出できませんでした。
+      </div>`;
+    }
+  } catch(e) {
+    progress.classList.remove('show');
+    btn.disabled = false;
+    alert('通信エラー: ' + e.message);
   }
 }
 </script>

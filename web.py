@@ -1199,6 +1199,233 @@ def delete_case(case_id):
     return redirect(url_for("index"))
 
 
+# ===== Claude CLI 直接実行 =====
+
+@app.route("/api/claude-status")
+def claude_status():
+    """Claude CLI の利用可能状態を返す"""
+    from modules.claude_client import is_claude_available
+    return jsonify({"available": is_claude_available()})
+
+
+@app.route("/case/<case_id>/search/execute", methods=["POST"])
+def search_execute(case_id):
+    """直接実行: 先行技術検索プロンプト → Claude CLI → パース"""
+    from modules.search_prompt_generator import generate_search_prompt, parse_search_response
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません。Step 2を完了してください。"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_search_prompt(segs, keywords, field)
+
+    # プロンプト保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "search_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    # Claude CLI 呼び出し
+    try:
+        raw_response = call_claude(prompt_text, timeout=600)
+    except ClaudeClientError as e:
+        return jsonify({"error": str(e), "phase": "claude_call"}), 502
+
+    # パース
+    candidates, errors = parse_search_response(raw_response)
+
+    if candidates:
+        from datetime import datetime
+        save_data = {
+            "generated_at": datetime.now().isoformat(),
+            "candidates": candidates,
+        }
+        with open(case_dir / "search_candidates.json", "w", encoding="utf-8") as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "success": candidates is not None,
+        "candidates": candidates or [],
+        "errors": errors,
+        "char_count": len(prompt_text),
+        "response_length": len(raw_response),
+    })
+
+
+@app.route("/case/<case_id>/execute", methods=["POST"])
+def compare_execute(case_id):
+    """直接実行: 対比プロンプト → Claude CLI → パース"""
+    from modules.prompt_generator import generate_prompt as _gen
+    from modules.response_parser import parse_response, split_multi_response
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    segments_path = case_dir / "segments.json"
+
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    data = request.get_json() or {}
+    citation_ids = data.get("citation_ids", [])
+    if not citation_ids:
+        return jsonify({"error": "対象文献を選択してください"}), 400
+
+    citations = []
+    for cit_id in citation_ids:
+        cit_path = case_dir / "citations" / f"{cit_id}.json"
+        if not cit_path.exists():
+            return jsonify({"error": f"引用文献 '{cit_id}' が見つかりません"}), 404
+        with open(cit_path, "r", encoding="utf-8") as f:
+            citations.append(json.load(f))
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = _gen(segs, citations, keywords, field)
+
+    # プロンプト保存
+    ids_label = "_".join(citation_ids)
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / f"{ids_label}_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    # Claude CLI 呼び出し（文献数に応じてタイムアウト調整）
+    timeout = 600 if len(citations) <= 2 else 900
+    try:
+        raw_response = call_claude(prompt_text, timeout=timeout)
+    except ClaudeClientError as e:
+        return jsonify({"error": str(e), "phase": "claude_call"}), 502
+
+    # パース
+    all_segment_ids = []
+    for claim in segs:
+        for seg in claim["segments"]:
+            all_segment_ids.append(seg["id"])
+
+    result, errors = parse_response(raw_response, all_segment_ids)
+
+    saved_docs = []
+    if result:
+        per_doc = split_multi_response(result)
+        responses_dir = case_dir / "responses"
+        responses_dir.mkdir(parents=True, exist_ok=True)
+        for doc_id, doc_result in per_doc.items():
+            resp_path = responses_dir / f"{doc_id}.json"
+            with open(resp_path, "w", encoding="utf-8") as f:
+                json.dump(doc_result, f, ensure_ascii=False, indent=2)
+            saved_docs.append(doc_id)
+
+    return jsonify({
+        "success": result is not None,
+        "errors": errors,
+        "saved_docs": saved_docs,
+        "num_docs": len(saved_docs),
+        "char_count": len(prompt_text),
+        "response_length": len(raw_response),
+    })
+
+
+@app.route("/case/<case_id>/inventive-step/execute", methods=["POST"])
+def inventive_step_execute(case_id):
+    """直接実行: 進歩性判断プロンプト → Claude CLI → パース"""
+    from modules.inventive_step_analyzer import (
+        generate_inventive_step_prompt, parse_inventive_step_response
+    )
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    responses = {}
+    responses_dir = case_dir / "responses"
+    if responses_dir.exists():
+        for rfile in responses_dir.glob("*.json"):
+            with open(rfile, "r", encoding="utf-8") as f:
+                responses[rfile.stem] = json.load(f)
+
+    if not responses:
+        return jsonify({"error": "対比結果がありません。Step 5を完了してください。"}), 400
+
+    citations_meta = {}
+    for cit in meta.get("citations", []):
+        cit_path = case_dir / "citations" / f"{cit['id']}.json"
+        if cit_path.exists():
+            with open(cit_path, "r", encoding="utf-8") as f:
+                citations_meta[cit["id"]] = json.load(f)
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_inventive_step_prompt(
+        segs, responses, citations_meta, keywords, field
+    )
+
+    # プロンプト保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "inventive_step_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    # Claude CLI 呼び出し
+    try:
+        raw_response = call_claude(prompt_text, timeout=600)
+    except ClaudeClientError as e:
+        return jsonify({"error": str(e), "phase": "claude_call"}), 502
+
+    # パース
+    data, errors = parse_inventive_step_response(raw_response)
+
+    if data:
+        with open(case_dir / "inventive_step.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "success": data is not None,
+        "data": data,
+        "errors": errors,
+        "char_count": len(prompt_text),
+        "response_length": len(raw_response),
+    })
+
+
 if __name__ == "__main__":
     # templates ディレクトリがなければ作成
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
