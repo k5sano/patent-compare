@@ -259,6 +259,14 @@
   .seg-kw-meaning { font-size: 0.75rem; color: var(--text2); margin: 2px 0 4px 0; font-style: italic; padding: 2px 6px; border-left: 2px solid #7c3aed; }
   .seg-kw-tag .kw-del-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 0.9rem; padding: 0 2px; }
   .seg-kw-tag .kw-del-btn:hover { color: #fca5a5; }
+  .seg-kw-add-row { display: none; align-items: center; gap: 4px; margin-top: 6px; }
+  .seg-kw-add-row.active { display: flex; }
+  .seg-kw-add-input { flex: 1; padding: 3px 8px; font-size: 0.82rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface1); color: var(--text1); }
+  .seg-kw-add-input:focus { border-color: var(--accent); outline: none; }
+  .seg-kw-edit-btn { background: none; border: 1px solid var(--border); color: var(--text2); cursor: pointer; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+  .seg-kw-edit-btn:hover { background: var(--surface2); color: var(--text1); }
+  .seg-kw-add-btn { background: var(--accent); border: none; color: #fff; cursor: pointer; font-size: 0.78rem; padding: 3px 10px; border-radius: 4px; white-space: nowrap; }
+  .seg-kw-add-btn:hover { opacity: 0.85; }
 
   /* テキスト選択キーワード追加ポップオーバー */
   #kw-add-popover { display: none; position: absolute; z-index: 9999; background: var(--surface); border: 1px solid var(--border);
@@ -2432,13 +2440,22 @@ function renderSegmentKeywords(segKeywords) {
     const segText = seg.segment_text ? seg.segment_text.substring(0, 60) + (seg.segment_text.length > 60 ? '...' : '') : '';
     const meaningHtml = seg.technical_meaning
       ? `<div class="seg-kw-meaning">${seg.technical_meaning}</div>` : '';
+    const sid = seg.segment_id;
     div.innerHTML = `
       <div class="seg-kw-item-header">
-        <strong style="color:var(--accent);">${seg.segment_id}</strong>
-        <small style="color:var(--text2); max-width:70%; text-align:right; font-size:0.78rem;">${segText}</small>
+        <strong style="color:var(--accent);">${sid}</strong>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <small style="color:var(--text2); max-width:60%; text-align:right; font-size:0.78rem;">${segText}</small>
+          <button class="seg-kw-edit-btn" onclick="toggleSegKwEdit('${sid}')">+ 追加</button>
+        </div>
       </div>
       ${meaningHtml}
       <div style="margin-top:4px;">${kwHtml}</div>
+      <div class="seg-kw-add-row" id="seg-kw-add-${sid}">
+        <input class="seg-kw-add-input" id="seg-kw-input-${sid}" placeholder="キーワードを入力"
+               onkeydown="if(event.key==='Enter'){addSegmentKeyword('${sid}');event.preventDefault();}">
+        <button class="seg-kw-add-btn" onclick="addSegmentKeyword('${sid}')">追加</button>
+      </div>
     `;
     container.appendChild(div);
   }
@@ -2454,6 +2471,46 @@ async function removeSegmentKeyword(segmentId, term) {
     const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
     if (dataResp.ok) {
       renderSegmentKeywords(await dataResp.json());
+    }
+  }
+}
+
+function toggleSegKwEdit(segmentId) {
+  const row = document.getElementById(`seg-kw-add-${segmentId}`);
+  if (!row) return;
+  const isActive = row.classList.contains('active');
+  // 他の開いている入力行を閉じる
+  document.querySelectorAll('.seg-kw-add-row.active').forEach(r => r.classList.remove('active'));
+  if (!isActive) {
+    row.classList.add('active');
+    const input = document.getElementById(`seg-kw-input-${segmentId}`);
+    if (input) input.focus();
+  }
+}
+
+async function addSegmentKeyword(segmentId) {
+  const input = document.getElementById(`seg-kw-input-${segmentId}`);
+  if (!input) return;
+  const term = input.value.trim();
+  if (!term) return;
+
+  const resp = await fetch(`/case/${CASE_ID}/keywords/add-to-segment`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({segment_id: segmentId, term: term}),
+  });
+  if (resp.ok) {
+    input.value = '';
+    const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
+    if (dataResp.ok) {
+      renderSegmentKeywords(await dataResp.json());
+      // 再描画後に入力行を再度開く
+      const row = document.getElementById(`seg-kw-add-${segmentId}`);
+      if (row) {
+        row.classList.add('active');
+        const newInput = document.getElementById(`seg-kw-input-${segmentId}`);
+        if (newInput) newInput.focus();
+      }
     }
   }
 }
