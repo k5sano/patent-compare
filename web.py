@@ -120,6 +120,7 @@ def new_case():
     # 初期メタ情報を保存（DL失敗時にも案件は残る）
     meta = {
         "case_id": case_id,
+        "jp_id": jp_id,
         "title": "",
         "field": field,
         "year": year,
