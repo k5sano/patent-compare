@@ -337,7 +337,7 @@ def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
                                     candidate_count += 1
                                     yield {"type": "candidate", "number": pat, "count": candidate_count}
 
-        proc.wait(timeout=60)
+        proc.wait(timeout=timeout)
 
         if proc.returncode != 0 and not full_result:
             stderr_msg = proc.stderr.read().decode("utf-8", errors="replace").strip()[:500]
