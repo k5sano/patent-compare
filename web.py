@@ -962,7 +962,7 @@ def search_prompt(case_id):
             keywords = json.load(f)
 
     field = meta.get("field", "cosmetics")
-    prompt_text = generate_search_prompt(segs, keywords, field)
+    prompt_text = generate_search_prompt(segs, keywords, field, case_meta=meta)
 
     # SerpAPIで事前検索し、結果をプロンプトに注入
     prompt_text = inject_search_results(prompt_text, segs, keywords, field)
@@ -1258,7 +1258,7 @@ def search_execute(case_id):
             keywords = json.load(f)
 
     field = meta.get("field", "cosmetics")
-    prompt_text = generate_search_prompt(segs, keywords, field)
+    prompt_text = generate_search_prompt(segs, keywords, field, case_meta=meta)
 
     # SerpAPIで事前検索し、結果をプロンプトに注入
     prompt_text = inject_search_results(prompt_text, segs, keywords, field)
