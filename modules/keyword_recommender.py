@@ -1,19 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-分節別キーワード収集パイプライン
+分節別キーワード提案モジュール
 
-Step 1: 請求項分節から語句を機械的にピックアップ — Python (source="claim")
-Step 2: 本願明細書から関連語を拾う — AI 1回 (source="spec:【段落ID】")
-Step 3: 辞書キーとの関連をAIが判断、Pythonが辞書を引く — AI 1回 (source="dict:*")
-Step 4: 人間がUIで修正（バックエンドは保存まで）
-
-ANTHROPIC_API_KEY 未設定時は Step 2・3 がスキップされ Step 1 のみ返る。
+キーワード収集4ステップパイプライン:
+  Step 1: 全請求項・全分節から正規表現で語句ピックアップ (Python)
+  Step 2: 明細書から関連語をAIで拾う (AI 1回目)
+  Step 3: 辞書キー一覧からAIが照合→Pythonが辞書展開 (AI 2回目)
+  Step 4: UIで人間が修正（本モジュール外）
 
 入力:
 - segments: 請求項分節 (segments.json)
 - hongan: 本願構造化テキスト (hongan.json)
-- field: "cosmetics" | "laminate"
+- field: "cosmetics" | "laminate" | etc.
 
 出力:
 - 分節ごとのキーワードリスト (segment_keywords.json 形式)
@@ -30,7 +29,9 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
-# --- 辞書キャッシュ ---
+# ============================================================
+# 辞書キャッシュ
+# ============================================================
 
 @functools.lru_cache(maxsize=32)
 def _cached_load_dict(field, dict_name):
@@ -40,7 +41,7 @@ def _cached_load_dict(field, dict_name):
         try:
             with open(dict_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return json.dumps(data, ensure_ascii=False)  # lru_cache は dict を扱えないので文字列化
+            return json.dumps(data, ensure_ascii=False)
         except Exception:
             pass
     return "{}"
@@ -50,58 +51,9 @@ def _get_dict(field, dict_name):
     """キャッシュから辞書を取得（デシリアライズ済み）"""
     return json.loads(_cached_load_dict(field, dict_name))
 
-# --- ストップワード ---
-
-STOP_WORDS = {
-    "前記", "含有", "含有する", "からなる", "有する", "備える",
-    "において", "であって", "であり", "おける", "よる", "する",
-    "された", "される", "および", "ならびに", "または", "もしくは",
-    "以上", "以下", "未満", "超える", "含む", "特徴", "記載",
-    "少なくとも", "それぞれ", "前記した", "さらに", "また",
-    "これら", "それら", "当該", "所定", "各種", "種々",
-    "化粧料", "組成物", "製剤",
-    "配合", "処方", "調製", "混合", "工程", "方法", "手段", "構成", "形態",
-    "製造", "使用", "場合", "必要", "可能",
-    "好ましい", "好ましくは", "特に", "例えば", "具体的には",
-    "本発明", "実施形態", "実施例", "比較例",
-}
-
-# --- 正規表現パターン ---
-
-# カタカナ語抽出（3文字以上）
-RE_KATAKANA = re.compile(r'[ァ-ヴー]{3,}')
-
-# 漢字語抽出（2文字以上、接尾辞付き）
-RE_KANJI = re.compile(
-    r'[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料|性|化|類|素|塩|基)?'
-)
-
-# 数値条件抽出（範囲）
-RE_NUMERIC = re.compile(
-    r'(\d+\.?\d*)\s*(?:～|~|−|-|から)\s*(\d+\.?\d*)\s*'
-    r'(質量%|重量%|mass%|wt%|vol%|体積%|%|ppm|mm|μm|nm|℃)'
-)
-
-# 単独数値条件
-RE_NUMERIC_SINGLE = re.compile(
-    r'(\d+\.?\d*)\s*(質量%|重量%|mass%|wt%|ppm|mm|μm|nm|℃)\s*'
-    r'(以上|以下|未満|超|を超える|より多い|より少ない)?'
-)
-
-# 括弧ラベル（(A)成分 等）
-RE_PAREN_LABEL = re.compile(r'[\(（]([A-Za-zＡ-Ｚ])[\)）]\s*([^、。\)）]{2,20})')
-
-# 列挙パターン（「例えば」「具体的には」等に続く列挙）
-RE_ENUMERATION = re.compile(
-    r'(?:例えば|具体的には|としては|として|等の|から選ばれる)[、,]?\s*(.+?)(?:[。．]|が[、,]|$)',
-    re.DOTALL
-)
-
-
-# --- 辞書読み込み ---
 
 def _load_dict(field, dict_name):
-    """分野辞書を読み込み"""
+    """分野辞書を読み込み（キャッシュなし版、後方互換）"""
     dict_path = PROJECT_ROOT / "dictionaries" / field / dict_name
     if dict_path.exists():
         try:
@@ -112,231 +64,186 @@ def _load_dict(field, dict_name):
     return {}
 
 
-# --- 辞書マッチングヘルパー（recommend_regex 用） ---
+# ============================================================
+# ストップワード
+# ============================================================
 
-def _match_ingredient_group(term, field):
-    """regex抽出語が ingredient_groups.json のどのカテゴリに該当するか判定
+STOP_WORDS = {
+    # 助詞・助動詞的
+    "前記", "含有", "含有する", "からなる", "有する", "備える",
+    "において", "であって", "であり", "おける", "よる", "する",
+    "された", "される", "および", "ならびに", "または", "もしくは",
+    "以上", "以下", "未満", "超える", "含む", "特徴", "記載",
+    "少なくとも", "それぞれ", "前記した", "さらに", "また",
+    "これら", "それら", "当該", "所定", "各種", "種々",
+    # 汎用カテゴリ語（分野を問わず）
+    "化粧料", "組成物", "製剤",
+    "配合", "処方", "調製", "混合", "工程", "方法", "手段", "構成", "形態",
+    # 追加: 請求項構造語
+    "ことを", "特徴とする", "請求項", "発明", "前項",
+    "該", "上記", "下記", "場合", "範囲", "条件", "用途", "目的",
+    "一つ", "一種", "複数", "少なくとも一つ",
+    "第一", "第二", "第三", "第四", "第五",
+    "前述", "後述", "同様", "対応", "関連",
+}
 
-    Returns:
-        list of dict: [{"category": "油剤", "sub_group": "炭化水素油"|None,
-                        "match_type": "category"|"sub_group"|"example"}]
-    """
-    ig = _get_dict(field, "ingredient_groups.json")
-    if not ig:
-        return []
+# ============================================================
+# 正規表現パターン
+# ============================================================
 
-    matches = []
-    for cat_name, cat_data in ig.items():
-        # カテゴリ名自体にマッチ
-        if term == cat_name or term in cat_name or cat_name in term:
-            matches.append({"category": cat_name, "sub_group": None, "match_type": "category"})
-            continue
-
-        if "sub_groups" in cat_data:
-            for sg_name, sg_items in cat_data["sub_groups"].items():
-                # サブグループ名にマッチ
-                if term == sg_name or term in sg_name or sg_name in term:
-                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "sub_group"})
-                    break
-                # 具体例にマッチ
-                if term in sg_items:
-                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "example"})
-                    break
-        elif "examples" in cat_data:
-            if term in cat_data["examples"]:
-                matches.append({"category": cat_name, "sub_group": None, "match_type": "example"})
-
-    return matches
-
-
-def _match_fterm_labels(term, field):
-    """regex抽出語が Fterm のラベルまたは例示に該当するか判定
-
-    Returns:
-        list of dict: [{"fterm_code": "AC01", "label": "...", "match_type": "label"|"example"}]
-    """
-    fterm_files = {
-        "cosmetics": "fterm_4c083_structure.json",
-        "laminate": "fterm_4f100_structure.json",
-    }
-    fterm_name = fterm_files.get(field, "")
-    if not fterm_name:
-        return []
-
-    ft = _get_dict(field, fterm_name)
-    matches = []
-    for cat_code, cat_data in ft.get("categories", {}).items():
-        for ecode, edata in cat_data.get("entries", {}).items():
-            label = edata.get("label", "")
-            # ラベルにマッチ（部分一致）
-            if term and label and (term in label or label in term):
-                matches.append({"fterm_code": ecode, "label": label, "match_type": "label"})
-            # 例示にマッチ
-            elif term in edata.get("examples", []):
-                matches.append({"fterm_code": ecode, "label": label, "match_type": "example"})
-
-    return matches
+RE_KATAKANA = re.compile(r'[ァ-ヴー]{3,}')
+RE_KANJI = re.compile(
+    r'[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料|性|化|類|素|塩|基)?'
+)
+RE_NUMERIC = re.compile(
+    r'(\d+\.?\d*)\s*(?:～|~|−|-|から)\s*(\d+\.?\d*)\s*'
+    r'(質量%|重量%|mass%|wt%|vol%|体積%|%|ppm|mm|μm|nm|℃)'
+)
+RE_NUMERIC_SINGLE = re.compile(
+    r'(\d+\.?\d*)\s*(質量%|重量%|mass%|wt%|ppm|mm|μm|nm|℃)\s*'
+    r'(以上|以下|未満|超|を超える|より多い|より少ない)?'
+)
+RE_PAREN_LABEL = re.compile(r'[\(（]([A-Za-zＡ-Ｚ])[\)）]\s*([^、。\)）]{2,20})')
 
 
-def _match_upper_concepts_reverse(term, field):
-    """regex抽出語が upper_concepts の上位概念リストに含まれるか判定
-
-    term が「多価アルコール」のような上位概念語の場合、
-    それをupper_conceptsに持つ具体成分名（グリセリン等）を返す。
-
-    Returns:
-        list of str: 下位概念の具体成分名リスト
-    """
-    uc = _get_dict(field, "upper_concepts.json")
-    if not uc:
-        return []
-
-    lower_terms = []
-    for ingredient, data in uc.items():
-        if term in data.get("upper_concepts", []):
-            lower_terms.append(ingredient)
-
-    return lower_terms
-
-
-# --- キーワード収集パイプライン (Step 1→2→3) ---
+# ============================================================
+# Step 1: 正規表現による語句ピックアップ（共通部品）
+# ============================================================
 
 def _pick_terms_from_text(text):
-    """テキストから語句を機械的に抽出する共通部品
+    """テキストから語句を機械的にピックアップ
 
-    RE_KATAKANA, RE_KANJI, RE_NUMERIC, RE_NUMERIC_SINGLE, RE_PAREN_LABEL を適用。
-    STOP_WORDS除外、重複��去。
+    全パターン（カタカナ・漢字・数値条件・括弧ラベル）を適用し、
+    STOP_WORDS 除外・重複除去済みのリストを返す。
 
     Returns:
-        list[str]: 抽出語句のリスト（文字列のみ）
+        list of dict: [{"term": str, "source": "claim", "type": str}, ...]
     """
     terms = []
     seen = set()
 
-    def _add(t):
-        if t and t not in seen and t not in STOP_WORDS:
-            seen.add(t)
-            terms.append(t)
+    def _add(term, kw_type):
+        if term and term not in seen and term not in STOP_WORDS:
+            seen.add(term)
+            terms.append({"term": term, "source": "claim", "type": kw_type})
 
     # カタカナ語（3文字以上）
     for m in RE_KATAKANA.finditer(text):
         t = m.group()
         if len(t) >= 3:
-            _add(t)
+            _add(t, "カタカナ抽出")
 
     # 漢字語（2文字以上）
     for m in RE_KANJI.finditer(text):
         t = m.group()
         if len(t) >= 2:
-            _add(t)
+            _add(t, "漢字抽出")
 
     # 数値条件（範囲）
     for m in RE_NUMERIC.finditer(text):
-        _add(m.group())
+        _add(m.group(), "数値条件")
 
-    # 単独数値条件
+    # 数値条件（単独、範囲と重複しないもの）
     for m in RE_NUMERIC_SINGLE.finditer(text):
-        _add(m.group())
+        _add(m.group(), "数値条件")
 
     # 括弧ラベル
     for m in RE_PAREN_LABEL.finditer(text):
         label = m.group(1)
         content = m.group(2).strip()
-        _add(f"({label}){content}")
+        _add(f"({label}){content}", "括弧ラベル")
 
     return terms
 
 
-def _build_spec_excerpt(hongan, max_chars=8000):
-    """明細書テキストをAI用に整形
+# ============================================================
+# Step 2: AI による明細書関連語探索
+# ============================================================
 
-    段落を優先順（実施例→実施形態→効果→手段→その他）で連結。
-    各段落は "【段落ID】テキスト" 形式。max_chars で切る。
+def _build_spec_excerpt(hongan, max_chars=8000):
+    """明細書テキストを段落番号付きで整形（Step 2 入力用）
+
+    優先セクション順に段落を連結し、max_chars 以内に収める。
     """
     if not hongan:
         return ""
 
-    priority_sections = ["実施例", "実施形態", "効果", "手段"]
-    paragraphs = hongan.get("paragraphs", [])
-
+    priority_sections = ["手段", "実施形態", "実施例", "効果", "技術分野", "背景技術"]
     lines = []
     total = 0
-    used_ids = set()
+    seen_ids = set()
 
-    # 優先セクションを先に
-    for section_name in priority_sections:
-        for para in paragraphs:
-            pid = para.get("id", "")
-            if pid in used_ids:
-                continue
-            if para.get("section") == section_name:
-                line = f"【{pid}】{para['text']}"
+    for section in priority_sections:
+        for para in hongan.get("paragraphs", []):
+            if para.get("section") == section and para["id"] not in seen_ids:
+                line = f"【{para['id']}】{para['text']}"
                 if total + len(line) > max_chars:
                     return "\n".join(lines)
                 lines.append(line)
                 total += len(line)
-                used_ids.add(pid)
+                seen_ids.add(para["id"])
 
-    # 残りの段落
-    for para in paragraphs:
-        pid = para.get("id", "")
-        if pid in used_ids:
-            continue
-        line = f"【{pid}】{para['text']}"
-        if total + len(line) > max_chars:
-            break
-        lines.append(line)
-        total += len(line)
-        used_ids.add(pid)
+    # 優先セクションで埋まらなかった場合、残り段落も追加
+    for para in hongan.get("paragraphs", []):
+        if para["id"] not in seen_ids:
+            line = f"【{para['id']}】{para['text']}"
+            if total + len(line) > max_chars:
+                break
+            lines.append(line)
+            total += len(line)
+            seen_ids.add(para["id"])
 
     return "\n".join(lines)
 
 
-def _ai_find_related_in_spec(picked_by_segment, spec_text):
-    """Step 2: AIに明細書から関連語を拾ってもらう（1回の呼び出しで全分節分）
+def _ai_find_related_in_spec(seg_keywords, spec_text):
+    """Step 2: 明細書から関連語を AI で拾う
 
     Parameters:
-        picked_by_segment: {seg_id: [term, ...], ...}
-        spec_text: _build_spec_excerpt の結果
+        seg_keywords: Step 1 の結果リスト
+        spec_text: _build_spec_excerpt() の出力
 
     Returns:
-        {seg_id: [{term, related: [...], para}, ...], ...}
-        パース失敗時は空辞書 {}
+        list of dict or None（エラー/スキップ時）
+        [{"seg":"1A", "term":"スクワラン",
+          "related":["流動パラフィン","イソドデカン"], "para":"0025"}, ...]
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return {}
+        logger.info("ANTHROPIC_API_KEY 未設定 — Step 2 スキップ")
+        return None
 
-    # キーワード一覧を組み立て
-    kw_lines = []
-    for seg_id, terms in picked_by_segment.items():
+    if not spec_text.strip():
+        logger.info("明細書テキストなし — Step 2 スキップ")
+        return None
+
+    # 分節別キーワードを簡潔に整形
+    seg_lines = []
+    for item in seg_keywords:
+        terms = [kw["term"] for kw in item["keywords"] if kw["type"] != "数値条件"]
         if terms:
-            kw_lines.append(f"{seg_id}: {', '.join(terms)}")
+            seg_lines.append(f'{item["segment_id"]}: {", ".join(terms[:15])}')
 
-    if not kw_lines or not spec_text:
-        return {}
+    if not seg_lines:
+        return None
 
-    prompt = f"""以下は特許請求項から抽出したキーワードと、本願明細書のテキストです。
-各キーワードについて、明細書中でそのキーワードを説明・使用している箇所から
-関連する語句（具体的な化合物名、製品名、数値条件、上位概念など）を拾ってください。
+    prompt = f"""以下の特許請求項のキーワードについて、明細書中で関連して言及されている語句を探してください。
 
-【キーワード（分節別）】
-{chr(10).join(kw_lines)}
+【分節別キーワード】
+{chr(10).join(seg_lines)}
 
-【本願明細書】
+【明細書テキスト】
 {spec_text}
 
-【出力形式】JSON配列のみ返答。説明文不要。
-[
-  {{"seg": "1A", "term": "スクワラン", "related": ["流動パラフィン", "イソドデカン"], "para": "0025"}},
-  {{"seg": "1B", "term": "噴射剤", "related": ["液化石油ガス", "DME"], "para": "0031"}}
-]
+【出力形式】フラットなJSON配列のみ返してください（説明文不要）:
+[{{"seg":"1A","term":"スクワラン","related":["流動パラフィン","イソドデカン"],"para":"0025"}}]
 
 【ルール】
-- related は明細書に実際に書かれている語句のみ（推測で追加しない）
-- 該当する記載がなければその term は出力しなくてよい
-- para は見つけた段落番号
-"""
+- 明細書に実際に書かれている語句のみ抽出すること。推測で語句を追加しない。
+- related: そのキーワードと同じ段落または近接段落で関連して言及されている技術用語。
+- para: 関連語が出現する段落番号（4桁文字列）。複数段落にまたがる場合は最初の段落。
+- 関連語がない分節・キーワードは出力に含めない。
+- 各キーワードにつき related は最大5語。"""
 
     try:
         import anthropic
@@ -346,82 +253,107 @@ def _ai_find_related_in_spec(picked_by_segment, spec_text):
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
-
-        raw_text = response.content[0].text
-        ai_data = _extract_json_array(raw_text)
-        if not ai_data:
-            logger.warning("Step 2 AI: JSONパース失敗 — スキップ")
-            return {}
-
-        # seg_id でグループ化
-        result = {}
-        for item in ai_data:
-            seg_id = item.get("seg", "")
-            if seg_id:
-                result.setdefault(seg_id, []).append(item)
-
-        logger.info("Step 2 AI: %d 分節の明細書関連語を取得", len(result))
+        result = _extract_json_array(response.content[0].text)
+        if result:
+            logger.info("Step 2: AI から %d 件の関連語データを取得", len(result))
+        else:
+            logger.warning("Step 2: AI応答からJSONを抽出できませんでした")
         return result
-
     except ImportError:
         logger.warning("anthropic パッケージ未インストール — Step 2 スキップ")
-        return {}
+        return None
     except Exception as e:
-        logger.warning("Step 2 AI エラー: %s — スキップ", e)
-        return {}
+        logger.warning("Step 2 AI エラー: %s", e)
+        return None
 
 
-def _ai_find_related_in_dicts(all_terms, field):
-    """Step 3: AIに辞書キーとの関連を判断してもらい、Pythonで辞書を引く
+def _merge_step2_results(results, ai_spec):
+    """Step 2 の AI 結果を results にマージ"""
+    seg_map = {r["segment_id"]: r for r in results}
+    added = 0
+    for item in ai_spec:
+        seg_id = item.get("seg", "")
+        if seg_id not in seg_map:
+            continue
+        para = item.get("para", "")
+        source = f"spec:【{para}】" if para else "spec"
+        existing_terms = {kw["term"] for kw in seg_map[seg_id]["keywords"]}
+        for rel in item.get("related", []):
+            if isinstance(rel, str) and rel.strip() and rel not in existing_terms:
+                seg_map[seg_id]["keywords"].append({
+                    "term": rel.strip(),
+                    "source": source,
+                    "type": "明細書関連語",
+                })
+                existing_terms.add(rel)
+                added += 1
+    logger.info("Step 2 マージ: %d 語追加", added)
+
+
+# ============================================================
+# Step 3: AI による辞書キー照合 + Python 辞書展開
+# ============================================================
+
+def _ai_find_related_in_dicts(all_keywords, field):
+    """Step 3: 収集済みキーワードと辞書キー一覧を AI に渡し、対応を返す
 
     Parameters:
-        all_terms: Step 1+2 で集まった全語句 (list[str])
+        all_keywords: Step 1+2 済みの results リスト
         field: 技術分野
 
     Returns:
-        [{term, source, type}, ...] のリスト
-        パース失敗時は空リスト []
+        list of dict or None
+        [{"term":"スクワラン", "synonyms_key":"スクワラン",
+          "upper_key":"スクワラン", "inci_key":"スクワラン"}, ...]
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return []
+        logger.info("ANTHROPIC_API_KEY 未設定 — Step 3 スキップ")
+        return None
 
-    # 辞書キー一覧を作る
-    synonyms = _load_dict(field, "synonyms.json")
-    uc = _load_dict(field, "upper_concepts.json")
-    inci_ja = _load_dict(field, "inci_ja.json")
+    # 辞書キー一覧を取得
+    syn_keys = sorted(_get_dict(field, "synonyms.json").keys())
+    uc_keys = sorted(_get_dict(field, "upper_concepts.json").keys())
+    inci_keys = sorted(_get_dict(field, "inci_ja.json").keys()) if field == "cosmetics" else []
 
-    synonyms_keys = list(synonyms.keys())
-    upper_keys = list(uc.keys())
-    inci_keys = list(inci_ja.keys())
+    if not syn_keys and not uc_keys and not inci_keys:
+        logger.info("辞書なし（field=%s） — Step 3 スキップ", field)
+        return None
 
-    if not synonyms_keys and not upper_keys and not inci_keys:
-        return []
+    # 収集済みキーワード一覧（重複除去、数値条件除外）
+    term_set = set()
+    for item in all_keywords:
+        for kw in item["keywords"]:
+            if kw["type"] != "数値条件":
+                term_set.add(kw["term"])
+    terms_list = sorted(term_set)
 
-    terms_str = ", ".join(all_terms)
+    if not terms_list:
+        return None
 
-    prompt = f"""以下は特許請求項と明細書から収集したキーワードと、利用可能な辞書のキー一覧です。
-各キーワードについて、技術的に関連する辞書キーを選んでください。
+    # キー一覧を制限（プロンプトサイズ抑制）
+    max_keys = 150
+    syn_display = ", ".join(syn_keys[:max_keys])
+    uc_display = ", ".join(uc_keys[:max_keys])
+    inci_display = ", ".join(inci_keys[:max_keys])
 
-【収集済みキーワード】
-{terms_str}
+    prompt = f"""以下のキーワードそれぞれについて、各辞書のキー一覧から技術的に対応するキーを選んでください。
+
+【キーワード一覧】
+{", ".join(terms_list[:60])}
 
 【辞書キー一覧】
-同義語辞書: {', '.join(synonyms_keys)}
-上位概念辞書: {', '.join(upper_keys)}
-INCI名辞書: {', '.join(inci_keys)}
+synonyms: {syn_display}
+upper_concepts: {uc_display}
+inci: {inci_display}
 
-【出力形式】JSON配列のみ返答。説明文不要。
-[
-  {{"term": "スクワラン", "synonyms_key": "スクワラン", "upper_key": "スクワラン", "inci_key": "スクワラン"}},
-  {{"term": "炭化水素油", "synonyms_key": null, "upper_key": "流動パラフィン", "inci_key": null}}
-]
+【出力形式】フラットなJSON配列のみ返してください（説明文不要）:
+[{{"term":"スクワラン","synonyms_key":"スクワラン","upper_key":"スクワラン","inci_key":"スクワラン"}}]
 
 【ルール】
-- 各フィールドには辞書キー一覧に実際にあるキーのみ入れる（なければ null）
-- 技術的に関連しないものは null
-- 全キーワードについて出力する
-"""
+- 各フィールドには辞書キー一覧に実在するキーのみ記入。該当なしは null。
+- 意味的に同一または直接の包含関係にあるもののみマッチ。遠い関連はマッチしない。
+- 辞書にマッチしないキーワードは出力に含めなくてよい。"""
 
     try:
         import anthropic
@@ -431,387 +363,102 @@ INCI名辞書: {', '.join(inci_keys)}
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
-
-        raw_text = response.content[0].text
-        ai_data = _extract_json_array(raw_text)
-        if not ai_data:
-            logger.warning("Step 3 AI: JSONパース失敗 — スキップ")
-            return []
-
-        # AIが返したキーで辞書を引く
-        results = []
-        seen = set(all_terms)
-
-        def _add(t, source, kw_type):
-            if t and t not in seen:
-                seen.add(t)
-                results.append({"term": t, "source": source, "type": kw_type})
-
-        for item in ai_data:
-            # synonyms_key → 同義語展開
-            skey = item.get("synonyms_key")
-            if skey and skey in synonyms:
-                for syn in synonyms[skey]:
-                    _add(syn, "dict:synonyms", "同義語")
-
-            # upper_key → 上位概念・兄弟語展開
-            ukey = item.get("upper_key")
-            if ukey and ukey in uc:
-                entry = uc[ukey]
-                for up in entry.get("upper_concepts", []):
-                    _add(up, "dict:upper_concepts", "上位概念")
-                for sib in entry.get("same_fterm_siblings", []):
-                    _add(sib, "dict:upper_concepts", "兄弟語")
-
-            # inci_key → INCI名展開
-            ikey = item.get("inci_key")
-            if ikey and ikey in inci_ja:
-                entry = inci_ja[ikey]
-                inci_name = entry.get("inci_name", entry) if isinstance(entry, dict) else entry
-                if inci_name:
-                    _add(inci_name, "dict:inci", "INCI英名")
-
-        logger.info("Step 3 AI: %d 語の辞書展開結果を取得", len(results))
-        return results
-
+        result = _extract_json_array(response.content[0].text)
+        if result:
+            logger.info("Step 3: AI から %d 件の辞書照合データを取得", len(result))
+        else:
+            logger.warning("Step 3: AI応答からJSONを抽出できませんでした")
+        return result
     except ImportError:
         logger.warning("anthropic パッケージ未インストール — Step 3 スキップ")
-        return []
+        return None
     except Exception as e:
-        logger.warning("Step 3 AI エラー: %s — スキップ", e)
-        return []
+        logger.warning("Step 3 AI エラー: %s", e)
+        return None
 
 
-def recommend_regex(segments, hongan, field):
-    """Step 1→2→3 パイプライン
+def _merge_step3_results(results, ai_dict, field):
+    """Step 3 の AI 結果で辞書を引き、results にマージ
 
-    Step 1: 分節テキストから語句を機械的にピックアップ (source="claim")
-    Step 2: AIが明細書から関連語を拾う (source="spec:【段落ID】")
-    Step 3: AIが辞書キーを選び、Pythonが辞書を引く (source="dict:*")
-
-    ANTHROPIC_API_KEY 未設定時は Step 1 の結果のみ返る。
-
-    Parameters:
-        segments: 請求項分節データ (segments.json)
-        hongan: 本願構造化テキスト (hongan.json)
-        field: "cosmetics" | "laminate"
-
-    Returns:
-        分節ごとのキーワードリスト
+    AI が返した辞書キーで Python が辞書の中身を展開する。
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    synonyms = _get_dict(field, "synonyms.json")
+    uc = _get_dict(field, "upper_concepts.json")
+    inci_ja = _get_dict(field, "inci_ja.json")
 
-    # === Step 1: 機械的ピックアップ ===
-    picked_by_segment = {}  # {seg_id: [term, ...]}
-    seg_texts = {}          # {seg_id: text}
-
-    for claim in segments:
-        for seg in claim.get("segments", []):
-            seg_id = seg["id"]
-            text = seg["text"]
-            seg_texts[seg_id] = text
-            picked_by_segment[seg_id] = _pick_terms_from_text(text)
-
-    # 分節ごとのキーワードを初期化
-    keywords_by_seg = {}
-    for seg_id, terms in picked_by_segment.items():
-        keywords_by_seg[seg_id] = [
-            {"term": t, "source": "claim", "type": "請求項抽出"}
-            for t in terms
-        ]
-
-    # === Step 2: 明細書から関連語（AI） ===
-    if api_key and hongan:
-        spec_text = _build_spec_excerpt(hongan)
-        if spec_text:
-            spec_results = _ai_find_related_in_spec(picked_by_segment, spec_text)
-            for seg_id, items in spec_results.items():
-                if seg_id not in keywords_by_seg:
-                    continue
-                existing = {kw["term"] for kw in keywords_by_seg[seg_id]}
-                for item in items:
-                    para = item.get("para", "")
-                    source = f"spec:【{para}】" if para else "spec"
-                    for rel in item.get("related", []):
-                        if rel not in existing:
-                            keywords_by_seg[seg_id].append({
-                                "term": rel,
-                                "source": source,
-                                "type": "明細書関連語",
-                            })
-                            existing.add(rel)
-
-    # === Step 3: 辞書から関連語（AI） ===
-    if api_key:
-        all_terms = list({kw["term"] for kws in keywords_by_seg.values() for kw in kws})
-        dict_results = _ai_find_related_in_dicts(all_terms, field)
-
-        if dict_results:
-            # 辞書展開結果は元termが所属する分節に追加
-            # まず: 各termがどの分節にあるか逆引き
-            term_to_segs = {}
-            for seg_id, kws in keywords_by_seg.items():
-                for kw in kws:
-                    term_to_segs.setdefault(kw["term"], set()).add(seg_id)
-
-            # 辞書展開結果を対応する分節に追加
-            for dr in dict_results:
-                # この辞書語句を、元termを持つ全分節に追加
-                # （辞書展開は特定のtermに紐づかない共通結果なので、全分節に追加）
-                for seg_id in keywords_by_seg:
-                    existing = {kw["term"] for kw in keywords_by_seg[seg_id]}
-                    if dr["term"] not in existing:
-                        keywords_by_seg[seg_id].append(dr)
-
-    # === 重複除去して結果組み立て ===
-    results = []
-    for seg_id in seg_texts:
-        kws = keywords_by_seg.get(seg_id, [])
-        seen = set()
-        unique = []
-        for kw in kws:
-            if kw["term"] not in seen:
-                seen.add(kw["term"])
-                unique.append(kw)
-        results.append({
-            "segment_id": seg_id,
-            "segment_text": seg_texts[seg_id],
-            "keywords": unique,
-        })
-
-    return results
-
-
-# --- Phase 2: AI ベース ---
-
-def _extract_description_excerpt(hongan, max_chars=3000):
-    """明細書から実施例・定義部分を抜粋"""
-    if not hongan:
-        return ""
-
-    priority_sections = ["実施例", "手段", "効果", "実施形態"]
-    lines = []
-    total = 0
-
-    for section_name in priority_sections:
-        for para in hongan.get("paragraphs", []):
-            if para.get("section") == section_name:
-                text = f"【{para['id']}】{para['text']}"
-                if total + len(text) > max_chars:
-                    break
-                lines.append(text)
-                total += len(text)
-
-    return "\n".join(lines)
-
-
-# --- 辞書活用: 上位概念展開 + Fterm兄弟語 ---
-
-def _expand_upper_concepts(terms, field):
-    """upper_concepts.json から下位概念・Fterm兄弟語を展開"""
-    upper_concepts = _load_dict(field, "upper_concepts.json")
-    if not upper_concepts:
-        return []
-
-    expanded = []
-    for term in terms:
-        # term が上位概念辞書のキーにある → そのエントリの同義語・兄弟語を取得
-        entry = upper_concepts.get(term)
-        if not entry:
+    # term → 辞書展開結果のマップを構築
+    expansion = {}  # term -> [{"term":..., "source":..., "type":...}]
+    for item in ai_dict:
+        term = item.get("term", "")
+        if not term:
             continue
-        # same_fterm_siblings: 同じFtermの兄弟成分
-        for sib in entry.get("same_fterm_siblings", []):
-            expanded.append({"term": sib, "source": "dict", "type": "Fterm兄弟語"})
-        # broader_fterm_siblings: より広いFtermの兄弟成分
-        for bsib in entry.get("broader_fterm_siblings", []):
-            expanded.append({"term": bsib, "source": "dict", "type": "上位Fterm兄弟語"})
-        # brand_names
-        for bn in entry.get("brand_names", []):
-            expanded.append({"term": bn, "source": "dict", "type": "商品名"})
+        extras = []
 
-    # 逆引き: terms の各語が upper_concepts の upper_concepts リストに含まれている場合
-    # → そのキー（下位概念）をキーワードに追加
-    for ingredient, data in upper_concepts.items():
-        for term in terms:
-            if term in data.get("upper_concepts", []):
-                expanded.append({"term": ingredient, "source": "dict", "type": "下位概念"})
-                break
+        # synonyms 展開
+        sk = item.get("synonyms_key")
+        if sk and sk in synonyms:
+            syns = synonyms[sk]
+            if isinstance(syns, list):
+                for syn in syns:
+                    extras.append({"term": syn, "source": "dict:synonyms", "type": "同義語"})
+            elif isinstance(syns, str):
+                extras.append({"term": syns, "source": "dict:synonyms", "type": "同義語"})
 
-    return expanded
+        # upper_concepts 展開
+        uk = item.get("upper_key")
+        if uk and uk in uc:
+            entry = uc[uk]
+            for up in entry.get("upper_concepts", []):
+                extras.append({"term": up, "source": "dict:upper_concepts", "type": "上位概念"})
+            for sib in entry.get("same_fterm_siblings", [])[:5]:
+                extras.append({"term": sib, "source": "dict:upper_concepts", "type": "Fterm兄弟語"})
+            for bsib in entry.get("broader_fterm_siblings", [])[:3]:
+                extras.append({"term": bsib, "source": "dict:upper_concepts", "type": "上位Fterm兄弟語"})
+            for bn in entry.get("brand_names", []):
+                extras.append({"term": bn, "source": "dict:upper_concepts", "type": "商品名"})
 
+        # inci 展開
+        ik = item.get("inci_key")
+        if ik and ik in inci_ja:
+            e = inci_ja[ik]
+            if isinstance(e, dict):
+                name = e.get("inci_name", "")
+                if name:
+                    extras.append({"term": name, "source": "dict:inci", "type": "INCI英名"})
+                cas = e.get("cas_number", "")
+                if cas:
+                    extras.append({"term": cas, "source": "dict:inci", "type": "CAS番号"})
+            elif isinstance(e, str) and e:
+                extras.append({"term": e, "source": "dict:inci", "type": "INCI英名"})
 
-def _expand_fterm_siblings(terms, field):
-    """ingredient_to_fterm.json の逆引きで同じFtermを持つ成分を追加"""
-    i2f = _load_dict(field, "ingredient_to_fterm.json")
-    if not i2f:
-        return []
+        if extras:
+            expansion[term] = extras
 
-    # まず terms の Fterm コードを集める
-    fterm_codes = set()
-    for term in terms:
-        codes = i2f.get(term, [])
-        fterm_codes.update(codes)
-
-    if not fterm_codes:
-        return []
-
-    # 同じ Fterm を持つ他の成分を追加（最大10件）
-    siblings = []
-    count = 0
-    for ingredient, codes in i2f.items():
-        if ingredient in terms:
-            continue
-        if any(c in fterm_codes for c in codes):
-            siblings.append({"term": ingredient, "source": "dict", "type": "Fterm兄弟語"})
-            count += 1
-            if count >= 10:
-                break
-
-    return siblings
-
-
-def _extract_concrete_from_examples(hongan, seg_terms, field):
-    """明細書の実施例セクションから具体的な用語を抽出し分節キーワードに紐付け"""
-    if not hongan:
-        return {}
-
-    from modules.keyword_suggester import INGREDIENT_PATTERN_JP, MATERIAL_PATTERN
-    pattern = INGREDIENT_PATTERN_JP if field == "cosmetics" else MATERIAL_PATTERN
-
-    # seg_terms: {seg_id: [term1, term2, ...]}
-    concrete_by_seg = {}  # seg_id -> [keywords]
-
-    for para in hongan.get("paragraphs", []):
-        if para.get("section") not in ("実施例", "実施形態"):
-            continue
-        text = para.get("text", "")
-        found = pattern.findall(text)
-        for name in found:
-            if len(name) < 2:
-                continue
-            # どの分節に紐付くか: 分節のキーワードと関連性チェック
-            for seg_id, terms in seg_terms.items():
-                for t in terms:
-                    if t in name or name in t:
-                        concrete_by_seg.setdefault(seg_id, []).append({
-                            "term": name,
-                            "source": "spec",
-                            "type": "実施例具体名",
-                        })
-                        break
-
-    return concrete_by_seg
+    # 各分節のキーワードに展開結果を追加
+    added = 0
+    for r in results:
+        existing = {kw["term"] for kw in r["keywords"]}
+        to_add = []
+        for kw in r["keywords"]:
+            if kw["term"] in expansion:
+                for ext in expansion[kw["term"]]:
+                    if ext["term"] not in existing:
+                        to_add.append(ext)
+                        existing.add(ext["term"])
+        r["keywords"].extend(to_add)
+        added += len(to_add)
+    logger.info("Step 3 マージ: %d 語追加", added)
 
 
-# --- keyword_dictionary.json からのキーワード構築 ---
-
-def recommend_from_dictionary(case_dir, segments):
-    """keyword_dictionary.json が存在すればそこからキーワードを構築
-
-    各分節テキストを tech_analysis の要素(A-F)テキストとマッチングし、
-    該当要素のコア語・拡張語をその分節のキーワードとして採用。
-
-    Returns:
-        segment_keywords 形式のリスト、またはNone（ファイルなしの場合）
-    """
-    kw_dict_path = Path(case_dir) / "search" / "keyword_dictionary.json"
-    if not kw_dict_path.exists():
-        return None
-
-    try:
-        with open(kw_dict_path, "r", encoding="utf-8") as f:
-            kw_dict = json.load(f)
-    except Exception:
-        return None
-
-    elements = kw_dict.get("elements", {})
-    if not elements:
-        return None
-
-    # tech_analysis から要素→分節IDのマッピングを取得
-    tech_path = Path(case_dir) / "search" / "tech_analysis.json"
-    element_seg_map = {}
-    if tech_path.exists():
-        try:
-            with open(tech_path, "r", encoding="utf-8") as f:
-                tech = json.load(f)
-            for key, elem in tech.get("elements", {}).items():
-                for sid in elem.get("segment_ids", []):
-                    element_seg_map.setdefault(sid, []).append(key)
-        except Exception:
-            pass
-
-    # 全分節IDを収集
-    all_seg_ids = []
-    seg_texts = {}
-    for claim in segments:
-        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
-        if not is_indep:
-            continue
-        for seg in claim.get("segments", []):
-            all_seg_ids.append(seg["id"])
-            seg_texts[seg["id"]] = seg["text"]
-
-    # 各分節にキーワードを割り当て
-    results = []
-    for seg_id in all_seg_ids:
-        keywords = []
-        seg_text = seg_texts.get(seg_id, "")
-
-        # 方法1: tech_analysis のマッピングから要素を取得
-        matched_elements = element_seg_map.get(seg_id, [])
-
-        # 方法2: マッピングがなければ分節テキストとの語彙マッチ
-        if not matched_elements:
-            for key, elem in elements.items():
-                core_terms = [ct.get("term", "") for ct in elem.get("core_terms", [])]
-                for t in core_terms[:5]:
-                    if t and t in seg_text:
-                        matched_elements.append(key)
-                        break
-
-        # マッチした要素のキーワードを収集
-        seen = set()
-        for elem_key in matched_elements:
-            elem = elements.get(elem_key, {})
-            for ct in elem.get("core_terms", []):
-                term = ct.get("term", "")
-                if term and term not in seen:
-                    seen.add(term)
-                    keywords.append({
-                        "term": term,
-                        "source": ct.get("source", "dictionary"),
-                        "type": "コア語",
-                        "tier": "core",
-                        "element": elem_key,
-                    })
-            for et in elem.get("extended_terms", []):
-                term = et.get("term", "")
-                if term and term not in seen:
-                    seen.add(term)
-                    keywords.append({
-                        "term": term,
-                        "source": et.get("source", "dictionary"),
-                        "type": "拡張語",
-                        "tier": "extended",
-                        "element": elem_key,
-                    })
-
-        results.append({
-            "segment_id": seg_id,
-            "segment_text": seg_text,
-            "keywords": keywords,
-        })
-
-    return results
-
+# ============================================================
+# JSON 抽出ユーティリティ
+# ============================================================
 
 def _extract_json_array(raw_text):
-    """テキストからJSON配列を抽出（search_prompt_generator.py と同じロジック）"""
+    """テキストからJSON配列を抽出"""
     # パターン1: ```json ... ``` ブロック
     json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
     matches = json_block_pattern.findall(raw_text)
-
     for match in matches:
         try:
             data = json.loads(match)
@@ -839,21 +486,320 @@ def _extract_json_array(raw_text):
                 except json.JSONDecodeError:
                     start = None
                     continue
-
     return None
 
 
-# --- Phase 3: AI意味理解 + 辞書確定展開 (recommend_semantic) ---
+# ============================================================
+# メイン: キーワード収集パイプライン
+# ============================================================
+
+def recommend_regex(segments, hongan, field):
+    """キーワード収集パイプライン（Step 1→2→3）
+
+    Step 1: 全請求項・全分節から正規表現で語句ピックアップ
+    Step 2: AI で明細書から関連語を拾う（1回）
+    Step 3: AI で辞書キーを照合→Python が辞書展開（1回）
+
+    ANTHROPIC_API_KEY 未設定時は Step 1 のみで返す。
+    各 Step でエラーが発生してもスキップして次へ進む。
+
+    Parameters:
+        segments: 請求項分節データ (segments.json)
+        hongan: 本願構造化テキスト (hongan.json)
+        field: "cosmetics" | "laminate" | etc.
+
+    Returns:
+        list of dict:
+        [{"segment_id": "1A", "segment_text": "...",
+          "keywords": [{"term": str, "source": str, "type": str}, ...]}, ...]
+    """
+    # === Step 1: 正規表現抽出（全請求項・全分節） ===
+    results = []
+    for claim in segments:
+        for seg in claim.get("segments", []):
+            keywords = _pick_terms_from_text(seg["text"])
+            results.append({
+                "segment_id": seg["id"],
+                "segment_text": seg["text"],
+                "keywords": keywords,
+            })
+
+    logger.info("Step 1 完了: %d 分節、計 %d 語抽出",
+                len(results),
+                sum(len(r["keywords"]) for r in results))
+
+    # === Step 2: AI 明細書探索 ===
+    spec_text = _build_spec_excerpt(hongan, max_chars=8000)
+    if spec_text:
+        ai_spec = _ai_find_related_in_spec(results, spec_text)
+        if ai_spec:
+            _merge_step2_results(results, ai_spec)
+
+    # === Step 3: AI 辞書照合 + Python 展開 ===
+    ai_dict = _ai_find_related_in_dicts(results, field)
+    if ai_dict:
+        _merge_step3_results(results, ai_dict, field)
+
+    # === 最終重複除去 ===
+    for item in results:
+        seen = set()
+        unique = []
+        for kw in item["keywords"]:
+            if kw["term"] not in seen:
+                seen.add(kw["term"])
+                unique.append(kw)
+        item["keywords"] = unique
+
+    logger.info("パイプライン完了: %d 分節、計 %d 語",
+                len(results),
+                sum(len(r["keywords"]) for r in results))
+
+    return results
+
+
+# ============================================================
+# 後方互換: 既存関数（recommend_semantic 等から呼ばれる）
+# ============================================================
+
+def _match_ingredient_group(term, field):
+    """regex抽出語が ingredient_groups.json のどのカテゴリに該当するか判定"""
+    ig = _get_dict(field, "ingredient_groups.json")
+    if not ig:
+        return []
+    matches = []
+    for cat_name, cat_data in ig.items():
+        if term == cat_name or term in cat_name or cat_name in term:
+            matches.append({"category": cat_name, "sub_group": None, "match_type": "category"})
+            continue
+        if "sub_groups" in cat_data:
+            for sg_name, sg_items in cat_data["sub_groups"].items():
+                if term == sg_name or term in sg_name or sg_name in term:
+                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "sub_group"})
+                    break
+                if term in sg_items:
+                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "example"})
+                    break
+        elif "examples" in cat_data:
+            if term in cat_data["examples"]:
+                matches.append({"category": cat_name, "sub_group": None, "match_type": "example"})
+    return matches
+
+
+def _match_fterm_labels(term, field):
+    """regex抽出語が Fterm のラベルまたは例示に該当するか判定"""
+    fterm_files = {
+        "cosmetics": "fterm_4c083_structure.json",
+        "laminate": "fterm_4f100_structure.json",
+    }
+    fterm_name = fterm_files.get(field, "")
+    if not fterm_name:
+        return []
+    ft = _get_dict(field, fterm_name)
+    matches = []
+    for cat_code, cat_data in ft.get("categories", {}).items():
+        for ecode, edata in cat_data.get("entries", {}).items():
+            label = edata.get("label", "")
+            if term and label and (term in label or label in term):
+                matches.append({"fterm_code": ecode, "label": label, "match_type": "label"})
+            elif term in edata.get("examples", []):
+                matches.append({"fterm_code": ecode, "label": label, "match_type": "example"})
+    return matches
+
+
+def _match_upper_concepts_reverse(term, field):
+    """regex抽出語が upper_concepts の上位概念リストに含まれるか判定"""
+    uc = _get_dict(field, "upper_concepts.json")
+    if not uc:
+        return []
+    lower_terms = []
+    for ingredient, data in uc.items():
+        if term in data.get("upper_concepts", []):
+            lower_terms.append(ingredient)
+    return lower_terms
+
+
+def _extract_description_excerpt(hongan, max_chars=3000):
+    """明細書から実施例・定義部分を抜粋（recommend_semantic 用、後方互換）"""
+    if not hongan:
+        return ""
+    priority_sections = ["実施例", "手段", "効果", "実施形態"]
+    lines = []
+    total = 0
+    for section_name in priority_sections:
+        for para in hongan.get("paragraphs", []):
+            if para.get("section") == section_name:
+                text = f"【{para['id']}】{para['text']}"
+                if total + len(text) > max_chars:
+                    break
+                lines.append(text)
+                total += len(text)
+    return "\n".join(lines)
+
+
+def _expand_upper_concepts(terms, field):
+    """upper_concepts.json から下位概念・Fterm兄弟語を展開"""
+    upper_concepts = _load_dict(field, "upper_concepts.json")
+    if not upper_concepts:
+        return []
+    expanded = []
+    for term in terms:
+        entry = upper_concepts.get(term)
+        if not entry:
+            continue
+        for sib in entry.get("same_fterm_siblings", []):
+            expanded.append({"term": sib, "source": "dict", "type": "Fterm兄弟語"})
+        for bsib in entry.get("broader_fterm_siblings", []):
+            expanded.append({"term": bsib, "source": "dict", "type": "上位Fterm兄弟語"})
+        for bn in entry.get("brand_names", []):
+            expanded.append({"term": bn, "source": "dict", "type": "商品名"})
+    for ingredient, data in upper_concepts.items():
+        for term in terms:
+            if term in data.get("upper_concepts", []):
+                expanded.append({"term": ingredient, "source": "dict", "type": "下位概念"})
+                break
+    return expanded
+
+
+def _expand_fterm_siblings(terms, field):
+    """ingredient_to_fterm.json の逆引きで同じFtermを持つ成分を追加"""
+    i2f = _load_dict(field, "ingredient_to_fterm.json")
+    if not i2f:
+        return []
+    fterm_codes = set()
+    for term in terms:
+        codes = i2f.get(term, [])
+        fterm_codes.update(codes)
+    if not fterm_codes:
+        return []
+    siblings = []
+    count = 0
+    for ingredient, codes in i2f.items():
+        if ingredient in terms:
+            continue
+        if any(c in fterm_codes for c in codes):
+            siblings.append({"term": ingredient, "source": "dict", "type": "Fterm兄弟語"})
+            count += 1
+            if count >= 10:
+                break
+    return siblings
+
+
+def _extract_concrete_from_examples(hongan, seg_terms, field):
+    """明細書の実施例セクションから具体的な用語を抽出し分節キーワードに紐付け"""
+    if not hongan:
+        return {}
+    from modules.keyword_suggester import INGREDIENT_PATTERN_JP, MATERIAL_PATTERN
+    pattern = INGREDIENT_PATTERN_JP if field == "cosmetics" else MATERIAL_PATTERN
+    concrete_by_seg = {}
+    for para in hongan.get("paragraphs", []):
+        if para.get("section") not in ("実施例", "実施形態"):
+            continue
+        text = para.get("text", "")
+        found = pattern.findall(text)
+        for name in found:
+            if len(name) < 2:
+                continue
+            for seg_id, terms in seg_terms.items():
+                for t in terms:
+                    if t in name or name in t:
+                        concrete_by_seg.setdefault(seg_id, []).append({
+                            "term": name,
+                            "source": "spec",
+                            "type": "実施例具体名",
+                        })
+                        break
+    return concrete_by_seg
+
+
+# ============================================================
+# keyword_dictionary.json からのキーワード構築（後方互換）
+# ============================================================
+
+def recommend_from_dictionary(case_dir, segments):
+    """keyword_dictionary.json が存在すればそこからキーワードを構築"""
+    kw_dict_path = Path(case_dir) / "search" / "keyword_dictionary.json"
+    if not kw_dict_path.exists():
+        return None
+    try:
+        with open(kw_dict_path, "r", encoding="utf-8") as f:
+            kw_dict = json.load(f)
+    except Exception:
+        return None
+    elements = kw_dict.get("elements", {})
+    if not elements:
+        return None
+    tech_path = Path(case_dir) / "search" / "tech_analysis.json"
+    element_seg_map = {}
+    if tech_path.exists():
+        try:
+            with open(tech_path, "r", encoding="utf-8") as f:
+                tech = json.load(f)
+            for key, elem in tech.get("elements", {}).items():
+                for sid in elem.get("segment_ids", []):
+                    element_seg_map.setdefault(sid, []).append(key)
+        except Exception:
+            pass
+    all_seg_ids = []
+    seg_texts = {}
+    for claim in segments:
+        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
+        if not is_indep:
+            continue
+        for seg in claim.get("segments", []):
+            all_seg_ids.append(seg["id"])
+            seg_texts[seg["id"]] = seg["text"]
+    results = []
+    for seg_id in all_seg_ids:
+        keywords = []
+        seg_text = seg_texts.get(seg_id, "")
+        matched_elements = element_seg_map.get(seg_id, [])
+        if not matched_elements:
+            for key, elem in elements.items():
+                core_terms = [ct.get("term", "") for ct in elem.get("core_terms", [])]
+                for t in core_terms[:5]:
+                    if t and t in seg_text:
+                        matched_elements.append(key)
+                        break
+        seen = set()
+        for elem_key in matched_elements:
+            elem = elements.get(elem_key, {})
+            for ct in elem.get("core_terms", []):
+                term = ct.get("term", "")
+                if term and term not in seen:
+                    seen.add(term)
+                    keywords.append({
+                        "term": term,
+                        "source": ct.get("source", "dictionary"),
+                        "type": "コア語",
+                        "tier": "core",
+                        "element": elem_key,
+                    })
+            for et in elem.get("extended_terms", []):
+                term = et.get("term", "")
+                if term and term not in seen:
+                    seen.add(term)
+                    keywords.append({
+                        "term": term,
+                        "source": et.get("source", "dictionary"),
+                        "type": "拡張語",
+                        "tier": "extended",
+                        "element": elem_key,
+                    })
+        results.append({
+            "segment_id": seg_id,
+            "segment_text": seg_text,
+            "keywords": keywords,
+        })
+    return results
+
+
+# ============================================================
+# recommend_semantic（後方互換: 既存フロー維持）
+# ============================================================
 
 def _build_dict_catalog(field):
-    """辞書カテゴリのカタログをAIプロンプト用にコンパクトに生成
-
-    AIに「この辞書にはこういうカテゴリがある」と示すことで、
-    AIが分節テキストを辞書カテゴリにマッピングできるようにする。
-    """
+    """辞書カテゴリのカタログをAIプロンプト用にコンパクトに生成"""
     lines = []
-
-    # 1. ingredient_groups.json
     ig = _get_dict(field, "ingredient_groups.json")
     if ig:
         lines.append("【成分グループ辞書】")
@@ -870,8 +816,6 @@ def _build_dict_catalog(field):
             elif "examples" in cat_data:
                 exs = cat_data["examples"][:5]
                 lines.append(f"  {cat_name}: 例=[{', '.join(exs)}]")
-
-    # 2. Fterm structure
     fterm_files = {
         "cosmetics": "fterm_4c083_structure.json",
         "laminate": "fterm_4f100_structure.json",
@@ -888,32 +832,21 @@ def _build_dict_catalog(field):
                 for ecode, edata in list(entries.items())[:4]:
                     entry_samples.append(f"{ecode}:{edata.get('label', '')}")
                 lines.append(f"  {cat_code}({label}): {', '.join(entry_samples)}")
-
-    # 3. upper_concepts.json
     uc = _get_dict(field, "upper_concepts.json")
     if uc:
         lines.append("\n【上位概念辞書】")
         for ingredient, data in uc.items():
             uppers = data.get("upper_concepts", [])
             lines.append(f"  {ingredient} → {', '.join(uppers[:4])}")
-
     return "\n".join(lines)
 
 
 def _call_ai_for_semantic_analysis(segments, hongan, field):
-    """AIに分節の技術的意味理解＋辞書カテゴリマッピングを依頼
-
-    Returns:
-        {segment_id: {technical_meaning, ingredient_group_matches,
-                      fterm_matches, upper_concept_matches, additional_terms}}
-        または None（APIキー未設定・エラー時）
-    """
+    """AIに分節の技術的意味理解＋辞書カテゴリマッピングを依頼"""
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         logger.info("ANTHROPIC_API_KEY 未設定 — semantic分析スキップ")
         return None
-
-    # 分節リストを組み立て
     seg_lines = []
     seg_ids = []
     for claim in segments:
@@ -923,14 +856,11 @@ def _call_ai_for_semantic_analysis(segments, hongan, field):
         for seg in claim.get("segments", []):
             seg_lines.append(f'{seg["id"]}: {seg["text"]}')
             seg_ids.append(seg["id"])
-
     if not seg_lines:
         return None
-
     field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
     dict_catalog = _build_dict_catalog(field)
     description_excerpt = _extract_description_excerpt(hongan, max_chars=2000)
-
     prompt = f"""あなたは{field_label}分野の特許調査の専門家です。
 以下の請求項分節それぞれについて、技術的意味を理解し、当方の辞書カテゴリへのマッピングを行ってください。
 
@@ -968,7 +898,6 @@ def _call_ai_for_semantic_analysis(segments, hongan, field):
 - 技術的内容が薄い分節（「化粧料」のみ等）は各フィールドを空配列にしてください。
 - 1つの分節が複数カテゴリに該当する場合は全て列挙してください。
 """
-
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
@@ -977,24 +906,18 @@ def _call_ai_for_semantic_analysis(segments, hongan, field):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-
         raw_text = response.content[0].text
         ai_data = _extract_json_array(raw_text)
-
         if not ai_data:
             logger.warning("semantic分析: JSONを抽出できませんでした")
             return None
-
-        # seg_id でインデックス化
         result = {}
         for item in ai_data:
             sid = item.get("segment_id", "")
             if sid in seg_ids:
                 result[sid] = item
-
         logger.info("semantic分析: %d/%d 分節の結果を取得", len(result), len(seg_ids))
         return result
-
     except ImportError:
         logger.warning("anthropic パッケージ未インストール — semantic分析スキップ")
         return None
@@ -1004,26 +927,15 @@ def _call_ai_for_semantic_analysis(segments, hongan, field):
 
 
 def _expand_from_ai_mappings(ai_mapping, field):
-    """AIのカテゴリマッピングから辞書を使った確定的キーワード展開（8ステップ）
-
-    Parameters:
-        ai_mapping: 1分節分のAI結果 dict
-        field: 技術分野
-
-    Returns:
-        キーワードリスト [{term, source, type, tier}, ...]
-    """
+    """AIのカテゴリマッピングから辞書を使った確定的キーワード展開"""
     keywords = []
     seen = set()
 
     def _add(term, source, kw_type, tier="core"):
         if term and term not in seen:
             seen.add(term)
-            keywords.append({
-                "term": term, "source": source, "type": kw_type, "tier": tier,
-            })
+            keywords.append({"term": term, "source": source, "type": kw_type, "tier": tier})
 
-    # --- Step 1: AI直接提案語 (additional_terms) ---
     additional = ai_mapping.get("additional_terms", {})
     if isinstance(additional, dict):
         for term in additional.get("core", []):
@@ -1033,14 +945,11 @@ def _expand_from_ai_mappings(ai_mapping, field):
         for term in additional.get("not", []):
             _add(term, "ai_semantic", "AI意味理解(NOT語)", "not")
 
-    # --- Step 2: ingredient_groups.json 展開 ---
     ig = _get_dict(field, "ingredient_groups.json")
     for match_name in ai_mapping.get("ingredient_group_matches", []):
         parts = match_name.split("/")
         cat_name = parts[0]
         sub_name = parts[1] if len(parts) > 1 else None
-
-        # カテゴリ検索（完全一致 → 部分一致フォールバック）
         cat_data = ig.get(cat_name)
         if not cat_data:
             for key in ig:
@@ -1050,12 +959,9 @@ def _expand_from_ai_mappings(ai_mapping, field):
                     break
         if not cat_data:
             continue
-
         _add(cat_name, "dict_ig", "成分グループ", "core")
-
         if "sub_groups" in cat_data:
             if sub_name:
-                # 指定サブグループの成分を展開
                 sg_items = cat_data["sub_groups"].get(sub_name)
                 if not sg_items:
                     for sg_key in cat_data["sub_groups"]:
@@ -1068,7 +974,6 @@ def _expand_from_ai_mappings(ai_mapping, field):
                     for item in sg_items[:8]:
                         _add(item, "dict_ig", f"{cat_name}/{sub_name}", "extended")
             else:
-                # サブグループ全体を展開
                 for sg_key, sg_items in cat_data["sub_groups"].items():
                     _add(sg_key, "dict_ig", f"{cat_name}サブ", "core")
                     for item in sg_items[:3]:
@@ -1077,7 +982,6 @@ def _expand_from_ai_mappings(ai_mapping, field):
             for item in cat_data["examples"][:8]:
                 _add(item, "dict_ig", f"{cat_name}例", "extended")
 
-    # --- Step 3: Fterm展開 ---
     fterm_files = {
         "cosmetics": "fterm_4c083_structure.json",
         "laminate": "fterm_4f100_structure.json",
@@ -1097,20 +1001,17 @@ def _expand_from_ai_mappings(ai_mapping, field):
                 for ex in entry.get("examples", [])[:5]:
                     _add(ex, "dict_fterm", f"Fterm({fcode})例", "extended")
 
-    # --- Step 4: upper_concepts.json 展開 ---
-    uc = _get_dict(field, "upper_concepts.json")
+    uc_dict = _get_dict(field, "upper_concepts.json")
     for uc_name in ai_mapping.get("upper_concept_matches", []):
-        entry = uc.get(uc_name)
+        entry = uc_dict.get(uc_name)
         if not entry:
-            # 部分一致フォールバック
-            for key in uc:
+            for key in uc_dict:
                 if uc_name in key or key in uc_name:
-                    entry = uc[key]
+                    entry = uc_dict[key]
                     uc_name = key
                     break
         if not entry:
             continue
-
         _add(uc_name, "dict_uc", "上位概念キー", "core")
         for up in entry.get("upper_concepts", []):
             _add(up, "dict_uc", "上位概念", "core")
@@ -1121,16 +1022,12 @@ def _expand_from_ai_mappings(ai_mapping, field):
         for bn in entry.get("brand_names", []):
             _add(bn, "dict_uc", "商品名", "extended")
 
-    # --- Step 5: ingredient_to_fterm.json 逆引き ---
     i2f = _get_dict(field, "ingredient_to_fterm.json")
     if i2f:
         target_codes = set()
-        # AI指定のFtermコード
         target_codes.update(ai_mapping.get("fterm_matches", []))
-        # upper_concept成分のFtermコード
         for uc_name in ai_mapping.get("upper_concept_matches", []):
             target_codes.update(i2f.get(uc_name, []))
-
         if target_codes:
             count = 0
             for ingredient, codes in i2f.items():
@@ -1142,7 +1039,6 @@ def _expand_from_ai_mappings(ai_mapping, field):
                     if count >= 8:
                         break
 
-    # --- Step 6: synonyms.json 展開 ---
     synonyms = _get_dict(field, "synonyms.json")
     if synonyms:
         core_terms = [kw["term"] for kw in keywords if kw.get("tier") == "core"]
@@ -1150,7 +1046,6 @@ def _expand_from_ai_mappings(ai_mapping, field):
             for syn in synonyms.get(term, []):
                 _add(syn, "dict_syn", "同義語", "extended")
 
-    # --- Step 7: INCI名展開 ---
     inci_ja = _get_dict(field, "inci_ja.json")
     if inci_ja:
         core_terms = [kw["term"] for kw in keywords if kw.get("tier") == "core"]
@@ -1161,31 +1056,14 @@ def _expand_from_ai_mappings(ai_mapping, field):
                 if inci_name:
                     _add(inci_name, "dict_inci", "INCI英名", "extended")
 
-    # Step 8: technical_meaning は呼び出し元 (recommend_semantic) で結果に付与
-
     return keywords
 
 
 def recommend_semantic(segments, hongan, field):
-    """AI意味理解 + 辞書確定展開によるキーワード提案
-
-    Phase A: AIが各分節の技術的意味を理解し、辞書カテゴリにマッピング
-    Phase B: プログラムが辞書を引いて確定的にキーワードを展開
-
-    Parameters:
-        segments: 請求項分節データ
-        hongan: 本願構造化テキスト
-        field: 技術分野
-
-    Returns:
-        分節ごとのキーワードリスト（technical_meaning 付き）
-    """
-    # Phase A: AI呼び出し
+    """AI意味理解 + 辞書確定展開によるキーワード提案（後方互換）"""
     ai_result = _call_ai_for_semantic_analysis(segments, hongan, field)
     if not ai_result:
         return []
-
-    # Phase B: 各分節を辞書展開
     results = []
     for claim in segments:
         is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
@@ -1193,7 +1071,8 @@ def recommend_semantic(segments, hongan, field):
             continue
         for seg in claim.get("segments", []):
             seg_id = seg["id"]
-            if seg_id not in ai_result:
+            ai_mapping = ai_result.get(seg_id)
+            if not ai_mapping:
                 results.append({
                     "segment_id": seg_id,
                     "segment_text": seg["text"],
@@ -1201,294 +1080,11 @@ def recommend_semantic(segments, hongan, field):
                     "technical_meaning": "",
                 })
                 continue
-
-            mapping = ai_result[seg_id]
-            keywords = _expand_from_ai_mappings(mapping, field)
-
+            keywords = _expand_from_ai_mappings(ai_mapping, field)
             results.append({
                 "segment_id": seg_id,
                 "segment_text": seg["text"],
                 "keywords": keywords,
-                "technical_meaning": mapping.get("technical_meaning", ""),
+                "technical_meaning": ai_mapping.get("technical_meaning", ""),
             })
-
-    logger.info("semantic提案: %d分節のキーワードを生成", len(results))
     return results
-
-
-def recommend_ai(segments, hongan, field, case_dir=None):
-    """Claude APIベースのキーワード提案（3段階検索データ活用版）
-
-    ANTHROPIC_API_KEY 環境変数が未設定の場合は空リストを返す（エラーにしない）。
-    case_dir が指定されていれば、search/tech_analysis.json や
-    search/presearch_candidates.json を参考情報として活用する。
-
-    Parameters:
-        segments: 請求項分節データ
-        hongan: 本願構造化テキスト
-        field: 技術分野
-        case_dir: 案件ディレクトリ（3段階データ活用用、optional）
-
-    Returns:
-        分節ごとのキーワードリスト（source="ai"）
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.info("ANTHROPIC_API_KEY 未設定 — AI提案スキップ")
-        return []
-
-    # 分節リストを組み立て
-    seg_lines = []
-    seg_ids = []
-    seg_texts = {}
-    for claim in segments:
-        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
-        if not is_indep:
-            continue
-        for seg in claim.get("segments", []):
-            seg_lines.append(f'{seg["id"]}: {seg["text"]}')
-            seg_ids.append(seg["id"])
-            seg_texts[seg["id"]] = seg["text"]
-
-    if not seg_lines:
-        return []
-
-    field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
-
-    # 明細書から参考情報を抽出
-    description_excerpt = _extract_description_excerpt(hongan, max_chars=3000)
-
-    # 3段階検索の中間データを参考情報として追加
-    tech_analysis_text = ""
-    presearch_text = ""
-    if case_dir:
-        tech_path = Path(case_dir) / "search" / "tech_analysis.json"
-        if tech_path.exists():
-            try:
-                with open(tech_path, "r", encoding="utf-8") as f:
-                    tech = json.load(f)
-                lines = [f"コア文: {tech.get('core_sentence', '')}"]
-                for key, elem in tech.get("elements", {}).items():
-                    label = elem.get("label", key)
-                    terms = ", ".join(elem.get("terms_ja", [])[:5])
-                    lines.append(f"  {key} ({label}): {terms}")
-                tech_analysis_text = "\n".join(lines)
-            except Exception:
-                pass
-
-        cand_path = Path(case_dir) / "search" / "presearch_candidates.json"
-        if cand_path.exists():
-            try:
-                with open(cand_path, "r", encoding="utf-8") as f:
-                    cands = json.load(f)
-                lines = []
-                for c in (cands if isinstance(cands, list) else [])[:3]:
-                    pid = c.get("patent_id", "?")
-                    kts = ", ".join(c.get("key_terms_found", [])[:8])
-                    lines.append(f"  {pid}: {kts}")
-                presearch_text = "\n".join(lines)
-            except Exception:
-                pass
-
-    extra_context = ""
-    if tech_analysis_text:
-        extra_context += f"\n\n【技術構造化（予備検索結果）】\n{tech_analysis_text}"
-    if presearch_text:
-        extra_context += f"\n\n【代表文献の語彙】\n{presearch_text}"
-
-    field_specific = ""
-    if field == "cosmetics":
-        field_specific = "\n- 化粧品分野: INCI名、商品名（ブランド名）、化学名の3つを含めること"
-    elif field == "laminate":
-        field_specific = "\n- 積層体分野: 樹脂略称（PE/PP/PET等）と正式名称の両方を含めること"
-
-    prompt = f"""あなたは{field_label}分野の特許調査の専門家です。
-以下は特許請求項の構成要件を分節したリストです。
-各分節について、先行技術検索（Google Patents、J-PlatPat）に使うべきキーワードを提案してください。
-
-【分野】{field_label}
-
-【分節リスト】
-{chr(10).join(seg_lines)}
-
-【本願明細書の参考情報】
-{description_excerpt}{extra_context}
-
-【出力形式】JSON配列で返してください:
-[
-  {{
-    "segment_id": "1A",
-    "keywords_ja": ["日本語キーワード1", "同義語", "上位概念", ...],
-    "keywords_en": ["English keyword", "INCI name", ...],
-    "numeric_conditions": ["5000ppm以上", ...],
-    "search_phrases": ["油性 エアゾール 化粧料", ...],
-    "tier_core": ["高適合コア語1", "コア語2"],
-    "tier_extended": ["漏れ防止拡張語1"],
-    "not_terms": ["ノイズ除外語1"]
-  }}
-]
-
-【提案の指針】
-- 代表公報の実語彙を優先して採用してください（推定より公報語彙が上位）
-- キーワードをコア語（高適合、狭い検索式用）と拡張語（漏れ防止、広い検索式用）に分類
-- NOT語（ノイズ除外語）も提案してください
-- 日本語: 特許公報で使われる表記、一般名、化学名、商品名、上位概念、下位概念を幅広く
-- 英語: INCI名、学術用語、米国特許で使われる表現
-- 数値条件: 分節中に数値範囲があれば検索用に整形
-- 検索フレーズ: Google Patentsに投げる2〜4語の組み合わせ
-- 分節に技術的内容がない場合（「化粧料」等の製品カテゴリのみ）はキーワード少なめでOK{field_specific}
-"""
-
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=4096,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        raw_text = response.content[0].text
-        ai_data = _extract_json_array(raw_text)
-
-        if not ai_data:
-            logger.warning("AIレスポンスからJSONを抽出できませんでした")
-            return []
-
-        # 正規化: AI結果を統一形式に変換
-        results = []
-        for item in ai_data:
-            seg_id = item.get("segment_id", "")
-            if seg_id not in seg_ids:
-                continue
-            keywords = []
-
-            # tier_core: 高適合コア語（優先度高）
-            for term in item.get("tier_core", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(コア語)", "tier": "core"})
-
-            # tier_extended: 漏れ防止拡張語
-            for term in item.get("tier_extended", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(拡張語)", "tier": "extended"})
-
-            # not_terms: ノイズ除外語
-            for term in item.get("not_terms", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(NOT語)", "tier": "not"})
-
-            # 従来フィールドも引き続きパース
-            for term in item.get("keywords_ja", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(日本語)"})
-            for term in item.get("keywords_en", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(英語)"})
-            for term in item.get("numeric_conditions", []):
-                keywords.append({"term": term, "source": "ai", "type": "AI提案(数値条件)"})
-            for phrase in item.get("search_phrases", []):
-                keywords.append({"term": phrase, "source": "ai", "type": "AI提案(検索フレーズ)"})
-
-            # 重複除去（term が同じものは最初のものを優先）
-            seen = set()
-            unique = []
-            for kw in keywords:
-                if kw["term"] not in seen:
-                    seen.add(kw["term"])
-                    unique.append(kw)
-
-            results.append({
-                "segment_id": seg_id,
-                "segment_text": seg_texts.get(seg_id, ""),
-                "keywords": unique,
-            })
-
-        logger.info("AI提案: %d分節のキーワードを取得", len(results))
-        return results
-
-    except ImportError:
-        logger.warning("anthropic パッケージ未インストール — AI提案スキップ")
-        return []
-    except Exception as e:
-        logger.warning("AI キーワード提案エラー: %s", e)
-        return []
-
-
-# --- メインエントリポイント ---
-
-def suggest_keywords_by_segment(segments, hongan, field, case_dir=None):
-    """分節別キーワード提案のメインエントリポイント
-
-    優先順位:
-    1. keyword_dictionary.json があればそれをベースに構築（3段階検索完了時）
-    2. recommend_semantic（AI意味理解+辞書展開）+ regex 補完
-    3. recommend_regex + recommend_ai（旧フロー: API未設定時のフォールバック）
-
-    Parameters:
-        segments: 請求項分節データ (segments.json)
-        hongan: 本願構造化テキスト (hongan.json)
-        field: "cosmetics" | "laminate"
-        case_dir: 案件ディレクトリ（3段階データ活用用、optional）
-
-    Returns:
-        分節ごとのキーワードリスト (segment_keywords.json 形式)
-    """
-    # --- 優先1: keyword_dictionary.json からの構築 ---
-    if case_dir:
-        dict_results = recommend_from_dictionary(case_dir, segments)
-        if dict_results:
-            regex_results = recommend_regex(segments, hongan, field)
-            regex_by_seg = {r["segment_id"]: r for r in regex_results}
-
-            for item in dict_results:
-                seg_id = item["segment_id"]
-                if seg_id in regex_by_seg:
-                    existing = {kw["term"] for kw in item["keywords"]}
-                    for kw in regex_by_seg[seg_id]["keywords"]:
-                        if kw["term"] not in existing:
-                            item["keywords"].append(kw)
-                            existing.add(kw["term"])
-
-            logger.info("keyword_dictionary.json ベースで %d 分節のキーワードを構築", len(dict_results))
-            return dict_results
-
-    # --- 優先2: recommend_semantic（AI意味理解+辞書展開）---
-    semantic_results = recommend_semantic(segments, hongan, field)
-    if semantic_results:
-        # semantic をベースに、regex で補完
-        regex_results = recommend_regex(segments, hongan, field)
-        regex_by_seg = {r["segment_id"]: r for r in regex_results}
-
-        for item in semantic_results:
-            seg_id = item["segment_id"]
-            if seg_id in regex_by_seg:
-                existing = {kw["term"] for kw in item["keywords"]}
-                for kw in regex_by_seg[seg_id]["keywords"]:
-                    if kw["term"] not in existing:
-                        item["keywords"].append(kw)
-                        existing.add(kw["term"])
-
-        logger.info("semantic+regex で %d 分節のキーワードを構築", len(semantic_results))
-        return semantic_results
-
-    # --- 優先3: フォールバック（regex + 旧AI）---
-    regex_results = recommend_regex(segments, hongan, field)
-    ai_results = recommend_ai(segments, hongan, field, case_dir=case_dir)
-
-    ai_by_seg = {r["segment_id"]: r for r in ai_results}
-
-    merged = []
-    for reg in regex_results:
-        seg_id = reg["segment_id"]
-        all_keywords = list(reg["keywords"])
-
-        if seg_id in ai_by_seg:
-            existing_terms = {kw["term"] for kw in all_keywords}
-            for kw in ai_by_seg[seg_id]["keywords"]:
-                if kw["term"] not in existing_terms:
-                    all_keywords.append(kw)
-                    existing_terms.add(kw["term"])
-
-        merged.append({
-            "segment_id": seg_id,
-            "segment_text": reg["segment_text"],
-            "keywords": all_keywords,
-        })
-
-    return merged

@@ -1517,9 +1517,13 @@ def _sync_to_keyword_groups(case_dir, seg_keywords, field):
 
 
 @app.route("/case/<case_id>/keywords/suggest-by-segment", methods=["POST"])
-def suggest_keywords_by_segment_endpoint(case_id):
-    """分節別AIキーワード提案"""
-    from modules.keyword_recommender import suggest_keywords_by_segment
+def suggest_keywords_by_segment(case_id):
+    """分節別キーワード提案（パイプライン版: Step 1→2→3）
+
+    Returns:
+        segment_keywords.json 形式のリスト
+    """
+    from modules.keyword_recommender import recommend_regex
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -1537,35 +1541,11 @@ def suggest_keywords_by_segment_endpoint(case_id):
         segs = json.load(f)
 
     field = meta.get("field", "cosmetics")
+    result = recommend_regex(segs, hongan, field)
 
-    # 既存の segment_keywords.json があれば手動追加分を保持
-    existing_manual = {}
-    sk_path = case_dir / "segment_keywords.json"
-    if sk_path.exists():
-        with open(sk_path, "r", encoding="utf-8") as f:
-            existing = json.load(f)
-        for item in existing:
-            manual_kws = [kw for kw in item.get("keywords", []) if kw.get("source") == "manual"]
-            if manual_kws:
-                existing_manual[item["segment_id"]] = manual_kws
-
-    result = suggest_keywords_by_segment(segs, hongan, field, case_dir=str(case_dir))
-
-    # 手動追加分をマージ
-    for item in result:
-        seg_id = item["segment_id"]
-        if seg_id in existing_manual:
-            existing_terms = {kw["term"] for kw in item["keywords"]}
-            for manual_kw in existing_manual[seg_id]:
-                if manual_kw["term"] not in existing_terms:
-                    item["keywords"].append(manual_kw)
-
-    # 保存
-    with open(sk_path, "w", encoding="utf-8") as f:
+    # segment_keywords.json に保存
+    with open(case_dir / "segment_keywords.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-
-    # keywords.json も同期更新
-    _sync_to_keyword_groups(case_dir, result, field)
 
     return jsonify(result)
 
