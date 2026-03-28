@@ -79,7 +79,9 @@ def _extract_search_keywords(segments, keywords=None, field="cosmetics"):
     if keywords and isinstance(keywords, list):
         for group in keywords:
             for kw in group.get("keywords", [])[:3]:
-                terms.append(kw)
+                term = kw.get("term", "") if isinstance(kw, dict) else str(kw)
+                if term:
+                    terms.append(term)
 
     # 2. 分節から名詞句を簡易抽出（キーワードが不足する場合）
     if len(terms) < 4:
