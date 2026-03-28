@@ -99,6 +99,93 @@ def _load_dict(field, dict_name):
     return {}
 
 
+# --- 辞書マッチングヘルパー（recommend_regex 用） ---
+
+def _match_ingredient_group(term, field):
+    """regex抽出語が ingredient_groups.json のどのカテゴリに該当するか判定
+
+    Returns:
+        list of dict: [{"category": "油剤", "sub_group": "炭化水素油"|None,
+                        "match_type": "category"|"sub_group"|"example"}]
+    """
+    ig = _get_dict(field, "ingredient_groups.json")
+    if not ig:
+        return []
+
+    matches = []
+    for cat_name, cat_data in ig.items():
+        # カテゴリ名自体にマッチ
+        if term == cat_name or term in cat_name or cat_name in term:
+            matches.append({"category": cat_name, "sub_group": None, "match_type": "category"})
+            continue
+
+        if "sub_groups" in cat_data:
+            for sg_name, sg_items in cat_data["sub_groups"].items():
+                # サブグループ名にマッチ
+                if term == sg_name or term in sg_name or sg_name in term:
+                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "sub_group"})
+                    break
+                # 具体例にマッチ
+                if term in sg_items:
+                    matches.append({"category": cat_name, "sub_group": sg_name, "match_type": "example"})
+                    break
+        elif "examples" in cat_data:
+            if term in cat_data["examples"]:
+                matches.append({"category": cat_name, "sub_group": None, "match_type": "example"})
+
+    return matches
+
+
+def _match_fterm_labels(term, field):
+    """regex抽出語が Fterm のラベルまたは例示に該当するか判定
+
+    Returns:
+        list of dict: [{"fterm_code": "AC01", "label": "...", "match_type": "label"|"example"}]
+    """
+    fterm_files = {
+        "cosmetics": "fterm_4c083_structure.json",
+        "laminate": "fterm_4f100_structure.json",
+    }
+    fterm_name = fterm_files.get(field, "")
+    if not fterm_name:
+        return []
+
+    ft = _get_dict(field, fterm_name)
+    matches = []
+    for cat_code, cat_data in ft.get("categories", {}).items():
+        for ecode, edata in cat_data.get("entries", {}).items():
+            label = edata.get("label", "")
+            # ラベルにマッチ（部分一致）
+            if term and label and (term in label or label in term):
+                matches.append({"fterm_code": ecode, "label": label, "match_type": "label"})
+            # 例示にマッチ
+            elif term in edata.get("examples", []):
+                matches.append({"fterm_code": ecode, "label": label, "match_type": "example"})
+
+    return matches
+
+
+def _match_upper_concepts_reverse(term, field):
+    """regex抽出語が upper_concepts の上位概念リストに含まれるか判定
+
+    term が「多価アルコール」のような上位概念語の場合、
+    それをupper_conceptsに持つ具体成分名（グリセリン等）を返す。
+
+    Returns:
+        list of str: 下位概念の具体成分名リスト
+    """
+    uc = _get_dict(field, "upper_concepts.json")
+    if not uc:
+        return []
+
+    lower_terms = []
+    for ingredient, data in uc.items():
+        if term in data.get("upper_concepts", []):
+            lower_terms.append(ingredient)
+
+    return lower_terms
+
+
 # --- Phase 1: 正規表現ベース ---
 
 def recommend_regex(segments, hongan, field):
@@ -162,6 +249,47 @@ def recommend_regex(segments, hongan, field):
                     "source": "regex",
                     "type": "括弧ラベル",
                 })
+
+            # 5.5. 辞書マッチング: regex抽出語から辞書カテゴリを逆引き
+            dict_extra = []
+            checked = set()
+            for kw in keywords:
+                term = kw["term"]
+                if term in checked or kw["type"] == "数値条件":
+                    continue
+                checked.add(term)
+
+                # ingredient_groups マッチ → カテゴリ名・サブグループ名を追加
+                ig_matches = _match_ingredient_group(term, field)
+                for igm in ig_matches:
+                    dict_extra.append({
+                        "term": igm["category"],
+                        "source": "dict_ig", "type": "成分グループ(自動)",
+                    })
+                    if igm["sub_group"]:
+                        dict_extra.append({
+                            "term": igm["sub_group"],
+                            "source": "dict_ig", "type": "サブグループ(自動)",
+                        })
+
+                # Fterm ラベルマッチ → Ftermラベルを追加
+                ft_matches = _match_fterm_labels(term, field)
+                for ftm in ft_matches[:2]:
+                    if ftm["label"] and ftm["label"] != term:
+                        dict_extra.append({
+                            "term": ftm["label"],
+                            "source": "dict_fterm",
+                            "type": f"Ftermラベル({ftm['fterm_code']})",
+                        })
+
+                # upper_concepts 逆引き → 下位概念の具体成分名を追加
+                lower = _match_upper_concepts_reverse(term, field)
+                for lt in lower[:5]:
+                    dict_extra.append({
+                        "term": lt, "source": "dict_uc", "type": "下位概念(自動)",
+                    })
+
+            keywords.extend(dict_extra)
 
             # 6. 辞書から同義語・英名を付与
             for kw in list(keywords):
