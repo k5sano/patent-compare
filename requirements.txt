@@ -6,3 +6,4 @@ pyperclip>=1.8.0
 pyyaml>=6.0
 requests>=2.31.0
 rich>=13.0
+mcp>=0.1.0
