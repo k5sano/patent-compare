@@ -256,7 +256,7 @@ def _ai_find_related_in_spec(seg_keywords, spec_text, field="cosmetics"):
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -372,7 +372,7 @@ inci: {inci_display}
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -915,7 +915,7 @@ def _call_ai_for_semantic_analysis(segments, hongan, field):
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
