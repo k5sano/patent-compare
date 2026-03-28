@@ -208,6 +208,44 @@
     50% { width: 60%; margin-left: 20%; }
     100% { width: 0%; margin-left: 100%; }
   }
+
+  /* 分節別キーワード */
+  .seg-kw-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-top: 1rem; }
+  .seg-kw-header { display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1rem; cursor: pointer; }
+  .seg-kw-header:hover { background: var(--surface2); border-radius: 8px 8px 0 0; }
+  .seg-kw-body { padding: 0 1rem 1rem; }
+  .seg-kw-item { margin-bottom: 0.8rem; padding: 0.6rem; border: 1px solid var(--border); border-radius: 6px; }
+  .seg-kw-item-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 0.4rem; }
+  .seg-kw-tag { display: inline-flex; align-items: center; gap: 3px; margin: 2px 3px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 0.82rem; background: var(--surface2); }
+  .seg-kw-tag .badge { font-size: 0.65rem; padding: 1px 4px; border-radius: 3px; margin-right: 2px; }
+  .seg-kw-tag .badge-regex { background: #475569; color: #e2e8f0; }
+  .seg-kw-tag .badge-dict { background: #155e75; color: #cffafe; }
+  .seg-kw-tag .badge-ai { background: #166534; color: #bbf7d0; }
+  .seg-kw-tag .badge-manual { background: #854d0e; color: #fef08a; }
+  .seg-kw-tag .kw-del-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 0.9rem; padding: 0 2px; }
+  .seg-kw-tag .kw-del-btn:hover { color: #fca5a5; }
+
+  /* テキスト選択キーワード追加ポップオーバー */
+  #kw-add-popover { display: none; position: absolute; z-index: 9999; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); padding: 12px; min-width: 200px; max-width: 320px; }
+  #kw-add-popover .pop-term { font-weight: bold; font-size: 0.92rem; margin-bottom: 8px; padding: 4px 8px; background: var(--surface2); border-radius: 4px; }
+  #kw-add-popover .pop-label { font-size: 0.78rem; color: var(--text2); margin-bottom: 4px; }
+  #kw-add-popover .pop-seg-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 4px;
+    padding: 3px 8px; margin: 2px; cursor: pointer; font-size: 0.82rem; }
+  #kw-add-popover .pop-seg-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* 引例テキスト折りたたみ */
+  .citation-fulltext details { margin-bottom: 0.5rem; }
+  .citation-fulltext summary { cursor: pointer; font-weight: 600; font-size: 0.85rem; color: var(--text); padding: 4px 0; }
+  .citation-fulltext summary:hover { color: var(--accent); }
+  .citation-fulltext .para-text { font-size: 0.82rem; line-height: 1.6; color: var(--text); margin-bottom: 0.3rem; }
+  .citation-fulltext .para-id { color: var(--text2); font-size: 0.75rem; }
+
+  /* トースト通知 */
+  .kw-toast { position: fixed; bottom: 20px; right: 20px; z-index: 99999; background: var(--green); color: #052e16;
+    padding: 10px 20px; border-radius: 6px; font-size: 0.88rem; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    animation: toast-in 0.3s ease; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 </style>
 </head>
 <body>
@@ -410,6 +448,23 @@
       <div class="loading-msg" id="loading-kw">
         <div class="spinner"></div>
         <span>キーワード提案中...</span>
+      </div>
+
+      <!-- 分節別キーワード提案パネル -->
+      <div class="seg-kw-panel" id="segment-keywords-panel">
+        <div class="seg-kw-header" onclick="toggleSegmentKeywords()">
+          <h3 style="margin:0; font-size:1rem;">分節別キーワード</h3>
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <button class="btn btn-primary" style="font-size:0.8rem; padding:4px 12px;"
+                    onclick="event.stopPropagation(); suggestSegmentKeywords(this)">AI提案を実行</button>
+            <span id="seg-kw-toggle" style="font-size:0.8rem; color:var(--text2);">&#9660;</span>
+          </div>
+        </div>
+        <div id="seg-kw-body" class="seg-kw-body" style="display:none;">
+          <div id="seg-kw-list">
+            <p style="color:var(--text2); font-size:0.85rem;">「AI提案を実行」ボタンで分節ごとのキーワードを生成します。</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -629,6 +684,9 @@
         {% endif %}
       </div>
 
+      <!-- 引例テキスト全文表示（テキスト選択→KW追加可能） -->
+      <div id="citation-fulltext-area" style="margin-top:1rem;"></div>
+
       <div class="btn-row">
         <button class="btn btn-success" onclick="exportExcel()">Excel出力</button>
         <button class="btn btn-primary" onclick="annotateAll()">全文献の注釈PDF生成</button>
@@ -710,6 +768,17 @@
         <button type="submit" class="btn btn-danger">この案件を削除</button>
       </form>
     </div>
+  </div>
+</div>
+
+<!-- テキスト選択時のキーワード追加ポップオーバー -->
+<div id="kw-add-popover">
+  <div class="pop-label">選択テキスト:</div>
+  <div class="pop-term" id="kw-add-term"></div>
+  <div class="pop-label">追加先の分節:</div>
+  <div id="kw-add-segments"></div>
+  <div style="margin-top:8px; text-align:right;">
+    <button class="btn btn-outline" style="font-size:0.75rem; padding:2px 10px;" onclick="hideKwPopover()">閉じる</button>
   </div>
 </div>
 
@@ -2108,6 +2177,277 @@ async function executeInventiveStep() {
     alert('通信エラー: ' + e.message);
   }
 }
+
+// ================================================================
+// ===== 分節別キーワード =====
+// ================================================================
+
+// 分節IDリスト（ポップオーバー用）
+window._segmentIds = [];
+
+function toggleSegmentKeywords() {
+  const body = document.getElementById('seg-kw-body');
+  const toggle = document.getElementById('seg-kw-toggle');
+  if (body.style.display === 'none') {
+    body.style.display = 'block';
+    toggle.innerHTML = '&#9650;';
+  } else {
+    body.style.display = 'none';
+    toggle.innerHTML = '&#9660;';
+  }
+}
+
+async function suggestSegmentKeywords(btn) {
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '提案中...';
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/suggest-by-segment`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      renderSegmentKeywords(data);
+      document.getElementById('seg-kw-body').style.display = 'block';
+      document.getElementById('seg-kw-toggle').innerHTML = '&#9650;';
+    } else {
+      alert(data.error || 'エラーが発生しました');
+    }
+  } catch(e) {
+    alert('通信エラー: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origText;
+  }
+}
+
+function renderSegmentKeywords(segKeywords) {
+  const container = document.getElementById('seg-kw-list');
+  container.innerHTML = '';
+
+  // 分節IDリストを更新
+  window._segmentIds = segKeywords.map(s => s.segment_id);
+
+  const badgeClass = {
+    'regex': 'badge-regex', 'dict': 'badge-dict',
+    'ai': 'badge-ai', 'manual': 'badge-manual',
+  };
+  const badgeLabel = {
+    'regex': '正規表現', 'dict': '辞書', 'ai': 'AI', 'manual': '手動',
+  };
+
+  for (const seg of segKeywords) {
+    const div = document.createElement('div');
+    div.className = 'seg-kw-item';
+
+    let kwHtml = '';
+    for (const kw of seg.keywords) {
+      const bc = badgeClass[kw.source] || 'badge-regex';
+      const bl = badgeLabel[kw.source] || kw.source;
+      const escapedTerm = kw.term.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      kwHtml += `<span class="seg-kw-tag">
+        <span class="badge ${bc}">${bl}</span>
+        ${kw.term}
+        <button class="kw-del-btn" onclick="removeSegmentKeyword('${seg.segment_id}', '${escapedTerm}')">&times;</button>
+      </span>`;
+    }
+
+    const segText = seg.segment_text ? seg.segment_text.substring(0, 60) + (seg.segment_text.length > 60 ? '...' : '') : '';
+    div.innerHTML = `
+      <div class="seg-kw-item-header">
+        <strong style="color:var(--accent);">${seg.segment_id}</strong>
+        <small style="color:var(--text2); max-width:70%; text-align:right; font-size:0.78rem;">${segText}</small>
+      </div>
+      <div style="margin-top:4px;">${kwHtml}</div>
+    `;
+    container.appendChild(div);
+  }
+}
+
+async function removeSegmentKeyword(segmentId, term) {
+  const resp = await fetch(`/case/${CASE_ID}/keywords/remove-from-segment`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({segment_id: segmentId, term: term}),
+  });
+  if (resp.ok) {
+    const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
+    if (dataResp.ok) {
+      renderSegmentKeywords(await dataResp.json());
+    }
+  }
+}
+
+// ページ読み込み時に既存データがあれば表示 + 分節IDリスト構築
+(async function loadSegmentKeywordsOnInit() {
+  // 分節IDリストを構築
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/segments`);
+    if (resp.ok) {
+      const segs = await resp.json();
+      window._segmentIds = [];
+      for (const claim of segs) {
+        if (claim.segments) {
+          for (const seg of claim.segments) {
+            window._segmentIds.push(seg.id);
+          }
+        }
+      }
+    }
+  } catch(e) {}
+
+  // 既存の segment_keywords.json があれば表示
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/segments`);
+    if (resp.ok) {
+      const data = await resp.json();
+      renderSegmentKeywords(data);
+    }
+  } catch(e) {}
+})();
+
+// ================================================================
+// ===== テキスト選択 → キーワード追加ポップオーバー =====
+// ================================================================
+
+document.addEventListener('mouseup', function(e) {
+  const selection = window.getSelection().toString().trim();
+
+  if (selection.length < 2) {
+    hideKwPopover();
+    return;
+  }
+  // ポップオーバー内部のクリックは無視
+  if (e.target.closest('#kw-add-popover')) return;
+
+  // 対比サマリ、引例テキスト、パース結果エリア内のみ反応
+  const targetArea = e.target.closest('#comparison-summary, #citation-fulltext-area, #parse-result, .citation-fulltext');
+  if (!targetArea) {
+    hideKwPopover();
+    return;
+  }
+
+  showKwPopover(selection, e.pageX, e.pageY);
+});
+
+function showKwPopover(term, x, y) {
+  const popover = document.getElementById('kw-add-popover');
+  document.getElementById('kw-add-term').textContent = term;
+
+  const segDiv = document.getElementById('kw-add-segments');
+  segDiv.innerHTML = '';
+
+  const segIds = window._segmentIds || [];
+  for (const segId of segIds) {
+    const btn = document.createElement('button');
+    btn.className = 'pop-seg-btn';
+    btn.textContent = segId;
+    btn.onclick = () => addKeywordToSegment(term, segId);
+    segDiv.appendChild(btn);
+  }
+
+  // 位置調整
+  popover.style.left = Math.min(x, window.innerWidth - 340) + 'px';
+  popover.style.top = (y + 10) + 'px';
+  popover.style.display = 'block';
+}
+
+function hideKwPopover() {
+  document.getElementById('kw-add-popover').style.display = 'none';
+}
+
+// ポップオーバー外クリックで閉じる
+document.addEventListener('mousedown', function(e) {
+  if (!e.target.closest('#kw-add-popover')) {
+    // mousedown で即座に閉じるとmouseupと競合するので少し遅延
+  }
+});
+
+async function addKeywordToSegment(term, segmentId) {
+  const resp = await fetch(`/case/${CASE_ID}/keywords/add-to-segment`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({term: term, segment_id: segmentId}),
+  });
+
+  if (resp.ok) {
+    hideKwPopover();
+    // キーワード一覧を更新
+    const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
+    if (dataResp.ok) {
+      renderSegmentKeywords(await dataResp.json());
+    }
+    showKwToast(`「${term}」を ${segmentId} に追加しました`);
+  } else {
+    const err = await resp.json();
+    alert(err.error || 'エラーが発生しました');
+  }
+}
+
+function showKwToast(msg) {
+  const toast = document.createElement('div');
+  toast.className = 'kw-toast';
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 2500);
+}
+
+// ================================================================
+// ===== 引例テキスト全文表示 =====
+// ================================================================
+
+async function loadCitationFullTexts() {
+  const container = document.getElementById('citation-fulltext-area');
+  if (!container) return;
+
+  const citIds = [{% for cit in citations %}"{{ cit.id }}",{% endfor %}];
+  if (citIds.length === 0) return;
+
+  let html = '<h3 style="font-size:1rem; margin-bottom:0.8rem;">引例テキスト <span style="font-size:0.8rem; color:var(--text2);">（テキスト選択でキーワードに追加可能）</span></h3>';
+
+  for (const citId of citIds) {
+    try {
+      const resp = await fetch(`/case/${CASE_ID}/response/${citId}`);
+      if (!resp.ok) continue;
+      const respData = await resp.json();
+
+      // 対比結果から cited_text / cited_location を表示
+      if (respData.comparisons) {
+        html += `<details class="citation-fulltext" style="margin-bottom:1rem;" data-citation-text="${citId}">`;
+        html += `<summary>${citId} の対比結果テキスト</summary>`;
+        html += '<div style="padding:0.5rem;">';
+        for (const comp of respData.comparisons) {
+          const j = comp.judgment || '—';
+          const jColor = j === '○' ? 'var(--green)' : j === '×' ? 'var(--red)' : 'var(--yellow)';
+          html += `<div style="margin-bottom:0.5rem; padding:0.4rem 0.6rem; border-left:3px solid ${jColor}; background:var(--surface2); border-radius:0 4px 4px 0;">`;
+          html += `<div style="font-size:0.8rem;"><strong>${comp.requirement_id}</strong> <span style="color:${jColor};">${j}</span></div>`;
+          if (comp.cited_location) {
+            html += `<div class="para-text" style="margin-top:2px;">📍 ${comp.cited_location}</div>`;
+          }
+          if (comp.judgment_reason) {
+            html += `<div class="para-text" style="margin-top:2px;">${comp.judgment_reason}</div>`;
+          }
+          html += '</div>';
+        }
+        html += '</div></details>';
+      }
+    } catch(e) {}
+  }
+
+  container.innerHTML = html;
+}
+
+// Step 6 表示時に引例テキストも読み込み
+const _origShowPanel = showPanel;
+showPanel = function(idx) {
+  _origShowPanel(idx);
+  if (idx === 5) {
+    loadCitationFullTexts();
+  }
+};
 </script>
 </body>
 </html>
