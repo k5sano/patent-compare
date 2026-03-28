@@ -12,7 +12,7 @@ import yaml
 from pathlib import Path
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, jsonify, send_file
+    flash, jsonify, send_file, Response
 )
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -2071,6 +2071,75 @@ def stage_execute(case_id):
                 json.dump(groups, f, ensure_ascii=False, indent=2)
 
     return jsonify(result)
+
+
+@app.route("/case/<case_id>/search/stage-execute-stream", methods=["POST"])
+def stage_execute_stream(case_id):
+    """Stage 1 ストリーミング実行: 進捗をNDJSONで返す"""
+    from modules.search_prompt_generator import (
+        generate_presearch_prompt, parse_presearch_response,
+    )
+    from modules.claude_client import call_claude_stream
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = Path(case_dir) / "segments.json"
+    hongan_path = Path(case_dir) / "hongan.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+    hongan = None
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+
+    keywords = None
+    kw_path = Path(case_dir) / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
+
+    def generate():
+        full_response = ""
+        for evt in call_claude_stream(prompt_text, timeout=600, use_search=True):
+            if evt["type"] == "done":
+                full_response = evt["response"]
+                # パース・保存
+                tech_analysis, candidates, search_formulas, errors = parse_presearch_response(full_response)
+                if tech_analysis:
+                    _save_search_data(case_dir, "tech_analysis.json", tech_analysis)
+                if candidates:
+                    _save_search_data(case_dir, "presearch_candidates.json", candidates)
+                if search_formulas:
+                    _save_search_data(case_dir, "presearch_formulas.json", search_formulas)
+
+                result = {
+                    "type": "result",
+                    "success": bool(tech_analysis),
+                    "errors": errors,
+                }
+                if tech_analysis:
+                    result["tech_analysis"] = tech_analysis
+                if candidates:
+                    result["candidates"] = candidates
+                if search_formulas:
+                    result["search_formulas"] = search_formulas
+                yield json.dumps(result, ensure_ascii=False) + "\n"
+            elif evt["type"] == "error":
+                yield json.dumps({"type": "error", "message": evt["message"]}, ensure_ascii=False) + "\n"
+            else:
+                # search, candidate, status イベントをそのまま転送
+                yield json.dumps(evt, ensure_ascii=False) + "\n"
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 if __name__ == "__main__":

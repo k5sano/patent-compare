@@ -208,6 +208,11 @@
     50% { width: 60%; margin-left: 20%; }
     100% { width: 0%; margin-left: 100%; }
   }
+  .exec-msg-log { max-height: 180px; overflow-y: auto; margin-top: 0.5rem; font-size: 0.82rem;
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; background: var(--surface1); }
+  .exec-msg { padding: 3px 0; color: var(--text2); }
+  .exec-msg.search { color: #2563eb; }
+  .exec-msg.candidate { color: #059669; font-weight: 600; }
 
   /* 3段階検索ワークフロー */
   .stage-workflow { border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem; margin-bottom: 1.5rem;
@@ -2954,39 +2959,18 @@ async function stageParse(stage) {
 }
 
 async function stageExecute(stage) {
-  // 直接実行: prompt生成 → Claude CLI → parse を1クリックで
+  // Stage 1 はストリーミング実行（リアルタイム進捗表示）
+  if (stage === 1) {
+    return stageExecuteStream();
+  }
+
+  // Stage 2, 3 は従来通り
   const progress = document.getElementById(`exec-stage${stage}-progress`);
   const btn = document.getElementById(`btn-stage${stage}-execute`);
   btn.disabled = true;
   progress.classList.add('show');
 
   try {
-    // まずプロンプト生成
-    const ep = STAGE_ENDPOINTS[stage];
-    const promptResp = await fetch(`/case/${CASE_ID}/search/${ep.prompt}`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({})
-    });
-    const promptData = await promptResp.json();
-    if (promptData.error) {
-      progress.classList.remove('show');
-      btn.disabled = false;
-      alert(promptData.error);
-      return;
-    }
-
-    // プロンプトを表示
-    document.getElementById(`stage${stage}-prompt`).textContent = promptData.prompt;
-    document.getElementById(`stage${stage}-prompt`).style.display = 'block';
-
-    // Claude CLI で実行
-    const { call_claude, ClaudeClientError } = {};  // JS側ではfetch経由
-    // claude CLIはサーバーサイドで実行するので、専用executeエンドポイントが必要
-    // 現在のendpointsにはexecuteがないので、prompt + Claude CLI + parse を分割実行
-    // ワークアラウンド: promptテキストを取得し、claude_clientで実行するエンドポイントを作るか、
-    // または既存のcall_claude的な汎用エンドポイントを使う
-
-    // 汎用的に: プロンプトをclaude -p に送り、結果をparseに渡す
     const callResp = await fetch(`/case/${CASE_ID}/search/stage-execute`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ stage: stage })
@@ -3003,10 +2987,7 @@ async function stageExecute(stage) {
     }
 
     if (callData.success) {
-      // 結果を描画
-      if (stage === 1 && callData.tech_analysis) {
-        renderStageResult(1, callData.tech_analysis);
-      } else if (stage === 2 && callData.classification) {
+      if (stage === 2 && callData.classification) {
         renderStageResult(2, callData.classification);
       } else if (stage === 3 && callData.keyword_dictionary) {
         renderStageResult(3, callData.keyword_dictionary);
@@ -3021,6 +3002,101 @@ async function stageExecute(stage) {
       showKwToast(`Stage ${stage} 直接実行完了!`);
     } else {
       alert('パース失敗');
+    }
+  } catch(e) {
+    progress.classList.remove('show');
+    btn.disabled = false;
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+function addExecMsg(container, text, cls) {
+  const div = document.createElement('div');
+  div.className = 'exec-msg' + (cls ? ' ' + cls : '');
+  div.textContent = text;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function stageExecuteStream() {
+  const progress = document.getElementById('exec-stage1-progress');
+  const btn = document.getElementById('btn-stage1-execute');
+  btn.disabled = true;
+  progress.classList.add('show');
+
+  // メッセージログ領域を作成/リセット
+  let msgLog = progress.querySelector('.exec-msg-log');
+  if (!msgLog) {
+    msgLog = document.createElement('div');
+    msgLog.className = 'exec-msg-log';
+    progress.appendChild(msgLog);
+  }
+  msgLog.innerHTML = '';
+  addExecMsg(msgLog, 'Claude CLI 起動中...');
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search/stage-execute-stream`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.error || 'サーバーエラー');
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let evt;
+        try { evt = JSON.parse(line); } catch(e) { continue; }
+
+        if (evt.type === 'search') {
+          addExecMsg(msgLog, '\u{1F50D} 「' + evt.query + '」を検索中...', 'search');
+        } else if (evt.type === 'candidate') {
+          addExecMsg(msgLog, '\u{1F4C4} 候補' + evt.count + ': ' + evt.number + ' 発見', 'candidate');
+        } else if (evt.type === 'status') {
+          addExecMsg(msgLog, evt.message);
+        } else if (evt.type === 'result') {
+          progress.classList.remove('show');
+          btn.disabled = false;
+
+          if (evt.errors && evt.errors.length > 0) {
+            alert('警告: ' + evt.errors.join('\n'));
+          }
+          if (evt.success) {
+            if (evt.tech_analysis) renderStageResult(1, evt.tech_analysis);
+            document.getElementById('stage-ind-1').classList.add('done');
+            loadSearchStatus();
+            setTimeout(() => showStage(2), 500);
+            showKwToast('Stage 1 直接実行完了!');
+          } else {
+            alert('パース失敗');
+          }
+        } else if (evt.type === 'error') {
+          progress.classList.remove('show');
+          btn.disabled = false;
+          alert('エラー: ' + evt.message);
+        }
+      }
+    }
+
+    // ストリーム終了後もまだprogressが表示中なら閉じる
+    if (progress.classList.contains('show')) {
+      progress.classList.remove('show');
+      btn.disabled = false;
     }
   } catch(e) {
     progress.classList.remove('show');

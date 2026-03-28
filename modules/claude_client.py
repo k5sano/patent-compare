@@ -11,6 +11,7 @@ MCP検索サーバー連携対応（--mcp-config）。
 """
 
 import os
+import re
 import json
 import subprocess
 import shutil
@@ -182,3 +183,184 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
 
     logger.info("Claude CLI 応答: %d文字", len(response_text))
     return response_text
+
+
+# 特許番号検出用の正規表現（半角・全角対応）
+_PATENT_RE = re.compile(
+    r'(?:特開|特願|特表|再公表|JP|US|WO|EP|CN|KR)'
+    r'[\s\u3000]*'
+    r'[\d０-９]{4}'
+    r'[\s\u3000]*[-/−ー]?[\s\u3000]*'
+    r'[\d０-９]{3,7}'
+)
+
+
+def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
+    """Claude Code CLI にプロンプトを送信し、進捗イベントを yield するジェネレータ。
+
+    --output-format stream-json を使用してストリーミング出力を取得し、
+    ツール呼び出し（検索クエリ）や特許番号の出現をリアルタイムで検出する。
+
+    Yields:
+        dict: 進捗イベント
+            {"type": "search", "query": "..."}       — MCP検索ツール呼び出し検出
+            {"type": "candidate", "number": "...", "count": N} — 特許番号検出
+            {"type": "status", "message": "..."}     — 状態メッセージ
+            {"type": "done", "response": "..."}      — 完了（最終テキスト）
+            {"type": "error", "message": "..."}      — エラー
+    """
+    if not is_claude_available():
+        yield {"type": "error", "message": "claude CLI が見つかりません"}
+        return
+
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    env.pop("ANTHROPIC_API_KEY", None)
+
+    cmd = ["claude", "-p", "--output-format", "stream-json"]
+
+    mcp_config_path = None
+    if use_search:
+        mcp_config_path = _build_mcp_config()
+        if mcp_config_path:
+            cmd.extend(["--mcp-config", mcp_config_path])
+
+    logger.info("Claude CLI ストリーム呼び出し: prompt=%d文字, search=%s",
+                len(prompt_text), use_search)
+
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", encoding="utf-8", delete=False
+    )
+    tmp.write(prompt_text)
+    tmp.close()
+
+    proc = None
+    try:
+        stdin_file = open(tmp.name, "rb")
+        proc = subprocess.Popen(
+            cmd,
+            stdin=stdin_file,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        stdin_file.close()
+
+        yield {"type": "status", "message": "Claude CLI 起動中..."}
+
+        full_result = ""
+        candidate_count = 0
+        seen_patents = set()
+        tool_input_buffers = {}  # index -> {"name": str, "json": str}
+
+        for raw_line in proc.stdout:
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            evt_type = evt.get("type", "")
+
+            # ---- 最終結果 ----
+            if evt_type == "result":
+                result_text = evt.get("result", "")
+                if result_text:
+                    full_result = result_text
+                break
+
+            # ---- content_block_start: ツール呼び出し開始 ----
+            if evt_type == "content_block_start":
+                block = evt.get("content_block", {})
+                if block.get("type") == "tool_use":
+                    idx = evt.get("index", 0)
+                    tool_input_buffers[idx] = {
+                        "name": block.get("name", ""),
+                        "json": "",
+                    }
+
+            # ---- content_block_delta: テキスト or ツール入力の断片 ----
+            if evt_type == "content_block_delta":
+                delta = evt.get("delta", {})
+                idx = evt.get("index", 0)
+
+                if delta.get("type") == "text_delta":
+                    text = delta.get("text", "")
+                    full_result += text
+                    for m in _PATENT_RE.finditer(text):
+                        pat = m.group(0).replace("\u3000", "").replace(" ", "")
+                        if pat not in seen_patents:
+                            seen_patents.add(pat)
+                            candidate_count += 1
+                            yield {"type": "candidate", "number": pat, "count": candidate_count}
+
+                if delta.get("type") == "input_json_delta" and idx in tool_input_buffers:
+                    tool_input_buffers[idx]["json"] += delta.get("partial_json", "")
+
+            # ---- content_block_stop: ツール入力完成 → クエリ抽出 ----
+            if evt_type == "content_block_stop":
+                idx = evt.get("index", 0)
+                if idx in tool_input_buffers:
+                    tool_info = tool_input_buffers.pop(idx)
+                    try:
+                        input_obj = json.loads(tool_info["json"])
+                        query = input_obj.get("query", "") or input_obj.get("q", "")
+                        if query:
+                            yield {"type": "search", "query": query}
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            # ---- 高レベル assistant イベント（フォーマット違い対応） ----
+            if evt_type == "assistant":
+                msg = evt.get("message", {})
+                if isinstance(msg, dict):
+                    for block in msg.get("content", []):
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") == "tool_use":
+                            inp = block.get("input", {})
+                            query = inp.get("query", "") or inp.get("q", "")
+                            if query:
+                                yield {"type": "search", "query": query}
+                        elif block.get("type") == "text":
+                            text = block.get("text", "")
+                            full_result += text
+                            for m in _PATENT_RE.finditer(text):
+                                pat = m.group(0).replace("\u3000", "").replace(" ", "")
+                                if pat not in seen_patents:
+                                    seen_patents.add(pat)
+                                    candidate_count += 1
+                                    yield {"type": "candidate", "number": pat, "count": candidate_count}
+
+        proc.wait(timeout=60)
+
+        if proc.returncode != 0 and not full_result:
+            stderr_msg = proc.stderr.read().decode("utf-8", errors="replace").strip()[:500]
+            yield {"type": "error", "message": f"Claude CLI エラー: {stderr_msg}"}
+            return
+
+        if not full_result.strip():
+            yield {"type": "error", "message": "Claude CLI から空の応答"}
+            return
+
+        yield {"type": "done", "response": full_result}
+
+    except FileNotFoundError:
+        yield {"type": "error", "message": "claude CLI の実行に失敗しました"}
+    except Exception as e:
+        logger.exception("call_claude_stream 例外")
+        yield {"type": "error", "message": str(e)}
+    finally:
+        if proc and proc.poll() is None:
+            proc.kill()
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        if mcp_config_path:
+            try:
+                os.unlink(mcp_config_path)
+            except OSError:
+                pass
