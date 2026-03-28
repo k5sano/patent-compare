@@ -58,14 +58,24 @@ def _build_application_info(case_meta):
         return ""
 
     lines = ["## 本願の出願情報"]
+
+    jp_id = case_meta.get("jp_id", "")
+    case_id = case_meta.get("case_id", "")
     patent_number = case_meta.get("patent_number", "")
     patent_title = case_meta.get("patent_title", "")
-    case_id = case_meta.get("case_id", "")
     field = case_meta.get("field", "")
     field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
 
-    if case_id:
-        lines.append(f"- 公開番号: JP{case_id}")
+    if jp_id:
+        lines.append(f"- 公開番号: {jp_id}")
+    elif case_id:
+        # case_id が "YYYY-NNNNNN" 形式なら公開番号として整形
+        m = re.match(r'^(\d{4})-(\d+)$', case_id)
+        if m:
+            lines.append(f"- 公開番号: JP{m.group(1)}-{m.group(2)}")
+        else:
+            lines.append(f"- 案件ID: {case_id}")
+
     if patent_number:
         lines.append(f"- 特許番号: {patent_number}")
     if patent_title:
@@ -73,7 +83,18 @@ def _build_application_info(case_meta):
     if field_label:
         lines.append(f"- 技術分野: {field_label}")
 
-    return "\n".join(lines) if len(lines) > 1 else ""
+    # 出願日・優先日があれば表示（先行技術の時期判断に重要）
+    filing_date = case_meta.get("filing_date", "")
+    priority_date = case_meta.get("priority_date", "")
+    if filing_date:
+        lines.append(f"- 出願日: {filing_date}")
+    if priority_date:
+        lines.append(f"- 優先日: {priority_date}")
+
+    lines.append("")
+    lines.append("※先行技術候補は上記出願日（または優先日）より前に公開された文献を優先してください。")
+
+    return "\n".join(lines) if len(lines) > 2 else ""
 
 
 def _build_fterm_info(keywords):
