@@ -245,6 +245,18 @@
   .seg-kw-tag .badge-dict { background: #155e75; color: #cffafe; }
   .seg-kw-tag .badge-ai { background: #166534; color: #bbf7d0; }
   .seg-kw-tag .badge-manual { background: #854d0e; color: #fef08a; }
+  .seg-kw-tag .badge-semantic { background: #7c3aed; color: #ede9fe; }
+  .seg-kw-tag .badge-spec { background: #9a3412; color: #fed7aa; }
+  /* tier badges */
+  .seg-kw-tag.tier-core { border-color: #22c55e; border-width: 2px; }
+  .seg-kw-tag.tier-extended { border-color: #3b82f6; border-style: dashed; }
+  .seg-kw-tag.tier-not { border-color: #ef4444; background: rgba(239,68,68,0.1); }
+  .tier-badge { font-size: 0.6rem; padding: 0 3px; border-radius: 2px; margin-right: 2px; font-weight: 700; }
+  .tier-badge-core { background: #22c55e; color: #fff; }
+  .tier-badge-extended { background: #3b82f6; color: #fff; }
+  .tier-badge-not { background: #ef4444; color: #fff; }
+  /* technical meaning */
+  .seg-kw-meaning { font-size: 0.75rem; color: var(--text2); margin: 2px 0 4px 0; font-style: italic; padding: 2px 6px; border-left: 2px solid #7c3aed; }
   .seg-kw-tag .kw-del-btn { background: none; border: none; color: var(--red); cursor: pointer; font-size: 0.9rem; padding: 0 2px; }
   .seg-kw-tag .kw-del-btn:hover { color: #fca5a5; }
 
@@ -2367,9 +2379,23 @@ function renderSegmentKeywords(segKeywords) {
   const badgeClass = {
     'regex': 'badge-regex', 'dict': 'badge-dict',
     'ai': 'badge-ai', 'manual': 'badge-manual',
+    'ai_semantic': 'badge-semantic', 'dict_ig': 'badge-dict',
+    'dict_fterm': 'badge-dict', 'dict_uc': 'badge-dict',
+    'dict_i2f': 'badge-dict', 'dict_syn': 'badge-dict',
+    'dict_inci': 'badge-dict', 'spec': 'badge-spec',
+    'dictionary': 'badge-dict',
   };
   const badgeLabel = {
     'regex': '正規表現', 'dict': '辞書', 'ai': 'AI', 'manual': '手動',
+    'ai_semantic': 'AI意味', 'dict_ig': '成分G', 'dict_fterm': 'Fterm',
+    'dict_uc': '上位概念', 'dict_i2f': 'Fterm逆', 'dict_syn': '同義語',
+    'dict_inci': 'INCI', 'spec': '実施例', 'dictionary': '辞書',
+  };
+  const tierClass = { 'core': 'tier-core', 'extended': 'tier-extended', 'not': 'tier-not' };
+  const tierBadge = {
+    'core': '<span class="tier-badge tier-badge-core">C</span>',
+    'extended': '<span class="tier-badge tier-badge-extended">E</span>',
+    'not': '<span class="tier-badge tier-badge-not">N</span>',
   };
 
   for (const seg of segKeywords) {
@@ -2380,20 +2406,26 @@ function renderSegmentKeywords(segKeywords) {
     for (const kw of seg.keywords) {
       const bc = badgeClass[kw.source] || 'badge-regex';
       const bl = badgeLabel[kw.source] || kw.source;
+      const tc = kw.tier ? (tierClass[kw.tier] || '') : '';
+      const tb = kw.tier ? (tierBadge[kw.tier] || '') : '';
+      const typeTitle = kw.type ? ` title="${kw.type}"` : '';
       const escapedTerm = kw.term.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-      kwHtml += `<span class="seg-kw-tag">
-        <span class="badge ${bc}">${bl}</span>
+      kwHtml += `<span class="seg-kw-tag ${tc}"${typeTitle}>
+        ${tb}<span class="badge ${bc}">${bl}</span>
         ${kw.term}
         <button class="kw-del-btn" onclick="removeSegmentKeyword('${seg.segment_id}', '${escapedTerm}')">&times;</button>
       </span>`;
     }
 
     const segText = seg.segment_text ? seg.segment_text.substring(0, 60) + (seg.segment_text.length > 60 ? '...' : '') : '';
+    const meaningHtml = seg.technical_meaning
+      ? `<div class="seg-kw-meaning">${seg.technical_meaning}</div>` : '';
     div.innerHTML = `
       <div class="seg-kw-item-header">
         <strong style="color:var(--accent);">${seg.segment_id}</strong>
         <small style="color:var(--text2); max-width:70%; text-align:right; font-size:0.78rem;">${segText}</small>
       </div>
+      ${meaningHtml}
       <div style="margin-top:4px;">${kwHtml}</div>
     `;
     container.appendChild(div);

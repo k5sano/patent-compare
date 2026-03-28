@@ -1180,7 +1180,8 @@ def suggest_keywords_by_segment(segments, hongan, field, case_dir=None):
 
     優先順位:
     1. keyword_dictionary.json があればそれをベースに構築（3段階検索完了時）
-    2. なければ Phase 1（正規表現）+ Phase 2（AI）をマージ
+    2. recommend_semantic（AI意味理解+辞書展開）+ regex 補完
+    3. recommend_regex + recommend_ai（旧フロー: API未設定時のフォールバック）
 
     Parameters:
         segments: 請求項分節データ (segments.json)
@@ -1191,11 +1192,10 @@ def suggest_keywords_by_segment(segments, hongan, field, case_dir=None):
     Returns:
         分節ごとのキーワードリスト (segment_keywords.json 形式)
     """
-    # 優先: keyword_dictionary.json からの構築を試みる
+    # --- 優先1: keyword_dictionary.json からの構築 ---
     if case_dir:
         dict_results = recommend_from_dictionary(case_dir, segments)
         if dict_results:
-            # 辞書ベースの結果に regex の追加候補を補完
             regex_results = recommend_regex(segments, hongan, field)
             regex_by_seg = {r["segment_id"]: r for r in regex_results}
 
@@ -1211,14 +1211,29 @@ def suggest_keywords_by_segment(segments, hongan, field, case_dir=None):
             logger.info("keyword_dictionary.json ベースで %d 分節のキーワードを構築", len(dict_results))
             return dict_results
 
-    # フォールバック: Phase 1 + Phase 2
-    # Phase 1: 正規表現
-    regex_results = recommend_regex(segments, hongan, field)
+    # --- 優先2: recommend_semantic（AI意味理解+辞書展開）---
+    semantic_results = recommend_semantic(segments, hongan, field)
+    if semantic_results:
+        # semantic をベースに、regex で補完
+        regex_results = recommend_regex(segments, hongan, field)
+        regex_by_seg = {r["segment_id"]: r for r in regex_results}
 
-    # Phase 2: AI
+        for item in semantic_results:
+            seg_id = item["segment_id"]
+            if seg_id in regex_by_seg:
+                existing = {kw["term"] for kw in item["keywords"]}
+                for kw in regex_by_seg[seg_id]["keywords"]:
+                    if kw["term"] not in existing:
+                        item["keywords"].append(kw)
+                        existing.add(kw["term"])
+
+        logger.info("semantic+regex で %d 分節のキーワードを構築", len(semantic_results))
+        return semantic_results
+
+    # --- 優先3: フォールバック（regex + 旧AI）---
+    regex_results = recommend_regex(segments, hongan, field)
     ai_results = recommend_ai(segments, hongan, field, case_dir=case_dir)
 
-    # マージ: regex をベースに、ai で補完
     ai_by_seg = {r["segment_id"]: r for r in ai_results}
 
     merged = []
@@ -1226,7 +1241,6 @@ def suggest_keywords_by_segment(segments, hongan, field, case_dir=None):
         seg_id = reg["segment_id"]
         all_keywords = list(reg["keywords"])
 
-        # AI結果をマージ（重複除去）
         if seg_id in ai_by_seg:
             existing_terms = {kw["term"] for kw in all_keywords}
             for kw in ai_by_seg[seg_id]["keywords"]:
