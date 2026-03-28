@@ -2027,9 +2027,9 @@ def stage_execute(case_id):
             return jsonify({"error": "Stage 1を先���完了してください"}), 400
         prompt_text = generate_keyword_prompt(segs, hongan, field, tech_analysis, classification, presearch_candidates)
 
-    # Claude CLI 呼び出し
+    # Claude CLI 呼び出し（Stage 1 はウェブ検索を有効化）
     try:
-        raw_response = call_claude(prompt_text, timeout=600)
+        raw_response = call_claude(prompt_text, timeout=600, use_search=(stage == 1))
     except ClaudeClientError as e:
         return jsonify({"error": str(e), "phase": "claude_call"}), 502
 
