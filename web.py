@@ -1658,6 +1658,291 @@ def remove_keyword_from_segment(case_id):
     return jsonify({"success": True})
 
 
+# ===== 3段階検索ワークフロー =====
+
+@app.route("/case/<case_id>/search/presearch/prompt", methods=["POST"])
+def presearch_prompt(case_id):
+    """Stage 1: 予備検索プロンプトを生成"""
+    from modules.search_prompt_generator import generate_presearch_prompt
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    hongan_path = case_dir / "hongan.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません。Step 2を完了してください。"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    hongan = None
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
+
+    # 保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "presearch_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    return jsonify({"prompt": prompt_text, "char_count": len(prompt_text)})
+
+
+@app.route("/case/<case_id>/search/presearch/parse", methods=["POST"])
+def presearch_parse(case_id):
+    """Stage 1: 予備検索の回答をパースして保存"""
+    from modules.search_prompt_generator import parse_presearch_response
+
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    raw_text = (request.get_json() or {}).get("text", "")
+    if not raw_text.strip():
+        return jsonify({"error": "テキストが空です"}), 400
+
+    tech_analysis, candidates, search_formulas, errors = parse_presearch_response(raw_text)
+
+    saved = []
+    if tech_analysis:
+        _save_search_data(case_dir, "tech_analysis.json", tech_analysis)
+        saved.append("tech_analysis")
+    if candidates:
+        _save_search_data(case_dir, "presearch_candidates.json", candidates)
+        saved.append("presearch_candidates")
+    if search_formulas:
+        _save_search_data(case_dir, "presearch_formulas.json", search_formulas)
+        saved.append("presearch_formulas")
+
+    return jsonify({
+        "success": tech_analysis is not None,
+        "tech_analysis": tech_analysis,
+        "candidates": candidates or [],
+        "search_formulas": search_formulas or [],
+        "errors": errors,
+        "saved": saved,
+    })
+
+
+@app.route("/case/<case_id>/search/classify/prompt", methods=["POST"])
+def classify_prompt(case_id):
+    """Stage 2: 分類特定プロンプトを生成"""
+    from modules.search_prompt_generator import generate_classification_prompt
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    hongan_path = case_dir / "hongan.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    hongan = None
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+
+    # Stage 1の結果を読み込み
+    tech_analysis = _load_search_data(case_dir, "tech_analysis.json")
+    presearch_candidates = _load_search_data(case_dir, "presearch_candidates.json")
+
+    if not tech_analysis:
+        return jsonify({"error": "技術構造化データがありません。Stage 1を先に完了してください。"}), 400
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_classification_prompt(segs, hongan, field, tech_analysis, presearch_candidates)
+
+    # 保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "classification_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    return jsonify({"prompt": prompt_text, "char_count": len(prompt_text)})
+
+
+@app.route("/case/<case_id>/search/classify/parse", methods=["POST"])
+def classify_parse(case_id):
+    """Stage 2: 分類特定の回答をパースして保存"""
+    from modules.search_prompt_generator import parse_classification_response
+
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    raw_text = (request.get_json() or {}).get("text", "")
+    if not raw_text.strip():
+        return jsonify({"error": "テキストが空です"}), 400
+
+    classification, errors = parse_classification_response(raw_text)
+
+    if classification:
+        _save_search_data(case_dir, "classification.json", classification)
+
+    return jsonify({
+        "success": classification is not None,
+        "classification": classification,
+        "errors": errors,
+    })
+
+
+@app.route("/case/<case_id>/search/keywords/prompt", methods=["POST"])
+def keyword_dict_prompt(case_id):
+    """Stage 3: キーワード辞書プロンプトを生成"""
+    from modules.search_prompt_generator import generate_keyword_prompt
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    segments_path = case_dir / "segments.json"
+    hongan_path = case_dir / "hongan.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    hongan = None
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+
+    # Stage 1-2の結果を読み込み
+    tech_analysis = _load_search_data(case_dir, "tech_analysis.json")
+    classification = _load_search_data(case_dir, "classification.json")
+    presearch_candidates = _load_search_data(case_dir, "presearch_candidates.json")
+
+    if not tech_analysis:
+        return jsonify({"error": "技術構造化データがありません。Stage 1を先に完了してください。"}), 400
+
+    field = meta.get("field", "cosmetics")
+    prompt_text = generate_keyword_prompt(
+        segs, hongan, field, tech_analysis, classification, presearch_candidates
+    )
+
+    # 保存
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "keyword_dict_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    return jsonify({"prompt": prompt_text, "char_count": len(prompt_text)})
+
+
+@app.route("/case/<case_id>/search/keywords/parse", methods=["POST"])
+def keyword_dict_parse(case_id):
+    """Stage 3: キーワード辞書の回答をパースして保存"""
+    from modules.search_prompt_generator import (
+        parse_keyword_response, convert_keyword_dict_to_groups,
+    )
+
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    raw_text = (request.get_json() or {}).get("text", "")
+    if not raw_text.strip():
+        return jsonify({"error": "テキストが空です"}), 400
+
+    keyword_dictionary, errors = parse_keyword_response(raw_text)
+
+    if keyword_dictionary:
+        _save_search_data(case_dir, "keyword_dictionary.json", keyword_dictionary)
+
+        # keywords.json にも変換して保存
+        segments_path = Path(case_dir) / "segments.json"
+        if segments_path.exists():
+            with open(segments_path, "r", encoding="utf-8") as f:
+                segs = json.load(f)
+            groups = convert_keyword_dict_to_groups(keyword_dictionary, segs)
+            kw_path = Path(case_dir) / "keywords.json"
+            with open(kw_path, "w", encoding="utf-8") as f:
+                json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({
+        "success": keyword_dictionary is not None,
+        "keyword_dictionary": keyword_dictionary,
+        "errors": errors,
+    })
+
+
+@app.route("/case/<case_id>/search/status", methods=["GET"])
+def search_status(case_id):
+    """3段階検索の進捗状況を返す"""
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    status = {
+        "stage1": {
+            "tech_analysis": _load_search_data(case_dir, "tech_analysis.json") is not None,
+            "presearch_candidates": _load_search_data(case_dir, "presearch_candidates.json") is not None,
+            "presearch_formulas": _load_search_data(case_dir, "presearch_formulas.json") is not None,
+        },
+        "stage2": {
+            "classification": _load_search_data(case_dir, "classification.json") is not None,
+        },
+        "stage3": {
+            "keyword_dictionary": _load_search_data(case_dir, "keyword_dictionary.json") is not None,
+        },
+    }
+
+    # 完了ステージ数を計算
+    completed = 0
+    if status["stage1"]["tech_analysis"]:
+        completed = 1
+    if status["stage2"]["classification"]:
+        completed = 2
+    if status["stage3"]["keyword_dictionary"]:
+        completed = 3
+
+    status["completed_stages"] = completed
+    return jsonify(status)
+
+
+@app.route("/case/<case_id>/search/data/<filename>", methods=["GET"])
+def get_search_data(case_id, filename):
+    """search/ 配下のデータを取得"""
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    # 許可するファイル名のみ
+    allowed = {
+        "tech_analysis.json", "presearch_candidates.json",
+        "presearch_formulas.json", "classification.json",
+        "keyword_dictionary.json",
+    }
+    if filename not in allowed:
+        return jsonify({"error": "不正なファイル名です"}), 400
+
+    data = _load_search_data(case_dir, filename)
+    if data is None:
+        return jsonify({"error": f"{filename} がありません"}), 404
+
+    return jsonify(data)
+
+
 if __name__ == "__main__":
     # templates ディレクトリがなければ作成
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
