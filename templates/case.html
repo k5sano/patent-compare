@@ -209,6 +209,29 @@
     100% { width: 0%; margin-left: 100%; }
   }
 
+  /* 3段階検索ワークフロー */
+  .stage-workflow { border: 1px solid var(--border); border-radius: 10px; padding: 1.2rem; margin-bottom: 1.5rem;
+                    background: rgba(124,58,237,0.05); }
+  .stage-indicators { display: flex; gap: 4px; margin-bottom: 1rem; }
+  .stage-ind { flex: 1; text-align: center; padding: 0.5rem; border-radius: 6px; font-size: 0.8rem;
+               font-weight: 600; background: var(--surface2); color: var(--text2); transition: all 0.2s; cursor: pointer; }
+  .stage-ind.active { background: #7c3aed; color: #fff; }
+  .stage-ind.done { background: #14532d; color: #4ade80; }
+  .stage-ind .stage-num { display: block; font-size: 0.65rem; color: inherit; opacity: 0.7; }
+  .stage-panel { display: none; }
+  .stage-panel.active { display: block; }
+  .stage-result-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+                      padding: 1rem; margin-top: 0.8rem; font-size: 0.82rem; line-height: 1.5; }
+  .stage-result-box h4 { margin: 0 0 0.5rem 0; font-size: 0.9rem; color: var(--accent); }
+  .stage-elem-card { background: var(--surface2); border-radius: 6px; padding: 0.6rem 0.8rem;
+                     margin-bottom: 0.4rem; font-size: 0.82rem; }
+  .stage-elem-card .elem-key { color: #a855f7; font-weight: 700; margin-right: 0.4rem; }
+  .stage-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem;
+               margin: 1px; background: var(--surface2); color: var(--text); }
+  .stage-tag.core { background: #1e3a5f; color: #60a5fa; }
+  .stage-tag.extended { background: #3b1f4b; color: #c084fc; }
+  .stage-tag.not { background: #450a0a; color: #fca5a5; }
+
   /* 分節別キーワード */
   .seg-kw-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-top: 1rem; }
   .seg-kw-header { display: flex; justify-content: space-between; align-items: center; padding: 0.8rem 1rem; cursor: pointer; }
@@ -474,9 +497,119 @@
     <div class="card">
       <h2>Step 4: 引用文献</h2>
 
-      <!-- Claude先行技術検索セクション -->
+      <!-- 3段階検索ワークフロー -->
+      <div class="stage-workflow" id="stage-workflow">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.8rem;">
+          <h3 style="margin:0; font-size:1rem; color:#a855f7;">3段階検索ワークフロー</h3>
+          <span id="stage-overall" style="font-size:0.8rem; color:var(--text2);">Stage 0/3</span>
+        </div>
+
+        <!-- ステージインジケーター -->
+        <div class="stage-indicators">
+          <div class="stage-ind" id="stage-ind-1" onclick="showStage(1)">
+            <span class="stage-num">STAGE 1</span>予備検索
+          </div>
+          <div class="stage-ind" id="stage-ind-2" onclick="showStage(2)">
+            <span class="stage-num">STAGE 2</span>分類特定
+          </div>
+          <div class="stage-ind" id="stage-ind-3" onclick="showStage(3)">
+            <span class="stage-num">STAGE 3</span>キーワード辞書
+          </div>
+        </div>
+
+        <!-- Stage 1: 予備検索 -->
+        <div class="stage-panel active" id="stage-panel-1">
+          <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
+            技術構造化 → 多言語同義語展開 → 予備検索候補の生成
+          </p>
+          <div class="btn-row" style="margin-top:0;">
+            <button class="btn btn-primary" onclick="stageGeneratePrompt(1)"
+                    {% if not segments %}disabled title="分節データが必要です"{% endif %}>
+              Stage 1 プロンプト生成</button>
+            <button class="btn btn-success" id="btn-copy-stage1" onclick="stageCopyPrompt(1)" style="display:none;">コピー</button>
+            <button class="btn btn-execute" id="btn-stage1-execute" onclick="stageExecute(1)" style="display:none;"
+                    {% if not segments %}disabled{% endif %}>&#9889; 直接実行</button>
+            <span id="stage1-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
+          </div>
+          <div class="prompt-box" id="stage1-prompt" style="display:none; margin-top:0.8rem; max-height:200px;"></div>
+          <div class="loading-msg" id="loading-stage1-prompt"><div class="spinner"></div><span>プロンプト生成中...</span></div>
+          <div class="execute-progress" id="exec-stage1-progress">
+            <div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner"></div><span>Stage 1 実行中...</span></div>
+            <div class="ep-bar"><div class="ep-bar-fill"></div></div>
+          </div>
+
+          <!-- 回答貼り付け -->
+          <div style="margin-top:0.8rem;">
+            <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
+            <textarea id="stage1-response" rows="6" placeholder="Stage 1のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <button class="btn btn-primary" onclick="stageParse(1)" style="margin-top:0.3rem;">パース</button>
+            <div class="loading-msg" id="loading-stage1-parse"><div class="spinner"></div><span>パース中...</span></div>
+          </div>
+
+          <!-- Stage 1 結果表示 -->
+          <div id="stage1-result" style="display:none; margin-top:0.8rem;"></div>
+        </div>
+
+        <!-- Stage 2: 分類特定 -->
+        <div class="stage-panel" id="stage-panel-2">
+          <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
+            代表文献からFI/Fterm/CPC/IPCを特定
+          </p>
+          <div class="btn-row" style="margin-top:0;">
+            <button class="btn btn-primary" onclick="stageGeneratePrompt(2)">Stage 2 プロンプト生成</button>
+            <button class="btn btn-success" id="btn-copy-stage2" onclick="stageCopyPrompt(2)" style="display:none;">コピー</button>
+            <button class="btn btn-execute" id="btn-stage2-execute" onclick="stageExecute(2)" style="display:none;">&#9889; 直接実行</button>
+            <span id="stage2-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
+          </div>
+          <div class="prompt-box" id="stage2-prompt" style="display:none; margin-top:0.8rem; max-height:200px;"></div>
+          <div class="loading-msg" id="loading-stage2-prompt"><div class="spinner"></div><span>プロンプト生成中...</span></div>
+          <div class="execute-progress" id="exec-stage2-progress">
+            <div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner"></div><span>Stage 2 実行中...</span></div>
+            <div class="ep-bar"><div class="ep-bar-fill"></div></div>
+          </div>
+
+          <div style="margin-top:0.8rem;">
+            <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
+            <textarea id="stage2-response" rows="6" placeholder="Stage 2のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <button class="btn btn-primary" onclick="stageParse(2)" style="margin-top:0.3rem;">パース</button>
+            <div class="loading-msg" id="loading-stage2-parse"><div class="spinner"></div><span>パース中...</span></div>
+          </div>
+
+          <div id="stage2-result" style="display:none; margin-top:0.8rem;"></div>
+        </div>
+
+        <!-- Stage 3: キーワード辞書 -->
+        <div class="stage-panel" id="stage-panel-3">
+          <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
+            要素別キーワード辞書（コア語/拡張語/NOT語）+ OR束検索式
+          </p>
+          <div class="btn-row" style="margin-top:0;">
+            <button class="btn btn-primary" onclick="stageGeneratePrompt(3)">Stage 3 プロンプト生成</button>
+            <button class="btn btn-success" id="btn-copy-stage3" onclick="stageCopyPrompt(3)" style="display:none;">コピー</button>
+            <button class="btn btn-execute" id="btn-stage3-execute" onclick="stageExecute(3)" style="display:none;">&#9889; 直接実行</button>
+            <span id="stage3-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
+          </div>
+          <div class="prompt-box" id="stage3-prompt" style="display:none; margin-top:0.8rem; max-height:200px;"></div>
+          <div class="loading-msg" id="loading-stage3-prompt"><div class="spinner"></div><span>プロンプト生成中...</span></div>
+          <div class="execute-progress" id="exec-stage3-progress">
+            <div style="display:flex; align-items:center; gap:0.5rem;"><div class="spinner"></div><span>Stage 3 実行中...</span></div>
+            <div class="ep-bar"><div class="ep-bar-fill"></div></div>
+          </div>
+
+          <div style="margin-top:0.8rem;">
+            <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
+            <textarea id="stage3-response" rows="6" placeholder="Stage 3のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <button class="btn btn-primary" onclick="stageParse(3)" style="margin-top:0.3rem;">パース</button>
+            <div class="loading-msg" id="loading-stage3-parse"><div class="spinner"></div><span>パース中...</span></div>
+          </div>
+
+          <div id="stage3-result" style="display:none; margin-top:0.8rem;"></div>
+        </div>
+      </div>
+
+      <!-- Claude先行技術検索セクション（簡易版・フォールバック） -->
       <div class="search-section">
-        <h3>Claude先行技術検索</h3>
+        <h3>簡易検索（1ステッ��）</h3>
         <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.8rem;">
           分節+キーワードから検索プロンプトを生成し、Claudeに先行技術候補を提案させます。
         </p>
@@ -2439,6 +2572,313 @@ async function loadCitationFullTexts() {
 
   container.innerHTML = html;
 }
+
+// ================================================================
+// ===== 3段階検索ワークフロー =====
+// ================================================================
+
+const STAGE_ENDPOINTS = {
+  1: { prompt: 'presearch/prompt', parse: 'presearch/parse', execute: 'presearch/execute' },
+  2: { prompt: 'classify/prompt', parse: 'classify/parse', execute: 'classify/execute' },
+  3: { prompt: 'keywords/prompt', parse: 'keywords/parse', execute: 'keywords/execute' },
+};
+
+function showStage(n) {
+  for (let i = 1; i <= 3; i++) {
+    document.getElementById(`stage-panel-${i}`).classList.toggle('active', i === n);
+    const ind = document.getElementById(`stage-ind-${i}`);
+    if (!ind.classList.contains('done')) {
+      ind.classList.toggle('active', i === n);
+    }
+  }
+}
+
+async function loadSearchStatus() {
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search/status`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const completed = data.completed_stages || 0;
+    document.getElementById('stage-overall').textContent = `Stage ${completed}/3`;
+
+    for (let i = 1; i <= 3; i++) {
+      const ind = document.getElementById(`stage-ind-${i}`);
+      if (i <= completed) {
+        ind.classList.add('done');
+        ind.classList.remove('active');
+      }
+    }
+
+    // 既存データがあればresultを表示
+    if (data.stage1 && data.stage1.tech_analysis) {
+      loadStageResult(1);
+    }
+    if (data.stage2 && data.stage2.classification) {
+      loadStageResult(2);
+    }
+    if (data.stage3 && data.stage3.keyword_dictionary) {
+      loadStageResult(3);
+    }
+  } catch(e) {}
+}
+
+async function loadStageResult(stage) {
+  const fileMap = {1: 'tech_analysis.json', 2: 'classification.json', 3: 'keyword_dictionary.json'};
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search/data/${fileMap[stage]}`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    renderStageResult(stage, data);
+  } catch(e) {}
+}
+
+function renderStageResult(stage, data) {
+  const container = document.getElementById(`stage${stage}-result`);
+  container.style.display = 'block';
+  let html = '';
+
+  if (stage === 1) {
+    // tech_analysis
+    html += '<div class="stage-result-box"><h4>技術構造化</h4>';
+    if (data.core_sentence) {
+      html += `<div style="margin-bottom:0.5rem; font-style:italic; color:var(--text2);">${data.core_sentence}</div>`;
+    }
+    const elements = data.elements || {};
+    for (const [key, elem] of Object.entries(elements)) {
+      html += `<div class="stage-elem-card">`;
+      html += `<span class="elem-key">${key}</span>`;
+      html += `<strong>${elem.label || ''}</strong>`;
+      if (elem.terms_ja && elem.terms_ja.length > 0) {
+        html += `<div style="margin-top:2px;">${elem.terms_ja.map(t => `<span class="stage-tag">${t}</span>`).join('')}</div>`;
+      }
+      if (elem.terms_en && elem.terms_en.length > 0) {
+        html += `<div style="margin-top:2px;">${elem.terms_en.map(t => `<span class="stage-tag">${t}</span>`).join('')}</div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  } else if (stage === 2) {
+    // classification
+    html += '<div class="stage-result-box"><h4>特許分類</h4>';
+    for (const system of ['fi', 'fterm', 'cpc', 'ipc']) {
+      const items = data[system];
+      if (items && items.length > 0) {
+        html += `<div style="margin-bottom:0.4rem;"><strong>${system.toUpperCase()}:</strong> `;
+        html += items.map(item => {
+          const code = item.code || item;
+          const desc = item.description || '';
+          return `<span class="stage-tag">${code}${desc ? ' (' + desc + ')' : ''}</span>`;
+        }).join('');
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+  } else if (stage === 3) {
+    // keyword_dictionary
+    html += '<div class="stage-result-box"><h4>キーワード辞書</h4>';
+    const elements = data.elements || {};
+    for (const [key, elem] of Object.entries(elements)) {
+      html += `<div class="stage-elem-card">`;
+      html += `<span class="elem-key">${key}</span><strong>${elem.label || ''}</strong>`;
+      // core
+      const cores = (elem.core_terms || []).map(t => t.term || t);
+      if (cores.length > 0) {
+        html += `<div style="margin-top:2px;">コア: ${cores.map(t => `<span class="stage-tag core">${t}</span>`).join('')}</div>`;
+      }
+      // extended
+      const exts = (elem.extended_terms || []).map(t => t.term || t);
+      if (exts.length > 0) {
+        html += `<div style="margin-top:2px;">拡張: ${exts.map(t => `<span class="stage-tag extended">${t}</span>`).join('')}</div>`;
+      }
+      // not
+      const nots = (elem.not_terms || []).map(t => t.term || t);
+      if (nots.length > 0) {
+        html += `<div style="margin-top:2px;">NOT: ${nots.map(t => `<span class="stage-tag not">${t}</span>`).join('')}</div>`;
+      }
+      html += '</div>';
+    }
+    // search_formulas
+    if (data.search_formulas) {
+      html += '<div style="margin-top:0.8rem;"><h4>検索式</h4>';
+      for (const [level, formula] of Object.entries(data.search_formulas)) {
+        if (formula) {
+          html += `<div style="margin-bottom:0.3rem;"><strong>${level}:</strong>
+            <code style="font-size:0.8rem; color:var(--text); background:var(--bg); padding:2px 6px; border-radius:4px; word-break:break-all;">${formula}</code></div>`;
+        }
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+async function stageGeneratePrompt(stage) {
+  const loading = document.getElementById(`loading-stage${stage}-prompt`);
+  loading.classList.add('show');
+
+  try {
+    const ep = STAGE_ENDPOINTS[stage];
+    const resp = await fetch(`/case/${CASE_ID}/search/${ep.prompt}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    loading.classList.remove('show');
+
+    if (data.error) { alert(data.error); return; }
+
+    document.getElementById(`stage${stage}-prompt`).textContent = data.prompt;
+    document.getElementById(`stage${stage}-prompt`).style.display = 'block';
+    document.getElementById(`btn-copy-stage${stage}`).style.display = 'inline-block';
+    document.getElementById(`stage${stage}-charcount`).textContent =
+      `${data.char_count.toLocaleString()} 文字`;
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+
+function stageCopyPrompt(stage) {
+  const text = document.getElementById(`stage${stage}-prompt`).textContent;
+  if (!text) { alert('先にプロンプトを生成してください'); return; }
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById(`btn-copy-stage${stage}`);
+    btn.textContent = 'コピー済!';
+    setTimeout(() => btn.textContent = 'コピー', 1500);
+  });
+}
+
+async function stageParse(stage) {
+  const text = document.getElementById(`stage${stage}-response`).value;
+  if (!text.trim()) { alert('回答を貼り付けてください'); return; }
+
+  const loading = document.getElementById(`loading-stage${stage}-parse`);
+  loading.classList.add('show');
+
+  try {
+    const ep = STAGE_ENDPOINTS[stage];
+    const resp = await fetch(`/case/${CASE_ID}/search/${ep.parse}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text: text })
+    });
+    const data = await resp.json();
+    loading.classList.remove('show');
+
+    if (data.error) { alert(data.error); return; }
+
+    if (data.errors && data.errors.length > 0) {
+      alert('警告: ' + data.errors.join('\n'));
+    }
+
+    if (data.success) {
+      // 結果を表示
+      if (stage === 1 && data.tech_analysis) {
+        renderStageResult(1, data.tech_analysis);
+      } else if (stage === 2 && data.classification) {
+        renderStageResult(2, data.classification);
+      } else if (stage === 3 && data.keyword_dictionary) {
+        renderStageResult(3, data.keyword_dictionary);
+      }
+
+      // ステージインジケーター更新
+      document.getElementById(`stage-ind-${stage}`).classList.add('done');
+      loadSearchStatus();
+
+      // 次のステージに自動遷移
+      if (stage < 3) {
+        setTimeout(() => showStage(stage + 1), 500);
+      }
+
+      showKwToast(`Stage ${stage} 完了!`);
+    } else {
+      alert('パース失敗: JSONを抽出できませんでした。');
+    }
+  } catch(e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+  }
+}
+
+async function stageExecute(stage) {
+  // 直接実行: prompt生成 → Claude CLI → parse を1クリックで
+  const progress = document.getElementById(`exec-stage${stage}-progress`);
+  const btn = document.getElementById(`btn-stage${stage}-execute`);
+  btn.disabled = true;
+  progress.classList.add('show');
+
+  try {
+    // まずプロンプト生成
+    const ep = STAGE_ENDPOINTS[stage];
+    const promptResp = await fetch(`/case/${CASE_ID}/search/${ep.prompt}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const promptData = await promptResp.json();
+    if (promptData.error) {
+      progress.classList.remove('show');
+      btn.disabled = false;
+      alert(promptData.error);
+      return;
+    }
+
+    // プロンプトを表示
+    document.getElementById(`stage${stage}-prompt`).textContent = promptData.prompt;
+    document.getElementById(`stage${stage}-prompt`).style.display = 'block';
+
+    // Claude CLI で実行
+    const { call_claude, ClaudeClientError } = {};  // JS側ではfetch経由
+    // claude CLIはサーバーサイドで実行するので、専用executeエンドポイントが必要
+    // 現在のendpointsにはexecuteがないので、prompt + Claude CLI + parse を分割実行
+    // ワークアラウンド: promptテキストを取得し、claude_clientで実行するエンドポイントを作るか、
+    // または既存のcall_claude的な汎用エンドポイントを使う
+
+    // 汎用的に: プロンプトをclaude -p に送り、結果をparseに渡す
+    const callResp = await fetch(`/case/${CASE_ID}/search/stage-execute`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ stage: stage })
+    });
+    const callData = await callResp.json();
+
+    progress.classList.remove('show');
+    btn.disabled = false;
+
+    if (callData.error) { alert('エラー: ' + callData.error); return; }
+
+    if (callData.errors && callData.errors.length > 0) {
+      alert('警告: ' + callData.errors.join('\n'));
+    }
+
+    if (callData.success) {
+      // 結果を描画
+      if (stage === 1 && callData.tech_analysis) {
+        renderStageResult(1, callData.tech_analysis);
+      } else if (stage === 2 && callData.classification) {
+        renderStageResult(2, callData.classification);
+      } else if (stage === 3 && callData.keyword_dictionary) {
+        renderStageResult(3, callData.keyword_dictionary);
+      }
+
+      document.getElementById(`stage-ind-${stage}`).classList.add('done');
+      loadSearchStatus();
+
+      if (stage < 3) {
+        setTimeout(() => showStage(stage + 1), 500);
+      }
+      showKwToast(`Stage ${stage} 直接実行完了!`);
+    } else {
+      alert('パース失敗');
+    }
+  } catch(e) {
+    progress.classList.remove('show');
+    btn.disabled = false;
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+// ページロード時にステージ状態を復元
+loadSearchStatus();
 
 // Step 6 表示時に引例テキストも読み込み
 const _origShowPanel = showPanel;

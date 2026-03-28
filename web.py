@@ -1943,6 +1943,110 @@ def get_search_data(case_id, filename):
     return jsonify(data)
 
 
+@app.route("/case/<case_id>/search/stage-execute", methods=["POST"])
+def stage_execute(case_id):
+    """3段階検索の直接実行: prompt生成 → Claude CLI → parse"""
+    from modules.search_prompt_generator import (
+        generate_presearch_prompt, parse_presearch_response,
+        generate_classification_prompt, parse_classification_response,
+        generate_keyword_prompt, parse_keyword_response,
+        convert_keyword_dict_to_groups,
+    )
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    data = request.get_json() or {}
+    stage = data.get("stage")
+    if stage not in (1, 2, 3):
+        return jsonify({"error": "stage は 1, 2, 3 のいずれかを指定してください"}), 400
+
+    segments_path = Path(case_dir) / "segments.json"
+    hongan_path = Path(case_dir) / "hongan.json"
+    if not segments_path.exists():
+        return jsonify({"error": "分節データがありません"}), 400
+
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+    hongan = None
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+
+    keywords = None
+    kw_path = Path(case_dir) / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+
+    # Stage別のプロンプト生成
+    if stage == 1:
+        prompt_text = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
+    elif stage == 2:
+        tech_analysis = _load_search_data(case_dir, "tech_analysis.json")
+        presearch_candidates = _load_search_data(case_dir, "presearch_candidates.json")
+        if not tech_analysis:
+            return jsonify({"error": "Stage 1を先に完了してください"}), 400
+        prompt_text = generate_classification_prompt(segs, hongan, field, tech_analysis, presearch_candidates)
+    else:  # stage == 3
+        tech_analysis = _load_search_data(case_dir, "tech_analysis.json")
+        classification = _load_search_data(case_dir, "classification.json")
+        presearch_candidates = _load_search_data(case_dir, "presearch_candidates.json")
+        if not tech_analysis:
+            return jsonify({"error": "Stage 1を先���完了してください"}), 400
+        prompt_text = generate_keyword_prompt(segs, hongan, field, tech_analysis, classification, presearch_candidates)
+
+    # Claude CLI 呼び出し
+    try:
+        raw_response = call_claude(prompt_text, timeout=600)
+    except ClaudeClientError as e:
+        return jsonify({"error": str(e), "phase": "claude_call"}), 502
+
+    # Stage別のパース・保存
+    result = {"success": False, "errors": []}
+
+    if stage == 1:
+        tech_analysis, candidates, search_formulas, errors = parse_presearch_response(raw_response)
+        result["errors"] = errors
+        if tech_analysis:
+            _save_search_data(case_dir, "tech_analysis.json", tech_analysis)
+            result["tech_analysis"] = tech_analysis
+            result["success"] = True
+        if candidates:
+            _save_search_data(case_dir, "presearch_candidates.json", candidates)
+            result["candidates"] = candidates
+        if search_formulas:
+            _save_search_data(case_dir, "presearch_formulas.json", search_formulas)
+            result["search_formulas"] = search_formulas
+
+    elif stage == 2:
+        classification, errors = parse_classification_response(raw_response)
+        result["errors"] = errors
+        if classification:
+            _save_search_data(case_dir, "classification.json", classification)
+            result["classification"] = classification
+            result["success"] = True
+
+    else:  # stage == 3
+        keyword_dictionary, errors = parse_keyword_response(raw_response)
+        result["errors"] = errors
+        if keyword_dictionary:
+            _save_search_data(case_dir, "keyword_dictionary.json", keyword_dictionary)
+            result["keyword_dictionary"] = keyword_dictionary
+            result["success"] = True
+            # keywords.json にも変換
+            groups = convert_keyword_dict_to_groups(keyword_dictionary, segs)
+            with open(kw_path, "w", encoding="utf-8") as f:
+                json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     # templates ディレクトリがなければ作成
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
