@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-検索結果をプロンプトに注入するモジュール（v2: 複数戦略対応）
+検索結果をプロンプトに注入するモジュール（v2.1: dedup修正・Scholar改善）
 
 Claude CLIを呼ぶ前にPython側で検索を実行し、
 結果をプロンプト末尾に付加する。
@@ -12,6 +12,7 @@ Claude CLIを呼ぶ前にPython側で検索を実行し、
 3. Google Scholar          — SerpAPI google_scholar エンジン
 """
 
+import os
 import re
 import logging
 from dataclasses import dataclass, field as dc_field
@@ -38,17 +39,28 @@ class SearchHit:
     source: str = ""          # "google_patents" / "google_patents_jp" / "google_scholar"
     url: str = ""
     pdf_url: str = ""
+    is_patent: bool = True    # Scholar結果で特許IDが取れなかった場合 False
 
     @property
     def dedup_key(self) -> str:
-        """重複判定キー: 番号の数字部分のみ"""
-        return re.sub(r'[\s\-/A-Za-z]', '', self.patent_id)
+        """重複判定キー: 国コード + 数字部分"""
+        upper_id = self.patent_id.upper().strip()
+        prefix_match = re.match(r'^(US|JP|WO|EP|KR|CN|DE|FR|GB)', upper_id)
+        prefix = prefix_match.group(1) if prefix_match else ""
+        digits = re.sub(r'[^\d]', '', self.patent_id)
+        if not digits:
+            return ""
+        return f"{prefix}{digits}"
 
 
 # --- 設定読み込み ---
 
 def _load_serpapi_key() -> str:
-    """config.yamlからSerpAPIキーを読み込む"""
+    """config.yaml または環境変数からSerpAPIキーを読み込む"""
+    env_key = os.environ.get("SERPAPI_KEY", "")
+    if env_key:
+        return env_key
+
     config_path = PROJECT_ROOT / "config.yaml"
     if config_path.exists():
         try:
@@ -126,6 +138,14 @@ def inject_search_results(
 
 # --- キーワード抽出 ---
 
+_STOP_WORDS = {
+    "前記", "含有", "含有する", "からなる", "有する", "備える",
+    "において", "であって", "であり", "おける", "よる", "する",
+    "された", "される", "および", "ならびに", "または", "もしくは",
+    "以上", "以下", "未満", "超える", "含む", "特徴", "記載",
+}
+
+
 def _extract_search_keywords(
     segments: list,
     keywords: Optional[list] = None,
@@ -139,22 +159,25 @@ def _extract_search_keywords(
         for group in keywords:
             for kw in group.get("keywords", [])[:3]:
                 term = kw.get("term", "") if isinstance(kw, dict) else str(kw)
-                if term:
+                if term and len(term) >= 2:
                     terms.append(term)
 
     # 2. 分節から名詞句を簡易抽出（キーワードが不足する場合）
+    #    請求項1の全分節を走査 + ストップワード除外
     if len(terms) < 4:
         for claim in segments:
             if claim.get("claim_number") != 1:
                 continue
-            for seg in claim.get("segments", [])[:5]:
+            for seg in claim.get("segments", []):
                 text = seg.get("text", "")
                 # カタカナ3文字以上 or 漢字2文字以上
                 words = re.findall(
-                    r'[ァ-ヴー]{3,}|[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜)?',
+                    r'[ァ-ヴー]{3,}|[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料)?',
                     text,
                 )
-                terms.extend(words[:2])
+                for w in words:
+                    if w not in _STOP_WORDS and len(w) >= 2:
+                        terms.append(w)
             break
 
     # 重複除去して最大8語
@@ -182,8 +205,15 @@ def _search_google_patents(api_key: str, search_terms: List[str]) -> List[Search
         data = resp.json()
         hits = []
         for r in data.get("organic_results", [])[:8]:
+            patent_id = (
+                r.get("patent_id", "")
+                or r.get("publication_number", "")
+                or r.get("patent_number", "")
+            )
+            if not patent_id:
+                continue
             hits.append(SearchHit(
-                patent_id=r.get("patent_id", ""),
+                patent_id=patent_id,
                 title=r.get("title", ""),
                 assignee=r.get("assignee", ""),
                 priority_date=r.get("priority_date", ""),
@@ -191,6 +221,7 @@ def _search_google_patents(api_key: str, search_terms: List[str]) -> List[Search
                 source="google_patents",
                 url=r.get("link", ""),
                 pdf_url=r.get("pdf", ""),
+                is_patent=True,
             ))
         return hits
     except Exception as e:
@@ -217,8 +248,15 @@ def _search_google_patents_jp(api_key: str, search_terms: List[str]) -> List[Sea
         data = resp.json()
         hits = []
         for r in data.get("organic_results", [])[:5]:
+            patent_id = (
+                r.get("patent_id", "")
+                or r.get("publication_number", "")
+                or r.get("patent_number", "")
+            )
+            if not patent_id:
+                continue
             hits.append(SearchHit(
-                patent_id=r.get("patent_id", ""),
+                patent_id=patent_id,
                 title=r.get("title", ""),
                 assignee=r.get("assignee", ""),
                 priority_date=r.get("priority_date", ""),
@@ -226,6 +264,7 @@ def _search_google_patents_jp(api_key: str, search_terms: List[str]) -> List[Sea
                 source="google_patents_jp",
                 url=r.get("link", ""),
                 pdf_url=r.get("pdf", ""),
+                is_patent=True,
             ))
         return hits
     except Exception as e:
@@ -239,7 +278,6 @@ def _search_google_scholar(
     field: str = "cosmetics",
 ) -> List[SearchHit]:
     """SerpApi経由でGoogle Scholar検索（特許含む学術文献）"""
-    # 分野名をクエリに付加
     field_label = {"cosmetics": "cosmetic", "laminate": "laminate film"}.get(field, field)
     query = f"patent {field_label} " + " ".join(search_terms[:4])
     logger.info("Google Scholar検索: %s", query)
@@ -258,7 +296,6 @@ def _search_google_scholar(
         data = resp.json()
         hits = []
         for r in data.get("organic_results", [])[:5]:
-            # Scholar結果から特許IDを抽出（あれば）
             title = r.get("title", "")
             snippet = (r.get("snippet", "") or "")[:200]
             link = r.get("link", "")
@@ -272,8 +309,11 @@ def _search_google_scholar(
             if id_match:
                 patent_id = id_match.group(1)
 
+            is_patent = bool(patent_id)
+            display_id = patent_id if patent_id else f"[Scholar] {title[:50]}"
+
             hits.append(SearchHit(
-                patent_id=patent_id or title[:40],
+                patent_id=display_id,
                 title=title,
                 assignee=", ".join(
                     a.get("name", "") for a in r.get("publication_info", {}).get("authors", [])
@@ -281,6 +321,7 @@ def _search_google_scholar(
                 snippet=snippet,
                 source="google_scholar",
                 url=link,
+                is_patent=is_patent,
             ))
         return hits
     except Exception as e:
@@ -291,14 +332,25 @@ def _search_google_scholar(
 # --- 後処理 ---
 
 def _deduplicate(hits: List[SearchHit]) -> List[SearchHit]:
-    """重複除去: patent_id の数字部分が同一なら先着を優先"""
-    seen: dict = {}
+    """重複除去: 国コード+数字部分が同一なら先着を優先
+    非特許文献（is_patent=False）はURLベースで重複判定"""
+    seen_patents: dict = {}
+    seen_urls: set = set()
     result: List[SearchHit] = []
+
     for h in hits:
-        key = h.dedup_key
-        if not key or key in seen:
-            continue
-        seen[key] = True
+        if h.is_patent:
+            key = h.dedup_key
+            if not key or key in seen_patents:
+                continue
+            seen_patents[key] = True
+        else:
+            url_key = h.url.strip().lower()
+            if url_key in seen_urls:
+                continue
+            if url_key:
+                seen_urls.add(url_key)
+
         result.append(h)
     return result
 
@@ -312,7 +364,6 @@ def _format_results(hits: List[SearchHit], search_terms: List[str]) -> str:
         "",
     ]
 
-    # ソース別にグルーピング
     source_labels = {
         "google_patents": "Google Patents（国際）",
         "google_patents_jp": "Google Patents（日本）",
@@ -335,5 +386,7 @@ def _format_results(hits: List[SearchHit], search_terms: List[str]) -> str:
             lines.append(f"  概要: {h.snippet}")
         if h.pdf_url:
             lines.append(f"  PDF: {h.pdf_url}")
+        if h.url:
+            lines.append(f"  URL: {h.url}")
 
     return "\n".join(lines)
