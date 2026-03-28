@@ -1233,6 +1233,7 @@ def search_execute(case_id):
     """直接実行: 先行技術検索プロンプト → Claude CLI → パース"""
     from modules.search_prompt_generator import generate_search_prompt, parse_search_response
     from modules.claude_client import call_claude, ClaudeClientError
+    from modules.search_injector import inject_search_results
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -1254,6 +1255,9 @@ def search_execute(case_id):
 
     field = meta.get("field", "cosmetics")
     prompt_text = generate_search_prompt(segs, keywords, field)
+
+    # SerpAPIで事前検索し、結果をプロンプトに注入
+    prompt_text = inject_search_results(prompt_text, segs, keywords, field)
 
     # プロンプト保存
     prompts_dir = case_dir / "prompts"
