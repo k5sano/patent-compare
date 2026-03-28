@@ -1542,7 +1542,7 @@ def suggest_keywords_by_segment_endpoint(case_id):
             if manual_kws:
                 existing_manual[item["segment_id"]] = manual_kws
 
-    result = suggest_keywords_by_segment(segs, hongan, field)
+    result = suggest_keywords_by_segment(segs, hongan, field, case_dir=str(case_dir))
 
     # 手動追加分をマージ
     for item in result:
