@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-検索結果をプロンプトに注入するモジュール（v2.1: dedup修正・Scholar改善）
+検索結果をプロンプトに注入するモジュール（v3.0: Playwright直接検索）
 
 Claude CLIを呼ぶ前にPython側で検索を実行し、
 結果をプロンプト末尾に付加する。
 
 戦略:
-1. Google Patents（国際）  — SerpAPI google_patents エンジン
+1. Google Patents（国際）  — Playwright ヘッドレスブラウザ直接検索
 2. Google Patents（JP限定）— 同上、country:JP フィルタ
-3. Google Scholar          — SerpAPI google_scholar エンジン
+3. Google Scholar          — SerpAPI google_scholar エンジン（オプション）
 """
 
 import os
@@ -19,7 +19,6 @@ from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import List, Optional
 
-import requests
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -91,11 +90,6 @@ def inject_search_results(
     Returns:
         検索結果を注入したプロンプト
     """
-    api_key = _load_serpapi_key()
-    if not api_key:
-        logger.info("SerpAPIキー未設定 — 事前検索スキップ")
-        return prompt_text
-
     search_terms = _extract_search_keywords(segments, keywords, field)
     if not search_terms:
         logger.info("検索キーワード抽出不可 — 事前検索スキップ")
@@ -106,17 +100,21 @@ def inject_search_results(
     # --- 複数戦略で検索 ---
     all_hits: List[SearchHit] = []
 
-    # 戦略1: Google Patents（国際）
-    hits = _search_google_patents(api_key, search_terms)
+    # 戦略1: Google Patents（国際）— Playwright直接検索
+    hits = _search_google_patents(search_terms)
     all_hits.extend(hits)
 
-    # 戦略2: Google Patents（JP限定）
-    hits_jp = _search_google_patents_jp(api_key, search_terms)
+    # 戦略2: Google Patents（JP限定）— Playwright直接検索
+    hits_jp = _search_google_patents_jp(search_terms)
     all_hits.extend(hits_jp)
 
-    # 戦略3: Google Scholar
-    hits_scholar = _search_google_scholar(api_key, search_terms, field)
-    all_hits.extend(hits_scholar)
+    # 戦略3: Google Scholar（SerpAPIキーがある場合のみ）
+    api_key = _load_serpapi_key()
+    if api_key:
+        hits_scholar = _search_google_scholar(api_key, search_terms, field)
+        all_hits.extend(hits_scholar)
+    else:
+        logger.info("SerpAPIキー未設定 — Google Scholar検索スキップ")
 
     if not all_hits:
         logger.info("事前検索結果なし")
@@ -186,87 +184,57 @@ def _extract_search_keywords(
 
 # --- 検索戦略 ---
 
-def _search_google_patents(api_key: str, search_terms: List[str]) -> List[SearchHit]:
-    """SerpApi経由でGoogle Patents検索（国際）"""
+def _search_google_patents(search_terms: List[str]) -> List[SearchHit]:
+    """Playwright経由でGoogle Patents検索（国際）"""
+    from modules.google_patents_scraper import search_google_patents
+
     query = " ".join(search_terms[:5])
-    logger.info("Google Patents検索: %s", query)
+    logger.info("Google Patents検索 (Playwright): %s", query)
 
     try:
-        resp = requests.get("https://serpapi.com/search", params={
-            "engine": "google_patents",
-            "q": query,
-            "num": 8,
-            "api_key": api_key,
-        }, timeout=20)
-        if resp.status_code != 200:
-            logger.warning("Google Patents検索失敗: status=%d", resp.status_code)
-            return []
-
-        data = resp.json()
-        hits = []
-        for r in data.get("organic_results", [])[:8]:
-            patent_id = (
-                r.get("patent_id", "")
-                or r.get("publication_number", "")
-                or r.get("patent_number", "")
-            )
-            if not patent_id:
-                continue
-            hits.append(SearchHit(
-                patent_id=patent_id,
-                title=r.get("title", ""),
-                assignee=r.get("assignee", ""),
-                priority_date=r.get("priority_date", ""),
-                snippet=(r.get("snippet", "") or "")[:200],
+        raw_hits = search_google_patents(query, max_results=8)
+        return [
+            SearchHit(
+                patent_id=h.patent_id,
+                title=h.title,
+                assignee=h.assignee,
+                priority_date=h.priority_date,
+                snippet=h.snippet,
                 source="google_patents",
-                url=r.get("link", ""),
-                pdf_url=r.get("pdf", ""),
-                is_patent=True,
-            ))
-        return hits
+                url=h.url,
+                pdf_url=h.pdf_url,
+                is_patent=h.is_patent,
+            )
+            for h in raw_hits
+        ]
     except Exception as e:
         logger.warning("Google Patents検索エラー: %s", e)
         return []
 
 
-def _search_google_patents_jp(api_key: str, search_terms: List[str]) -> List[SearchHit]:
-    """SerpApi経由でGoogle Patents検索（日本特許限定）"""
-    query = " ".join(search_terms[:4]) + " country:JP"
-    logger.info("Google Patents JP検索: %s", query)
+def _search_google_patents_jp(search_terms: List[str]) -> List[SearchHit]:
+    """Playwright経由でGoogle Patents検索（日本特許限定）"""
+    from modules.google_patents_scraper import search_google_patents
+
+    query = " ".join(search_terms[:4])
+    logger.info("Google Patents JP検索 (Playwright): %s", query)
 
     try:
-        resp = requests.get("https://serpapi.com/search", params={
-            "engine": "google_patents",
-            "q": query,
-            "num": 5,
-            "api_key": api_key,
-        }, timeout=20)
-        if resp.status_code != 200:
-            logger.warning("Google Patents JP検索失敗: status=%d", resp.status_code)
-            return []
-
-        data = resp.json()
-        hits = []
-        for r in data.get("organic_results", [])[:5]:
-            patent_id = (
-                r.get("patent_id", "")
-                or r.get("publication_number", "")
-                or r.get("patent_number", "")
-            )
-            if not patent_id:
-                continue
-            hits.append(SearchHit(
-                patent_id=patent_id,
-                title=r.get("title", ""),
-                assignee=r.get("assignee", ""),
-                priority_date=r.get("priority_date", ""),
-                snippet=(r.get("snippet", "") or "")[:200],
+        raw_hits = search_google_patents(query, country="JP", max_results=5)
+        return [
+            SearchHit(
+                patent_id=h.patent_id,
+                title=h.title,
+                assignee=h.assignee,
+                priority_date=h.priority_date,
+                snippet=h.snippet,
                 source="google_patents_jp",
-                url=r.get("link", ""),
-                pdf_url=r.get("pdf", ""),
-                is_patent=True,
-            ))
-        return hits
+                url=h.url,
+                pdf_url=h.pdf_url,
+                is_patent=h.is_patent,
+            )
+            for h in raw_hits
+        ]
     except Exception as e:
         logger.warning("Google Patents JP検索エラー: %s", e)
         return []
@@ -278,6 +246,8 @@ def _search_google_scholar(
     field: str = "cosmetics",
 ) -> List[SearchHit]:
     """SerpApi経由でGoogle Scholar検索（特許含む学術文献）"""
+    import requests
+
     field_label = {"cosmetics": "cosmetic", "laminate": "laminate film"}.get(field, field)
     query = f"patent {field_label} " + " ".join(search_terms[:4])
     logger.info("Google Scholar検索: %s", query)

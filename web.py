@@ -1302,7 +1302,7 @@ def search_execute(case_id):
 
     # Claude CLI 呼び出し（検索ツール付き）
     try:
-        raw_response = call_claude(prompt_text, timeout=600, use_search=True)
+        raw_response = call_claude(prompt_text, timeout=600, use_search=False)
     except ClaudeClientError as e:
         return jsonify({"error": str(e), "phase": "claude_call"}), 502
 

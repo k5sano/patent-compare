@@ -61,21 +61,21 @@ def _load_serpapi_key():
 
 def _build_mcp_config():
     """MCP検索サーバーの設定JSONを一時ファイルに書き出し、パスを返す。
-    SerpAPIキーが未設定の場合はNoneを返す。
+    Playwright直接検索はSerpAPIキー不要で動作する。
+    SerpAPIキーがあればGoogle Scholar検索も利用可能。
     """
-    serpapi_key = _load_serpapi_key()
-    if not serpapi_key:
-        return None
-
     server_script = str(PROJECT_ROOT / "modules" / "mcp_search_server.py")
+    env = {}
+    serpapi_key = _load_serpapi_key()
+    if serpapi_key:
+        env["SERPAPI_KEY"] = serpapi_key
+
     config = {
         "mcpServers": {
             "patent-search": {
                 "command": "python",
                 "args": [server_script],
-                "env": {
-                    "SERPAPI_KEY": serpapi_key,
-                },
+                "env": env,
             }
         }
     }
@@ -128,6 +128,8 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
         mcp_config_path = _build_mcp_config()
         if mcp_config_path:
             cmd.extend(["--mcp-config", mcp_config_path])
+            # MCPツールの実行を事前許可（-p モードではインタラクティブ許可不可）
+            cmd.extend(["--allowedTools", "mcp__patent-search__*"])
             logger.info("MCP検索サーバー有効")
 
     logger.info("Claude CLI 呼び出し: prompt=%d文字, timeout=%d秒, search=%s",
@@ -217,13 +219,14 @@ def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
     env.pop("CLAUDECODE", None)
     env.pop("ANTHROPIC_API_KEY", None)
 
-    cmd = ["claude", "-p", "--output-format", "stream-json"]
+    cmd = ["claude", "-p", "--verbose", "--output-format", "stream-json"]
 
     mcp_config_path = None
     if use_search:
         mcp_config_path = _build_mcp_config()
         if mcp_config_path:
             cmd.extend(["--mcp-config", mcp_config_path])
+            cmd.extend(["--allowedTools", "mcp__patent-search__*"])
 
     logger.info("Claude CLI ストリーム呼び出し: prompt=%d文字, search=%s",
                 len(prompt_text), use_search)
