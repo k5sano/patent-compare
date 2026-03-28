@@ -444,79 +444,43 @@
   <div class="panel" id="panel-2">
     <div class="card">
       <h2>Step 3: キーワードグループ</h2>
-      <div id="keywords-view">
-        {% if keywords %}
-          {% for g in keywords %}
-          <div class="kw-group" id="kw-group-{{ g.group_id }}" data-group-id="{{ g.group_id }}" style="border-left: 4px solid {{ ['#ef4444','#a855f7','#ec4899','#3b82f6','#22c55e','#f97316','#14b8a6'][g.group_id - 1] if g.group_id <= 7 else '#6b7280' }};">
-            <div class="kw-seg-preview" data-group="{{ g.group_id }}" style="display:none; margin-bottom:6px; padding:6px 10px; background:var(--bg); border-radius:6px; font-size:0.8rem; color:var(--text2); line-height:1.5;"></div>
-            <div class="kw-header">
-              <span style="color:var(--text2); font-weight:normal; font-size:0.85rem;">グループ{{ g.group_id }}:</span>
-              <input class="kw-label-edit" type="text" value="{{ g.label }}" data-group="{{ g.group_id }}"
-                     onblur="renameGroup({{ g.group_id }}, this.value)"
-                     onkeydown="if(event.key==='Enter'){this.blur();}">
-              <div class="kw-group-actions">
-                <button class="kw-group-btn kw-group-btn-del" title="グループ削除" onclick="deleteGroup({{ g.group_id }})">削除</button>
-              </div>
-            </div>
-            <div class="kw-seg-picker" data-group="{{ g.group_id }}">
-              <span style="color:var(--text2); font-size:0.75rem; margin-right:2px;">分節:</span>
-              {% if segments %}
-                {% for claim in segments %}
-                  {% for seg in claim.segments %}
-              <button class="kw-seg-chip {{ 'selected' if seg.id in g.segment_ids else '' }}"
-                      data-seg-id="{{ seg.id }}" data-group="{{ g.group_id }}"
-                      onclick="toggleSegment({{ g.group_id }}, '{{ seg.id }}', this)">{{ seg.id }}</button>
-                  {% endfor %}
-                {% endfor %}
-              {% endif %}
-            </div>
-            <div class="kw-tags" data-group="{{ g.group_id }}">
-              {% for kw in g.keywords %}
-              <span class="kw-tag" style="background:var(--surface2);" data-term="{{ kw.term }}">{{ kw.term }} <span style="color:var(--text2); font-size:0.7rem;">{{ kw.type }}</span><button class="kw-del" title="削除" onclick="deleteKeyword({{ g.group_id }}, this)">&times;</button></span>
-              {% endfor %}
-              <span class="kw-add-form">
-                <input class="kw-add-input" type="text" placeholder="追加..."
-                       onkeydown="if(event.key==='Enter'){addKeyword({{ g.group_id }}, this); event.preventDefault();}">
-                <button class="kw-add-btn" title="追加" onclick="addKeyword({{ g.group_id }}, this.previousElementSibling)">+</button>
-              </span>
-            </div>
-            {% if g.search_codes and g.search_codes.fterm %}
-            <div style="margin-top:0.5rem; font-size:0.8rem; color:var(--text2);">
-              Fterm: {% for ft in g.search_codes.fterm %}{{ ft.code }}({{ ft.desc }}) {% endfor %}
-            </div>
-            {% endif %}
-          </div>
-          {% endfor %}
-        {% else %}
-          <p style="color:var(--text2);">分節データからキーワードを自動提案します。</p>
-        {% endif %}
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="suggestKeywords()">キーワード自動提案</button>
-        <button class="btn btn-success" onclick="addGroup()">+ グループ追加</button>
+
+      <!-- ツールバー -->
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:1rem;">
+        <button class="btn btn-primary" id="btn-suggest" onclick="suggestKeywords()">
+          AI自動提案
+        </button>
+        <button class="btn btn-outline" onclick="addNewGroup()">+ グループ追加</button>
         <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
-      </div>
-      <div class="loading-msg" id="loading-kw">
-        <div class="spinner"></div>
-        <span>キーワード提案中...</span>
+        <div class="loading-msg" id="loading-suggest" style="margin:0;">
+          <div class="spinner"></div>
+          <span id="suggest-status">キーワード生成中...</span>
+        </div>
       </div>
 
-      <!-- 分節別キーワード提案パネル -->
-      <div class="seg-kw-panel" id="segment-keywords-panel">
-        <div class="seg-kw-header" onclick="toggleSegmentKeywords()">
-          <h3 style="margin:0; font-size:1rem;">分節別キーワード</h3>
-          <div style="display:flex; align-items:center; gap:0.5rem;">
-            <button class="btn btn-primary" style="font-size:0.8rem; padding:4px 12px;"
-                    onclick="event.stopPropagation(); suggestSegmentKeywords(this)">AI提案を実行</button>
-            <span id="seg-kw-toggle" style="font-size:0.8rem; color:var(--text2);">&#9660;</span>
-          </div>
-        </div>
-        <div id="seg-kw-body" class="seg-kw-body" style="display:none;">
-          <div id="seg-kw-list">
-            <p style="color:var(--text2); font-size:0.85rem;">「AI提案を実行」ボタンで分節ごとのキーワードを生成します。</p>
+      <!-- グループ一覧（JS で描画） -->
+      <div id="kw-groups-container"></div>
+
+      <!-- コピペモーダル -->
+      <div id="copy-modal" style="display:none; position:fixed; inset:0; z-index:10001;
+           background:rgba(0,0,0,0.75); align-items:center; justify-content:center;">
+        <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px;
+                    padding:1.5rem; width:480px; max-width:92vw; max-height:80vh; overflow-y:auto;">
+          <h3 style="margin-bottom:1rem;">キーワードをコピー</h3>
+          <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.8rem;">
+            コピー元グループ「<strong id="copy-src-label"></strong>」のキーワードを
+            選択したグループに追加します。
+          </p>
+          <div id="copy-target-list" style="display:flex; flex-direction:column; gap:6px; margin-bottom:1rem;"></div>
+          <div style="display:flex; justify-content:flex-end; gap:0.5rem;">
+            <button class="btn btn-outline" onclick="closeCopyModal()">キャンセル</button>
+            <button class="btn btn-primary" onclick="execCopy()">コピー実行</button>
           </div>
         </div>
       </div>
+
+      <div id="kw-save-msg" style="display:none; margin-top:0.5rem; padding:0.6rem 1rem;
+           background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;"></div>
     </div>
   </div>
 
@@ -1475,223 +1439,374 @@ async function saveSegmentsFromEditor() {
   }
 }
 
-// ===== キーワード提案 =====
-async function suggestKeywords() {
-  const loading = document.getElementById('loading-kw');
-  loading.classList.add('show');
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/suggest`, { method: 'POST' });
-    const data = await resp.json();
-    loading.classList.remove('show');
-    location.reload();
-  } catch(e) {
-    loading.classList.remove('show');
-    alert('エラー: ' + e.message);
-  }
+// ================================================================
+// キーワードグループ State
+// ================================================================
+let kwGroups = {{ keywords | tojson if keywords else '[]' }};
+
+const GROUP_COLORS = [
+  '#ef4444','#a855f7','#ec4899','#3b82f6',
+  '#22c55e','#f97316','#14b8a6','#6b7280',
+];
+
+function groupColor(gid) {
+  return GROUP_COLORS[(gid - 1) % GROUP_COLORS.length];
 }
 
-// ===== キーワード追加・削除 =====
-async function addKeyword(groupId, inputEl) {
-  const term = inputEl.value.trim();
-  if (!term) return;
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/add`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ group_id: groupId, term: term })
-    });
-    const data = await resp.json();
-    if (data.success) {
-      const container = inputEl.closest('.kw-tags');
-      const addForm = inputEl.closest('.kw-add-form');
-      const tag = document.createElement('span');
-      tag.className = 'kw-tag';
-      tag.style.background = 'var(--surface2)';
-      tag.dataset.term = term;
-      const del = document.createElement('button');
-      del.className = 'kw-del';
-      del.title = '削除';
-      del.innerHTML = '&times;';
-      del.onclick = function() { deleteKeyword(groupId, del); };
-      tag.append(term + ' ');
-      const typeSpan = document.createElement('span');
-      typeSpan.style.cssText = 'color:var(--text2); font-size:0.7rem;';
-      typeSpan.textContent = '手動追加';
-      tag.append(typeSpan);
-      tag.append(del);
-      container.insertBefore(tag, addForm);
-      inputEl.value = '';
-    } else {
-      alert(data.error || '追加失敗');
-    }
-  } catch(e) {
-    alert('エラー: ' + e.message);
-  }
-}
-
-async function deleteKeyword(groupId, btn) {
-  const tag = btn.closest('.kw-tag');
-  const term = tag.dataset.term;
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/delete`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ group_id: groupId, term: term })
-    });
-    const data = await resp.json();
-    if (data.success) {
-      tag.remove();
-    } else {
-      alert(data.error || '削除失敗');
-    }
-  } catch(e) {
-    alert('エラー: ' + e.message);
-  }
-}
-
-// ===== グループ操作 =====
-async function renameGroup(groupId, newLabel) {
-  newLabel = newLabel.trim();
-  if (!newLabel) return;
-  try {
-    await fetch(`/case/${CASE_ID}/keywords/group/update`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ group_id: groupId, label: newLabel })
-    });
-  } catch(e) {
-    alert('エラー: ' + e.message);
-  }
-}
-
-// 分節テキストのルックアップ
-const SEG_TEXTS = {};
+// セグメント情報（分節テキスト参照用）
+const SEG_DATA = {};
 {% if segments %}
-  {% for claim in segments %}
-    {% for seg in claim.segments %}
-SEG_TEXTS["{{ seg.id }}"] = {{ seg.text|tojson }};
-    {% endfor %}
-  {% endfor %}
+{% for claim in segments %}
+{% for seg in claim.segments %}
+SEG_DATA['{{ seg.id }}'] = { text: {{ seg.text | tojson }}, claim: {{ claim.claim_number }}, isIndep: {{ 'true' if claim.is_independent else 'false' }} };
+{% endfor %}
+{% endfor %}
 {% endif %}
 
-function updateSegPreview(groupEl) {
-  const preview = groupEl.querySelector('.kw-seg-preview');
-  if (!preview) return;
-  const selected = groupEl.querySelectorAll('.kw-seg-chip.selected');
-  if (selected.length === 0) {
-    preview.style.display = 'none';
-    preview.innerHTML = '';
+// ================================================================
+// メイン描画
+// ================================================================
+function renderGroups() {
+  const container = document.getElementById('kw-groups-container');
+  if (!kwGroups || kwGroups.length === 0) {
+    container.innerHTML = `
+      <div style="text-align:center; padding:2rem; color:var(--text2);">
+        キーワードグループがありません。「AI自動提案」または「+ グループ追加」で作成してください。
+      </div>`;
     return;
   }
-  let html = '';
-  selected.forEach(chip => {
-    const sid = chip.dataset.segId;
-    const text = SEG_TEXTS[sid] || '';
-    html += `<div style="margin-bottom:3px;"><span style="color:var(--accent); font-weight:700;">${sid}</span>: ${text}</div>`;
-  });
-  preview.innerHTML = html;
-  preview.style.display = 'block';
+  container.innerHTML = kwGroups.map(g => renderGroup(g)).join('');
 }
 
-async function toggleSegment(groupId, segId, btn) {
-  btn.classList.toggle('selected');
-  const groupEl = btn.closest('.kw-group');
-  updateSegPreview(groupEl);
-  const picker = btn.closest('.kw-seg-picker');
-  const selected = Array.from(picker.querySelectorAll('.kw-seg-chip.selected')).map(b => b.dataset.segId);
+function renderGroup(g) {
+  const color = groupColor(g.group_id);
+  const segPreviews = (g.segment_ids || []).map(sid => {
+    const s = SEG_DATA[sid];
+    return s ? `<span style="color:var(--text2);">[${sid}]</span> ${escHtml(s.text.substring(0, 60))}${s.text.length > 60 ? '...' : ''}` : sid;
+  }).join('<br>');
+
+  const allSegs = Object.keys(SEG_DATA);
+  const segChips = allSegs.map(sid => {
+    const sel = (g.segment_ids || []).includes(sid);
+    return `<button class="kw-seg-chip ${sel ? 'selected' : ''}"
+      data-seg-id="${sid}" data-group="${g.group_id}"
+      onclick="toggleSegment(${g.group_id}, '${sid}', this)">${sid}</button>`;
+  }).join('');
+
+  const tags = (g.keywords || []).map(kw => renderKwTag(g.group_id, kw)).join('');
+
+  return `
+<div class="kw-group" id="kw-group-${g.group_id}" data-group-id="${g.group_id}"
+     style="border-left:4px solid ${color}; margin-bottom:1rem; padding:1rem;
+            border-radius:8px; border:1px solid var(--border);">
+
+  <div class="kw-header" style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:6px;">
+    <span style="color:var(--text2); font-weight:normal; font-size:0.85rem;">グループ${g.group_id}:</span>
+    <input class="kw-label-edit" type="text" value="${escAttr(g.label)}"
+           data-group="${g.group_id}"
+           onblur="renameGroup(${g.group_id}, this.value)"
+           onkeydown="if(event.key==='Enter'){this.blur();}">
+    <div style="display:flex; gap:4px; margin-left:auto; flex-shrink:0;">
+      <button class="kw-group-btn" title="このグループのキーワードを他のグループにコピー"
+              onclick="openCopyModal(${g.group_id})">コピー</button>
+      <button class="kw-group-btn kw-group-btn-del" title="グループ削除"
+              onclick="deleteGroup(${g.group_id})">削除</button>
+    </div>
+  </div>
+
+  ${segPreviews ? `<div style="margin-bottom:6px; padding:6px 10px; background:var(--bg); border-radius:6px;
+    font-size:0.8rem; color:var(--text2); line-height:1.6;">${segPreviews}</div>` : ''}
+
+  <div class="kw-seg-picker" data-group="${g.group_id}"
+       style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:6px;">
+    <span style="color:var(--text2); font-size:0.75rem; margin-right:2px; align-self:center;">分節:</span>
+    ${segChips}
+  </div>
+
+  <div class="kw-tags" data-group="${g.group_id}" style="margin-top:4px;">
+    ${tags}
+    <span class="kw-add-form" style="display:inline-flex; align-items:center; gap:4px; margin:2px; vertical-align:middle;">
+      <input class="kw-add-input" type="text" placeholder="追加..."
+             data-group="${g.group_id}"
+             onkeydown="if(event.key==='Enter'){addKeyword(${g.group_id}, this);}">
+      <button class="kw-add-btn" title="追加" onclick="addKeyword(${g.group_id}, this.previousElementSibling)">+</button>
+    </span>
+  </div>
+
+  ${renderFterms(g)}
+</div>`;
+}
+
+function renderKwTag(gid, kw) {
+  const typeLabel = kw.type || '';
+  const badgeClass = typeToBadgeClass(typeLabel);
+  return `<span class="kw-tag" style="background:var(--surface2); display:inline-flex; align-items:center;
+    gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}">
+    <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
+    <span>${escHtml(kw.term)}</span>
+    <button class="kw-del" title="削除"
+      onclick="deleteKeyword(${gid}, '${escAttr(kw.term)}')"
+      style="background:none; border:none; color:var(--text2); cursor:pointer; font-size:0.85rem;
+             padding:0 2px; line-height:1; border-radius:50%;">&times;</button>
+  </span>`;
+}
+
+function renderFterms(g) {
+  const fterms = g.search_codes && g.search_codes.fterm ? g.search_codes.fterm : [];
+  if (!fterms.length) return '';
+  const items = fterms.map(ft =>
+    `<span style="font-size:0.75rem; padding:1px 6px; background:#1e3a5f; color:#60a5fa;
+      border-radius:4px; margin:1px;">${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span></span>`
+  ).join('');
+  return `<div style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px;">
+    <span style="font-size:0.75rem; color:var(--text2);">Fterm:</span> ${items}
+  </div>`;
+}
+
+function typeToBadgeClass(t) {
+  if (!t) return '';
+  if (t.includes('正規表現') || t.includes('カタカナ') || t.includes('漢字')) return 'badge-regex';
+  if (t.includes('同義語') || t.includes('辞書') || t.includes('INCI') || t.includes('Fterm')) return 'badge-dict';
+  if (t.includes('AI') || t.includes('明細書') || t.includes('関連')) return 'badge-ai';
+  if (t.includes('手動') || t.includes('追加')) return 'badge-manual';
+  return '';
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function escAttr(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ================================================================
+// グループ操作
+// ================================================================
+
+async function suggestKeywords() {
+  const btn = document.getElementById('btn-suggest');
+  const loading = document.getElementById('loading-suggest');
+  btn.disabled = true;
+  loading.classList.add('show');
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/suggest`, { method: 'POST' });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'エラー'); }
+    kwGroups = await res.json();
+    renderGroups();
+    showKwSaveMsg('AI提案が完了しました');
+  } catch(e) {
+    alert('エラー: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    loading.classList.remove('show');
+  }
+}
+
+async function addNewGroup() {
+  const label = prompt('グループのラベルを入力:', '新規グループ');
+  if (label === null) return;
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/group/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ label: label.trim() || '新規グループ', segment_ids: [] })
+    });
+    if (!res.ok) throw new Error('追加失敗');
+    const d = await res.json();
+    kwGroups.push({
+      group_id: d.group_id,
+      label: label.trim() || '新規グループ',
+      segment_ids: [],
+      keywords: [],
+      search_codes: { fterm: [], fi: [] }
+    });
+    renderGroups();
+    showKwSaveMsg('グループを追加しました');
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteGroup(gid) {
+  if (!confirm(`グループ${gid}を削除しますか？`)) return;
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/group/delete`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid })
+    });
+    if (!res.ok) throw new Error('削除失敗');
+    kwGroups = kwGroups.filter(g => g.group_id !== gid);
+    renderGroups();
+    showKwSaveMsg('グループを削除しました');
+  } catch(e) { alert(e.message); }
+}
+
+async function renameGroup(gid, newLabel) {
+  const g = kwGroups.find(g => g.group_id === gid);
+  if (!g || g.label === newLabel) return;
+  g.label = newLabel;
   try {
     await fetch(`/case/${CASE_ID}/keywords/group/update`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ group_id: groupId, segment_ids: selected })
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, label: newLabel })
     });
-  } catch(e) {
-    alert('エラー: ' + e.message);
-  }
+  } catch(e) { console.warn('rename failed', e); }
 }
 
-// 初期表示: 選択済み分節のプレビューを表示
-document.querySelectorAll('.kw-group').forEach(g => updateSegPreview(g));
-
-async function deleteGroup(groupId) {
-  if (!confirm(`グループ${groupId}を削除しますか？`)) return;
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/group/delete`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ group_id: groupId })
-    });
-    const data = await resp.json();
-    if (data.success) {
-      const el = document.getElementById(`kw-group-${groupId}`);
-      if (el) el.remove();
-    } else {
-      alert(data.error || '削除失敗');
+async function toggleSegment(gid, segId, btn) {
+  const g = kwGroups.find(g => g.group_id === gid);
+  if (!g) return;
+  if (!g.segment_ids) g.segment_ids = [];
+  const idx = g.segment_ids.indexOf(segId);
+  if (idx >= 0) { g.segment_ids.splice(idx, 1); btn.classList.remove('selected'); }
+  else { g.segment_ids.push(segId); btn.classList.add('selected'); }
+  const groupEl = document.getElementById('kw-group-' + gid);
+  if (groupEl) {
+    const prev = groupEl.querySelector('[style*="line-height:1.6"]');
+    if (prev) {
+      const newPrev = g.segment_ids.map(sid => {
+        const s = SEG_DATA[sid];
+        return s
+          ? `<span style="color:var(--text2);">[${sid}]</span> ${escHtml(s.text.substring(0,60))}${s.text.length>60?'...':''}`
+          : sid;
+      }).join('<br>');
+      prev.innerHTML = newPrev;
     }
-  } catch(e) {
-    alert('エラー: ' + e.message);
   }
+  try {
+    await fetch(`/case/${CASE_ID}/keywords/group/update`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, segment_ids: g.segment_ids })
+    });
+  } catch(e) { console.warn('segment toggle failed', e); }
 }
 
-async function addGroup() {
-  const label = prompt('グループ名を入力してください:', '新規グループ');
-  if (!label) return;
+async function addKeyword(gid, inputEl) {
+  const term = (inputEl.value || '').trim();
+  if (!term) return;
   try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/group/add`, {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ label: label, segment_ids: [] })
+    const res = await fetch(`/case/${CASE_ID}/keywords/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, term })
     });
-    const data = await resp.json();
-    if (data.success) {
-      const gid = data.group_id;
-      const colors = ['#ef4444','#a855f7','#ec4899','#3b82f6','#22c55e','#f97316','#14b8a6'];
-      const color = gid <= 7 ? colors[gid - 1] : '#6b7280';
-
-      // 既存グループから分節チップを取得
-      let segChipsHtml = '<span style="color:var(--text2); font-size:0.75rem; margin-right:2px;">分節:</span>';
-      const existingChips = document.querySelectorAll('.kw-seg-picker[data-group] .kw-seg-chip');
-      const seenIds = new Set();
-      existingChips.forEach(chip => {
-        const sid = chip.dataset.segId;
-        if (!seenIds.has(sid)) {
-          seenIds.add(sid);
-          segChipsHtml += `<button class="kw-seg-chip" data-seg-id="${sid}" data-group="${gid}"
-            onclick="toggleSegment(${gid}, '${sid}', this)">${sid}</button>`;
-        }
-      });
-
-      const groupHtml = `
-        <div class="kw-group" id="kw-group-${gid}" data-group-id="${gid}" style="border-left: 4px solid ${color};">
-          <div class="kw-seg-preview" data-group="${gid}" style="display:none; margin-bottom:6px; padding:6px 10px; background:var(--bg); border-radius:6px; font-size:0.8rem; color:var(--text2); line-height:1.5;"></div>
-          <div class="kw-header">
-            <span style="color:var(--text2); font-weight:normal; font-size:0.85rem;">グループ${gid}:</span>
-            <input class="kw-label-edit" type="text" value="${label}" data-group="${gid}"
-                   onblur="renameGroup(${gid}, this.value)" onkeydown="if(event.key==='Enter'){this.blur();}">
-            <div class="kw-group-actions">
-              <button class="kw-group-btn kw-group-btn-del" title="グループ削除" onclick="deleteGroup(${gid})">削除</button>
-            </div>
-          </div>
-          <div class="kw-seg-picker" data-group="${gid}">${segChipsHtml}</div>
-          <div class="kw-tags" data-group="${gid}">
-            <span class="kw-add-form">
-              <input class="kw-add-input" type="text" placeholder="追加..."
-                     onkeydown="if(event.key==='Enter'){addKeyword(${gid}, this); event.preventDefault();}">
-              <button class="kw-add-btn" title="追加" onclick="addKeyword(${gid}, this.previousElementSibling)">+</button>
-            </span>
-          </div>
-        </div>`;
-
-      const container = document.getElementById('keywords-view');
-      container.insertAdjacentHTML('beforeend', groupHtml);
-
-      // 新グループのキーワード入力にフォーカス
-      const newInput = document.querySelector(`#kw-group-${gid} .kw-add-input`);
-      if (newInput) {
-        newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setTimeout(() => newInput.focus(), 300);
+    if (!res.ok) throw new Error('追加失敗');
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      const newKw = { term, source: '手動', type: '手動追加' };
+      g.keywords.push(newKw);
+      const tagsEl = document.querySelector(`.kw-tags[data-group="${gid}"]`);
+      if (tagsEl) {
+        const form = tagsEl.querySelector('.kw-add-form');
+        form.insertAdjacentHTML('beforebegin', renderKwTag(gid, newKw));
       }
-    } else {
-      alert(data.error || '追加失敗');
     }
-  } catch(e) {
-    alert('エラー: ' + e.message);
-  }
+    inputEl.value = '';
+    showKwToast(`「${term}」を追加しました`);
+  } catch(e) { alert(e.message); }
 }
+
+async function deleteKeyword(gid, term) {
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/delete`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, term })
+    });
+    if (!res.ok) throw new Error('削除失敗');
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) g.keywords = g.keywords.filter(k => k.term !== term);
+    const tagsEl = document.querySelector(`.kw-tags[data-group="${gid}"]`);
+    if (tagsEl) {
+      const tag = tagsEl.querySelector(`[data-term="${CSS.escape(term)}"]`);
+      if (tag) tag.remove();
+    }
+    showKwToast(`「${term}」を削除しました`);
+  } catch(e) { alert(e.message); }
+}
+
+// ================================================================
+// コピー機能
+// ================================================================
+let _copySrcGid = null;
+
+function openCopyModal(srcGid) {
+  const srcGroup = kwGroups.find(g => g.group_id === srcGid);
+  if (!srcGroup) return;
+  _copySrcGid = srcGid;
+  document.getElementById('copy-src-label').textContent = srcGroup.label;
+  const targetList = document.getElementById('copy-target-list');
+  targetList.innerHTML = kwGroups
+    .filter(g => g.group_id !== srcGid)
+    .map(g => `
+      <label style="display:flex; align-items:center; gap:8px; padding:6px 10px;
+             background:var(--surface2); border-radius:6px; cursor:pointer;">
+        <input type="checkbox" value="${g.group_id}"
+               style="width:16px; height:16px; accent-color:var(--accent);">
+        <span style="font-size:0.88rem;">グループ${g.group_id}: <strong>${escHtml(g.label)}</strong>
+          <span style="color:var(--text2); font-size:0.78rem;"> (${g.keywords.length}語)</span></span>
+      </label>`).join('');
+  document.getElementById('copy-modal').style.display = 'flex';
+}
+
+function closeCopyModal() {
+  document.getElementById('copy-modal').style.display = 'none';
+  _copySrcGid = null;
+}
+
+async function execCopy() {
+  if (_copySrcGid === null) return;
+  const srcGroup = kwGroups.find(g => g.group_id === _copySrcGid);
+  if (!srcGroup) return;
+  const checked = [...document.querySelectorAll('#copy-target-list input:checked')];
+  if (!checked.length) { alert('コピー先を選択してください'); return; }
+  const targetGids = checked.map(c => parseInt(c.value));
+  let addedTotal = 0;
+  for (const tgid of targetGids) {
+    const tg = kwGroups.find(g => g.group_id === tgid);
+    if (!tg) continue;
+    const existing = new Set(tg.keywords.map(k => k.term));
+    const toAdd = srcGroup.keywords.filter(k => !existing.has(k.term));
+    for (const kw of toAdd) {
+      try {
+        await fetch(`/case/${CASE_ID}/keywords/add`, {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ group_id: tgid, term: kw.term })
+        });
+        tg.keywords.push({ ...kw });
+        addedTotal++;
+      } catch(e) { console.warn('copy item failed', e); }
+    }
+  }
+  closeCopyModal();
+  renderGroups();
+  showKwToast(`${addedTotal}語をコピーしました`);
+}
+
+// ================================================================
+// ユーティリティ
+// ================================================================
+function showKwSaveMsg(msg) {
+  const el = document.getElementById('kw-save-msg');
+  el.textContent = msg;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+function showKwToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'kw-toast';
+  t.textContent = msg;
+  t.style.cssText = 'position:fixed; bottom:20px; right:20px; background:#14532d; color:#4ade80; padding:8px 16px; border-radius:8px; font-size:0.85rem; z-index:10000;';
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2500);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderGroups();
+});
 
 // ===== 対比（複数文献対応） =====
 function getSelectedCitationIds() {
@@ -2340,268 +2455,11 @@ async function executeInventiveStep() {
 }
 
 // ================================================================
-// ===== 分節別キーワード =====
+// ===== テキスト選択 → キーワード追加ポップオーバー =====
 // ================================================================
 
 // 分節IDリスト（ポップオーバー用）
-window._segmentIds = [];
-
-function toggleSegmentKeywords() {
-  const body = document.getElementById('seg-kw-body');
-  const toggle = document.getElementById('seg-kw-toggle');
-  if (body.style.display === 'none') {
-    body.style.display = 'block';
-    toggle.innerHTML = '&#9650;';
-  } else {
-    body.style.display = 'none';
-    toggle.innerHTML = '&#9660;';
-  }
-}
-
-async function suggestSegmentKeywords(btn) {
-  const origText = btn.textContent;
-  btn.disabled = true;
-  btn.textContent = '提案中...';
-
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/suggest-by-segment`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      renderSegmentKeywords(data);
-      document.getElementById('seg-kw-body').style.display = 'block';
-      document.getElementById('seg-kw-toggle').innerHTML = '&#9650;';
-    } else {
-      alert(data.error || 'エラーが発生しました');
-    }
-  } catch(e) {
-    alert('通信エラー: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = origText;
-  }
-}
-
-function renderSegmentKeywords(segKeywords) {
-  const container = document.getElementById('seg-kw-list');
-  container.innerHTML = '';
-
-  // 分節IDリストを更新
-  window._segmentIds = segKeywords.map(s => s.segment_id);
-
-  // source → badge 解決（prefix対応: "spec:【0015】" → spec, "dict:synonyms" → dict:synonyms）
-  function resolveBadge(source) {
-    const exact = {
-      'claim': ['badge-regex', '請求項'],
-      'regex': ['badge-regex', '正規表現'],
-      'manual': ['badge-manual', '手動'],
-      'ai': ['badge-ai', 'AI'],
-      'ai_semantic': ['badge-semantic', 'AI意味'],
-      'dict': ['badge-dict', '辞書'],
-      'dictionary': ['badge-dict', '辞書'],
-      'dict_ig': ['badge-dict', '成分G'],
-      'dict_fterm': ['badge-dict', 'Fterm'],
-      'dict_uc': ['badge-dict', '上位概念'],
-      'dict_i2f': ['badge-dict', 'Fterm逆'],
-      'dict_syn': ['badge-dict', '同義語'],
-      'dict_inci': ['badge-dict', 'INCI'],
-      'spec': ['badge-spec', '明細書'],
-      'dict:synonyms': ['badge-dict', '同義語'],
-      'dict:upper_concepts': ['badge-dict', '上位概念'],
-      'dict:inci': ['badge-dict', 'INCI'],
-      'dict:fterm': ['badge-dict', 'Fterm'],
-    };
-    if (exact[source]) return exact[source];
-    // prefix match: "spec:【0015】" → spec prefix
-    if (source.startsWith('spec:')) return ['badge-spec', '明細書'];
-    if (source.startsWith('dict:')) return ['badge-dict', '辞書'];
-    return ['badge-regex', source];
-  }
-  const tierClass = { 'core': 'tier-core', 'extended': 'tier-extended', 'not': 'tier-not' };
-  const tierBadge = {
-    'core': '<span class="tier-badge tier-badge-core">C</span>',
-    'extended': '<span class="tier-badge tier-badge-extended">E</span>',
-    'not': '<span class="tier-badge tier-badge-not">N</span>',
-  };
-
-  for (const seg of segKeywords) {
-    const div = document.createElement('div');
-    div.className = 'seg-kw-item';
-
-    let kwHtml = '';
-    for (const kw of seg.keywords) {
-      const [bc, bl] = resolveBadge(kw.source || '');
-      const tc = kw.tier ? (tierClass[kw.tier] || '') : '';
-      const tb = kw.tier ? (tierBadge[kw.tier] || '') : '';
-      const typeTitle = kw.type ? ` title="${kw.type}"` : '';
-      const escapedTerm = kw.term.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-      const htmlTerm = kw.term.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      kwHtml += `<span class="seg-kw-tag ${tc}"${typeTitle}>
-        ${tb}<span class="badge ${bc}">${bl}</span>
-        <span class="kw-term" onclick="startEditKeyword(this, '${seg.segment_id}', '${escapedTerm}')">${htmlTerm}</span>
-        <button class="kw-del-btn" onclick="removeSegmentKeyword('${seg.segment_id}', '${escapedTerm}')">&times;</button>
-      </span>`;
-    }
-
-    const segText = seg.segment_text ? seg.segment_text.substring(0, 60) + (seg.segment_text.length > 60 ? '...' : '') : '';
-    const meaningHtml = seg.technical_meaning
-      ? `<div class="seg-kw-meaning">${seg.technical_meaning}</div>` : '';
-    const sid = seg.segment_id;
-    div.innerHTML = `
-      <div class="seg-kw-item-header">
-        <strong style="color:var(--accent);">${sid}</strong>
-        <div style="display:flex; align-items:center; gap:6px;">
-          <small style="color:var(--text2); max-width:60%; text-align:right; font-size:0.78rem;">${segText}</small>
-          <button class="seg-kw-edit-btn" onclick="toggleSegKwEdit('${sid}')">+ 追加</button>
-        </div>
-      </div>
-      ${meaningHtml}
-      <div style="margin-top:4px;">${kwHtml}</div>
-      <div class="seg-kw-add-row" id="seg-kw-add-${sid}">
-        <input class="seg-kw-add-input" id="seg-kw-input-${sid}" placeholder="キーワードを入力"
-               onkeydown="if(event.key==='Enter'){addSegmentKeyword('${sid}');event.preventDefault();}">
-        <button class="seg-kw-add-btn" onclick="addSegmentKeyword('${sid}')">追加</button>
-      </div>
-    `;
-    container.appendChild(div);
-  }
-}
-
-async function removeSegmentKeyword(segmentId, term) {
-  const resp = await fetch(`/case/${CASE_ID}/keywords/remove-from-segment`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({segment_id: segmentId, term: term}),
-  });
-  if (resp.ok) {
-    const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
-    if (dataResp.ok) {
-      renderSegmentKeywords(await dataResp.json());
-    }
-  }
-}
-
-function startEditKeyword(span, segmentId, oldTerm) {
-  // 既に編集中なら何もしない
-  if (span.querySelector('input')) return;
-  const currentText = oldTerm.replace(/&quot;/g, '"').replace(/\\'/g, "'");
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'kw-edit-input';
-  input.value = currentText;
-  // 文字数に応じて幅を調整
-  input.style.width = Math.max(4, currentText.length + 2) + 'em';
-  input.addEventListener('input', function() {
-    this.style.width = Math.max(4, this.value.length + 2) + 'em';
-  });
-
-  const commit = async () => {
-    const newTerm = input.value.trim();
-    if (!newTerm || newTerm === currentText) {
-      // 変更なし → 元に戻す
-      span.textContent = currentText;
-      return;
-    }
-    const resp = await fetch(`/case/${CASE_ID}/keywords/update-segment-keyword`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({segment_id: segmentId, old_term: currentText, new_term: newTerm}),
-    });
-    if (resp.ok) {
-      const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
-      if (dataResp.ok) renderSegmentKeywords(await dataResp.json());
-    } else {
-      span.textContent = currentText;
-    }
-  };
-
-  let committed = false;
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); committed = true; commit(); }
-    if (e.key === 'Escape') { e.preventDefault(); span.textContent = currentText; }
-  });
-  input.addEventListener('blur', () => { if (!committed) commit(); });
-
-  span.textContent = '';
-  span.appendChild(input);
-  input.focus();
-  input.select();
-}
-
-function toggleSegKwEdit(segmentId) {
-  const row = document.getElementById(`seg-kw-add-${segmentId}`);
-  if (!row) return;
-  const isActive = row.classList.contains('active');
-  // 他の開いている入力行を閉じる
-  document.querySelectorAll('.seg-kw-add-row.active').forEach(r => r.classList.remove('active'));
-  if (!isActive) {
-    row.classList.add('active');
-    const input = document.getElementById(`seg-kw-input-${segmentId}`);
-    if (input) input.focus();
-  }
-}
-
-async function addSegmentKeyword(segmentId) {
-  const input = document.getElementById(`seg-kw-input-${segmentId}`);
-  if (!input) return;
-  const term = input.value.trim();
-  if (!term) return;
-
-  const resp = await fetch(`/case/${CASE_ID}/keywords/add-to-segment`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({segment_id: segmentId, term: term}),
-  });
-  if (resp.ok) {
-    input.value = '';
-    const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
-    if (dataResp.ok) {
-      renderSegmentKeywords(await dataResp.json());
-      // 再描画後に入力行を再度開く
-      const row = document.getElementById(`seg-kw-add-${segmentId}`);
-      if (row) {
-        row.classList.add('active');
-        const newInput = document.getElementById(`seg-kw-input-${segmentId}`);
-        if (newInput) newInput.focus();
-      }
-    }
-  }
-}
-
-// ページ読み込み時に既存データがあれば表示 + 分節IDリスト構築
-(async function loadSegmentKeywordsOnInit() {
-  // 分節IDリストを構築
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/segments`);
-    if (resp.ok) {
-      const segs = await resp.json();
-      window._segmentIds = [];
-      for (const claim of segs) {
-        if (claim.segments) {
-          for (const seg of claim.segments) {
-            window._segmentIds.push(seg.id);
-          }
-        }
-      }
-    }
-  } catch(e) {}
-
-  // 既存の segment_keywords.json があれば表示
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/segments`);
-    if (resp.ok) {
-      const data = await resp.json();
-      renderSegmentKeywords(data);
-    }
-  } catch(e) {}
-})();
-
-// ================================================================
-// ===== テキスト選択 → キーワード追加ポップオーバー =====
-// ================================================================
+window._segmentIds = Object.keys(SEG_DATA);
 
 document.addEventListener('mouseup', function(e) {
   const selection = window.getSelection().toString().trim();

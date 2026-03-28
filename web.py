@@ -409,7 +409,8 @@ def save_segments(case_id):
 
 @app.route("/case/<case_id>/keywords/suggest", methods=["POST"])
 def suggest_keywords(case_id):
-    from modules.keyword_suggester import suggest_keywords as _suggest
+    from modules.keyword_recommender import recommend_regex
+    from modules.keyword_suggester import build_keyword_groups_from_pipeline
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -426,13 +427,11 @@ def suggest_keywords(case_id):
 
     field = meta.get("field", "cosmetics")
 
-    # keyword_dictionary.json があれば優先的に使用
-    kw_dict = _load_search_data(case_dir, "keyword_dictionary.json")
-    if kw_dict:
-        from modules.search_prompt_generator import convert_keyword_dict_to_groups
-        result = convert_keyword_dict_to_groups(kw_dict, segs)
-    else:
-        result = _suggest(hongan, segs, field)
+    # 4ステップパイプライン実行
+    pipeline_result = recommend_regex(segs, hongan, field)
+
+    # グループ構造に変換
+    result = build_keyword_groups_from_pipeline(pipeline_result, segs, field)
 
     with open(case_dir / "keywords.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)

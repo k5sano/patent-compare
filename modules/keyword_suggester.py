@@ -16,6 +16,8 @@ import re
 import json
 from pathlib import Path
 
+from modules.fterm_dict import codes_for_term, get_nodes, get_synonyms, get_inci
+
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
 # デフォルトの色順序
@@ -151,42 +153,19 @@ def extract_concrete_names_from_description(hongan, field):
 
 
 def lookup_fterm(keywords, field):
-    """キーワードからFtermを逆引き"""
-    if field == "cosmetics":
-        ingredient_to_fterm = load_dictionary("cosmetics", "ingredient_to_fterm.json")
-        fterm_structure = load_dictionary("cosmetics", "fterm_4c083_structure.json")
-    elif field == "laminate":
-        ingredient_to_fterm = load_dictionary("laminate", "materials_to_fterm.json")
-        fterm_structure = load_dictionary("laminate", "fterm_4f100_structure.json")
-    else:
-        return {}
-
+    """キーワードからFtermを逆引き（木構造版）"""
+    nodes = get_nodes(field)
     fterm_results = {}
     for kw in keywords:
         term = kw["term"]
-        fterm_codes = ingredient_to_fterm.get(term, [])
-        for code in fterm_codes:
-            # Fterm構造辞書からラベルを取得
-            category = code[:6] if len(code) >= 6 else code  # e.g., "4C083AC12"
-            theme = code[:5]  # e.g., "4C083"
-            sub = code[5:7] if len(code) >= 7 else ""  # e.g., "AC"
-            entry = code[5:] if len(code) >= 7 else ""  # e.g., "AC12"
-
-            desc = ""
-            cats = fterm_structure.get("categories", {})
-            if sub in cats:
-                entries = cats[sub].get("entries", {})
-                if entry in entries:
-                    desc = entries[entry].get("label", "")
-                elif sub in cats:
-                    desc = cats[sub].get("label", "")
-
+        codes = codes_for_term(term, field)
+        for code in codes:
+            node = nodes.get(code, {})
             fterm_results.setdefault(term, []).append({
                 "code": code,
-                "desc": desc,
+                "desc": node.get("label", ""),
                 "suffix": ".1で請求項限定",
             })
-
     return fterm_results
 
 
@@ -199,9 +178,8 @@ def build_keyword_groups(segments, hongan, field):
     concrete = extract_concrete_names_from_description(hongan, field)
 
     # 3. 辞書ロード
-    ingredient_to_fterm = load_dictionary(field, "ingredient_to_fterm.json")
-    synonyms = load_dictionary(field, "synonyms.json")
-    inci_ja = load_dictionary(field, "inci_ja.json") if field == "cosmetics" else {}
+    synonyms = get_synonyms(field)
+    inci_ja  = get_inci(field) if field == "cosmetics" else {}
 
     groups = []
     group_id = 0
@@ -297,3 +275,59 @@ def suggest_keywords(hongan, segments, field):
         キーワードグループのリスト
     """
     return build_keyword_groups(segments, hongan, field)
+
+
+def build_keyword_groups_from_pipeline(pipeline_result, segments, field):
+    """
+    recommend_regex() の出力（分節×キーワード）を
+    グループ構造（group_id, label, keywords, search_codes）に変換する。
+    独立請求項の分節のみグループ化。
+    """
+    nodes = get_nodes(field)
+
+    indep_seg_ids = {
+        seg["id"]
+        for claim in segments
+        if claim.get("is_independent", claim.get("claim_number") == 1)
+        for seg in claim.get("segments", [])
+    }
+
+    groups = []
+    group_id = 0
+
+    for item in pipeline_result:
+        seg_id = item["segment_id"]
+        if seg_id not in indep_seg_ids:
+            continue
+        kws = item["keywords"]
+        if not kws:
+            continue
+
+        group_id += 1
+        if group_id > 7:
+            break
+
+        # Fterm コード収集
+        fterm_list = []
+        seen_codes = set()
+        for kw in kws:
+            for code in codes_for_term(kw["term"], field):
+                if code not in seen_codes:
+                    node = nodes.get(code, {})
+                    fterm_list.append({
+                        "code": code,
+                        "desc": node.get("label", ""),
+                        "suffix": ".1で請求項限定",
+                    })
+                    seen_codes.add(code)
+
+        groups.append({
+            "group_id": group_id,
+            "label": kws[0]["term"] if kws else seg_id,
+            "color": COLOR_NAMES.get(group_id, "黒"),
+            "segment_ids": [seg_id],
+            "keywords": kws,
+            "search_codes": {"fterm": fterm_list, "fi": []},
+        })
+
+    return groups
