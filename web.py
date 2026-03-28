@@ -1455,6 +1455,186 @@ def inventive_step_execute(case_id):
     })
 
 
+# ===== 分節別キーワード提案 =====
+
+def _sync_to_keyword_groups(case_dir, seg_keywords, field):
+    """segment_keywords.json → keywords.json への同期変換"""
+    COLOR_NAMES = {
+        1: "赤", 2: "紫", 3: "マゼンタ", 4: "青",
+        5: "緑", 6: "オレンジ", 7: "ティール",
+    }
+
+    groups = []
+    for i, item in enumerate(seg_keywords):
+        if not item.get("keywords"):
+            continue
+        group_id = i + 1
+        groups.append({
+            "group_id": group_id,
+            "label": item["segment_text"][:20] if item.get("segment_text") else item["segment_id"],
+            "color": COLOR_NAMES.get(group_id, "黒"),
+            "segment_ids": [item["segment_id"]],
+            "keywords": [
+                {"term": kw["term"], "source": kw.get("source", ""), "type": kw.get("type", "")}
+                for kw in item["keywords"]
+            ],
+            "search_codes": {},
+        })
+
+    kw_path = case_dir / "keywords.json"
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+
+@app.route("/case/<case_id>/keywords/suggest-by-segment", methods=["POST"])
+def suggest_keywords_by_segment_endpoint(case_id):
+    """分節別AIキーワード提案"""
+    from modules.keyword_recommender import suggest_keywords_by_segment
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return jsonify({"error": "案件が見つかりません"}), 404
+
+    hongan_path = case_dir / "hongan.json"
+    segments_path = case_dir / "segments.json"
+    if not hongan_path.exists() or not segments_path.exists():
+        return jsonify({"error": "本願テキストまたは分節データがありません"}), 400
+
+    with open(hongan_path, "r", encoding="utf-8") as f:
+        hongan = json.load(f)
+    with open(segments_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    field = meta.get("field", "cosmetics")
+
+    # 既存の segment_keywords.json があれば手動追加分を保持
+    existing_manual = {}
+    sk_path = case_dir / "segment_keywords.json"
+    if sk_path.exists():
+        with open(sk_path, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+        for item in existing:
+            manual_kws = [kw for kw in item.get("keywords", []) if kw.get("source") == "manual"]
+            if manual_kws:
+                existing_manual[item["segment_id"]] = manual_kws
+
+    result = suggest_keywords_by_segment(segs, hongan, field)
+
+    # 手動追加分をマージ
+    for item in result:
+        seg_id = item["segment_id"]
+        if seg_id in existing_manual:
+            existing_terms = {kw["term"] for kw in item["keywords"]}
+            for manual_kw in existing_manual[seg_id]:
+                if manual_kw["term"] not in existing_terms:
+                    item["keywords"].append(manual_kw)
+
+    # 保存
+    with open(sk_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    # keywords.json も同期更新
+    _sync_to_keyword_groups(case_dir, result, field)
+
+    return jsonify(result)
+
+
+@app.route("/case/<case_id>/keywords/segments", methods=["GET"])
+def get_segment_keywords(case_id):
+    """分節別キーワードを取得"""
+    case_dir = get_case_dir(case_id)
+    sk_path = case_dir / "segment_keywords.json"
+    if not sk_path.exists():
+        return jsonify({"error": "分節別キーワードがありません。先に提案を実行してください。"}), 404
+    with open(sk_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return jsonify(data)
+
+
+@app.route("/case/<case_id>/keywords/add-to-segment", methods=["POST"])
+def add_keyword_to_segment(case_id):
+    """テキスト選択からキーワードを分節に追加"""
+    case_dir = get_case_dir(case_id)
+    sk_path = case_dir / "segment_keywords.json"
+
+    data = request.get_json() or {}
+    term = (data.get("term") or "").strip()
+    segment_id = (data.get("segment_id") or "").strip()
+
+    if not term or not segment_id:
+        return jsonify({"error": "term と segment_id は必須です"}), 400
+
+    # segment_keywords.json を読み込み（なければ空リストから開始）
+    seg_keywords = []
+    if sk_path.exists():
+        with open(sk_path, "r", encoding="utf-8") as f:
+            seg_keywords = json.load(f)
+
+    # 該当分節を探す
+    found = False
+    for item in seg_keywords:
+        if item["segment_id"] == segment_id:
+            if not any(kw["term"] == term for kw in item["keywords"]):
+                item["keywords"].append({
+                    "term": term,
+                    "source": "manual",
+                    "type": "手動追加",
+                })
+            found = True
+            break
+
+    if not found:
+        seg_keywords.append({
+            "segment_id": segment_id,
+            "segment_text": "",
+            "keywords": [{"term": term, "source": "manual", "type": "手動追加"}],
+        })
+
+    with open(sk_path, "w", encoding="utf-8") as f:
+        json.dump(seg_keywords, f, ensure_ascii=False, indent=2)
+
+    meta = load_case_meta(case_id)
+    field = meta.get("field", "cosmetics") if meta else "cosmetics"
+    _sync_to_keyword_groups(case_dir, seg_keywords, field)
+
+    return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/keywords/remove-from-segment", methods=["POST"])
+def remove_keyword_from_segment(case_id):
+    """キーワードを分節から削除"""
+    case_dir = get_case_dir(case_id)
+    sk_path = case_dir / "segment_keywords.json"
+
+    if not sk_path.exists():
+        return jsonify({"error": "分節別キーワードがありません"}), 404
+
+    data = request.get_json() or {}
+    term = (data.get("term") or "").strip()
+    segment_id = (data.get("segment_id") or "").strip()
+
+    if not term or not segment_id:
+        return jsonify({"error": "term と segment_id は必須です"}), 400
+
+    with open(sk_path, "r", encoding="utf-8") as f:
+        seg_keywords = json.load(f)
+
+    for item in seg_keywords:
+        if item["segment_id"] == segment_id:
+            item["keywords"] = [kw for kw in item["keywords"] if kw["term"] != term]
+            break
+
+    with open(sk_path, "w", encoding="utf-8") as f:
+        json.dump(seg_keywords, f, ensure_ascii=False, indent=2)
+
+    meta = load_case_meta(case_id)
+    field = meta.get("field", "cosmetics") if meta else "cosmetics"
+    _sync_to_keyword_groups(case_dir, seg_keywords, field)
+
+    return jsonify({"success": True})
+
+
 if __name__ == "__main__":
     # templates ディレクトリがなければ作成
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
