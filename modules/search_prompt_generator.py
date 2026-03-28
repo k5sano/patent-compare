@@ -17,21 +17,24 @@ import re
 import json
 
 
-def generate_search_prompt(segments, keywords, field="cosmetics"):
+def generate_search_prompt(segments, keywords, field="cosmetics", case_meta=None):
     """分節+キーワードから先行技術検索プロンプトを生成
 
     Parameters:
         segments: 請求項分節データ (segments.json)
         keywords: キーワードグループ (keywords.json)
         field: "cosmetics" | "laminate"
+        case_meta: 案件メタ情報 (case.yaml, optional)
 
     Returns:
         プロンプト文字列
     """
     sections = [
         _build_search_task(field),
+        _build_application_info(case_meta),
         _build_claim_segments(segments),
         _build_keyword_groups(keywords),
+        _build_fterm_info(keywords),
         _build_search_instructions(field),
         _build_output_format(),
     ]
@@ -47,6 +50,55 @@ def _build_search_task(field):
 
 各構成要件をカバーしうる公知文献を幅広く検索し、進歩性の拒絶理由通知を構成するのに適した
 主引例候補・副引例候補・技術常識を示す文献をリストアップしてください。"""
+
+
+def _build_application_info(case_meta):
+    """出願情報セクションを構築"""
+    if not case_meta:
+        return ""
+
+    lines = ["## 本願の出願情報"]
+    patent_number = case_meta.get("patent_number", "")
+    patent_title = case_meta.get("patent_title", "")
+    case_id = case_meta.get("case_id", "")
+    field = case_meta.get("field", "")
+    field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
+
+    if case_id:
+        lines.append(f"- 公開番号: JP{case_id}")
+    if patent_number:
+        lines.append(f"- 特許番号: {patent_number}")
+    if patent_title:
+        lines.append(f"- 発明の名称: {patent_title}")
+    if field_label:
+        lines.append(f"- 技術分野: {field_label}")
+
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _build_fterm_info(keywords):
+    """キーワードグループからFターム情報を抽出して出力"""
+    if not keywords:
+        return ""
+
+    fterms = []
+    for group in keywords:
+        codes = group.get("search_codes", {})
+        if codes:
+            for code_type, values in codes.items():
+                if isinstance(values, list):
+                    fterms.extend(values)
+                elif isinstance(values, str) and values:
+                    fterms.append(values)
+
+    if not fterms:
+        return ""
+
+    lines = ["## Fターム・IPC情報"]
+    lines.append("以下の分類コードも検索の参考にしてください。")
+    for ft in fterms:
+        lines.append(f"- {ft}")
+    return "\n".join(lines)
 
 
 def _build_claim_segments(segments):
@@ -124,6 +176,7 @@ def _build_output_format():
     "relevance": "主引例候補",
     "relevant_segments": ["1A", "1B", "1C"],
     "reason": "油状泡沫性エアゾール化粧料に関する発明であり、本願の構成要件1A〜1Cに相当する構成を開示している。",
+    "confidence": "high",
     "google_patents_url": "https://patents.google.com/patent/US5286475/en"
   },
   {
@@ -134,6 +187,7 @@ def _build_output_format():
     "relevance": "副引例候補",
     "relevant_segments": ["1G", "1H"],
     "reason": "ポリアルキレングリコールエーテルを含有する化粧料組成物に関し...",
+    "confidence": "medium",
     "google_patents_url": "https://patents.google.com/patent/JP2020123456A/ja"
   }
 ]
@@ -147,6 +201,7 @@ def _build_output_format():
 - **relevance**: 「主引例候補」「副引例候補」「技術常識」のいずれか
 - **relevant_segments**: 関連する構成要件のID（例: ["1A", "1B"]）
 - **reason**: この文献が候補となる理由（2〜3文で）
+- **confidence**: 候補としての確信度。`"high"` = 実在を確認済み・内容の関連性が高い、`"medium"` = 番号は確からしいが内容未確認、`"low"` = 記憶に基づく推測
 - **google_patents_url**: Google PatentsのURL。以下の形式:
   - US特許: `https://patents.google.com/patent/US{番号}/en`
   - JP特許: `https://patents.google.com/patent/JP{番号}A/ja`（公開）or `JP{番号}B2/ja`（登録）
