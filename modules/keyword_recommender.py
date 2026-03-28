@@ -196,12 +196,13 @@ def _build_spec_excerpt(hongan, max_chars=8000):
     return "\n".join(lines)
 
 
-def _ai_find_related_in_spec(seg_keywords, spec_text):
+def _ai_find_related_in_spec(seg_keywords, spec_text, field="cosmetics"):
     """Step 2: 明細書から関連語を AI で拾う
 
     Parameters:
         seg_keywords: Step 1 の結果リスト
         spec_text: _build_spec_excerpt() の出力
+        field: 技術分野
 
     Returns:
         list of dict or None（エラー/スキップ時）
@@ -227,7 +228,13 @@ def _ai_find_related_in_spec(seg_keywords, spec_text):
     if not seg_lines:
         return None
 
-    prompt = f"""以下の特許請求項のキーワードについて、明細書中で関連して言及されている語句を探してください。
+    field_role = {
+        "cosmetics": "化粧品技術者・化学の専門家",
+        "laminate": "高分子材料・積層フィルム技術の専門家",
+    }.get(field, "当該技術分野の専門家")
+
+    prompt = f"""あなたは{field_role}であり、特許調査に精通しています。
+以下の特許請求項のキーワードについて、明細書中で関連して言及されている語句を探してください。
 
 【分節別キーワード】
 {chr(10).join(seg_lines)}
@@ -337,7 +344,13 @@ def _ai_find_related_in_dicts(all_keywords, field):
     uc_display = ", ".join(uc_keys[:max_keys])
     inci_display = ", ".join(inci_keys[:max_keys])
 
-    prompt = f"""以下のキーワードそれぞれについて、各辞書のキー一覧から技術的に対応するキーを選んでください。
+    field_role = {
+        "cosmetics": "化粧品技術者・化学の専門家",
+        "laminate": "高分子材料・積層フィルム技術の専門家",
+    }.get(field, "当該技術分野の専門家")
+
+    prompt = f"""あなたは{field_role}であり、特許調査に精通しています。
+以下のキーワードそれぞれについて、各辞書のキー一覧から技術的に対応するキーを選んでください。
 
 【キーワード一覧】
 {", ".join(terms_list[:60])}
@@ -531,7 +544,7 @@ def recommend_regex(segments, hongan, field):
     # === Step 2: AI 明細書探索 ===
     spec_text = _build_spec_excerpt(hongan, max_chars=8000)
     if spec_text:
-        ai_spec = _ai_find_related_in_spec(results, spec_text)
+        ai_spec = _ai_find_related_in_spec(results, spec_text, field)
         if ai_spec:
             _merge_step2_results(results, ai_spec)
 
