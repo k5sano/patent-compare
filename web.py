@@ -941,6 +941,7 @@ def _find_citation_pdf(input_dir, citation_id):
 def search_prompt(case_id):
     """先行技術検索プロンプトを生成"""
     from modules.search_prompt_generator import generate_search_prompt
+    from modules.search_injector import inject_search_results
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -962,6 +963,9 @@ def search_prompt(case_id):
 
     field = meta.get("field", "cosmetics")
     prompt_text = generate_search_prompt(segs, keywords, field)
+
+    # SerpAPIで事前検索し、結果をプロンプトに注入
+    prompt_text = inject_search_results(prompt_text, segs, keywords, field)
 
     # ファイルに保存
     prompts_dir = case_dir / "prompts"
