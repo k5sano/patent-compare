@@ -267,6 +267,9 @@
   .seg-kw-edit-btn:hover { background: var(--surface2); color: var(--text1); }
   .seg-kw-add-btn { background: var(--accent); border: none; color: #fff; cursor: pointer; font-size: 0.78rem; padding: 3px 10px; border-radius: 4px; white-space: nowrap; }
   .seg-kw-add-btn:hover { opacity: 0.85; }
+  .kw-term { cursor: pointer; border-bottom: 1px dashed transparent; }
+  .kw-term:hover { border-bottom-color: var(--text2); }
+  .kw-edit-input { border: 1px solid var(--accent); border-radius: 3px; font-size: 0.82rem; padding: 0 4px; background: var(--surface1); color: var(--text1); width: auto; min-width: 4em; }
 
   /* テキスト選択キーワード追加ポップオーバー */
   #kw-add-popover { display: none; position: absolute; z-index: 9999; background: var(--surface); border: 1px solid var(--border);
@@ -2430,9 +2433,10 @@ function renderSegmentKeywords(segKeywords) {
       const tb = kw.tier ? (tierBadge[kw.tier] || '') : '';
       const typeTitle = kw.type ? ` title="${kw.type}"` : '';
       const escapedTerm = kw.term.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      const htmlTerm = kw.term.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       kwHtml += `<span class="seg-kw-tag ${tc}"${typeTitle}>
         ${tb}<span class="badge ${bc}">${bl}</span>
-        ${kw.term}
+        <span class="kw-term" onclick="startEditKeyword(this, '${seg.segment_id}', '${escapedTerm}')">${htmlTerm}</span>
         <button class="kw-del-btn" onclick="removeSegmentKeyword('${seg.segment_id}', '${escapedTerm}')">&times;</button>
       </span>`;
     }
@@ -2473,6 +2477,53 @@ async function removeSegmentKeyword(segmentId, term) {
       renderSegmentKeywords(await dataResp.json());
     }
   }
+}
+
+function startEditKeyword(span, segmentId, oldTerm) {
+  // 既に編集中なら何もしない
+  if (span.querySelector('input')) return;
+  const currentText = oldTerm.replace(/&quot;/g, '"').replace(/\\'/g, "'");
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'kw-edit-input';
+  input.value = currentText;
+  // 文字数に応じて幅を調整
+  input.style.width = Math.max(4, currentText.length + 2) + 'em';
+  input.addEventListener('input', function() {
+    this.style.width = Math.max(4, this.value.length + 2) + 'em';
+  });
+
+  const commit = async () => {
+    const newTerm = input.value.trim();
+    if (!newTerm || newTerm === currentText) {
+      // 変更なし → 元に戻す
+      span.textContent = currentText;
+      return;
+    }
+    const resp = await fetch(`/case/${CASE_ID}/keywords/update-segment-keyword`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({segment_id: segmentId, old_term: currentText, new_term: newTerm}),
+    });
+    if (resp.ok) {
+      const dataResp = await fetch(`/case/${CASE_ID}/keywords/segments`);
+      if (dataResp.ok) renderSegmentKeywords(await dataResp.json());
+    } else {
+      span.textContent = currentText;
+    }
+  };
+
+  let committed = false;
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); committed = true; commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); span.textContent = currentText; }
+  });
+  input.addEventListener('blur', () => { if (!committed) commit(); });
+
+  span.textContent = '';
+  span.appendChild(input);
+  input.focus();
+  input.select();
 }
 
 function toggleSegKwEdit(segmentId) {

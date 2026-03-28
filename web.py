@@ -1645,6 +1645,45 @@ def remove_keyword_from_segment(case_id):
     return jsonify({"success": True})
 
 
+@app.route("/case/<case_id>/keywords/update-segment-keyword", methods=["POST"])
+def update_segment_keyword(case_id):
+    """分節内キーワードのterm を修正（source/type は保持）"""
+    case_dir = get_case_dir(case_id)
+    sk_path = case_dir / "segment_keywords.json"
+
+    if not sk_path.exists():
+        return jsonify({"error": "分節別キーワードがありません"}), 404
+
+    data = request.get_json() or {}
+    segment_id = (data.get("segment_id") or "").strip()
+    old_term = (data.get("old_term") or "").strip()
+    new_term = (data.get("new_term") or "").strip()
+
+    if not segment_id or not old_term or not new_term:
+        return jsonify({"error": "segment_id, old_term, new_term は必須です"}), 400
+
+    with open(sk_path, "r", encoding="utf-8") as f:
+        seg_keywords = json.load(f)
+
+    updated = False
+    for item in seg_keywords:
+        if item["segment_id"] == segment_id:
+            for kw in item["keywords"]:
+                if kw["term"] == old_term:
+                    kw["term"] = new_term
+                    updated = True
+                    break
+            break
+
+    if not updated:
+        return jsonify({"error": "該当キーワードが見つかりません"}), 404
+
+    with open(sk_path, "w", encoding="utf-8") as f:
+        json.dump(seg_keywords, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
 # ===== 3段階検索ワークフロー =====
 
 @app.route("/case/<case_id>/search/presearch/prompt", methods=["POST"])
