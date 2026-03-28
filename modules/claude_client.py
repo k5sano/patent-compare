@@ -4,7 +4,7 @@
 Claude Code CLI ラッパー
 
 claude -p コマンドをサブプロセスで呼び出し、プロンプトを送信して回答を取得する。
-API キー不要（Claude Code の既存認証を利用）。
+Claude Max (OAuth認証) 環境で動作。
 """
 
 import os
@@ -64,9 +64,10 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT):
 
     cmd = ["claude", "-p"]
 
-    # CLAUDECODE 環境変数を除去してネストセッションエラーを防止
+    # セッション固有の環境変数を除去し、OAuth認証（~/.claude/.credentials.json）を使わせる
     env = os.environ.copy()
-    env.pop("CLAUDECODE", None)
+    env.pop("CLAUDECODE", None)        # ネストセッション防止
+    env.pop("ANTHROPIC_API_KEY", None)  # セッションキー除去→OAuthフォールバック
 
     logger.info("Claude CLI 呼び出し: prompt=%d文字, timeout=%d秒", len(prompt_text), timeout)
 
