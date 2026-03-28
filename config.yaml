@@ -37,3 +37,7 @@ prompt:
 # Excel出力設定
 excel:
   max_citation_columns: 10
+
+# SerpAPI設定（Google Patents検索用）
+# https://serpapi.com/ でAPIキーを取得してください
+serpapi_key: ""

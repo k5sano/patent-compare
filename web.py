@@ -1204,8 +1204,28 @@ def delete_case(case_id):
 @app.route("/api/claude-status")
 def claude_status():
     """Claude CLI の利用可能状態を返す"""
-    from modules.claude_client import is_claude_available
-    return jsonify({"available": is_claude_available()})
+    from modules.claude_client import is_claude_available, _load_serpapi_key
+    return jsonify({
+        "available": is_claude_available(),
+        "search_available": bool(_load_serpapi_key()),
+    })
+
+
+@app.route("/api/serpapi-key", methods=["POST"])
+def set_serpapi_key():
+    """SerpAPIキーを config.yaml に保存"""
+    data = request.get_json() or {}
+    key = (data.get("key") or "").strip()
+
+    config_path = PROJECT_ROOT / "config.yaml"
+    cfg = {}
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    cfg["serpapi_key"] = key
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+    return jsonify({"success": True})
 
 
 @app.route("/case/<case_id>/search/execute", methods=["POST"])
@@ -1241,9 +1261,9 @@ def search_execute(case_id):
     with open(prompts_dir / "search_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
-    # Claude CLI 呼び出し
+    # Claude CLI 呼び出し（検索ツール付き）
     try:
-        raw_response = call_claude(prompt_text, timeout=600)
+        raw_response = call_claude(prompt_text, timeout=600, use_search=True)
     except ClaudeClientError as e:
         return jsonify({"error": str(e), "phase": "claude_call"}), 502
 

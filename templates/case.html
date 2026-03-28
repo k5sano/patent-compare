@@ -432,8 +432,9 @@
                   {% if not segments or not keywords %}disabled title="分節とキーワードが必要です"{% endif %}>
             検索プロンプト生成</button>
           <button class="btn btn-success" id="btn-copy-search" onclick="copySearchPrompt()" style="display:none;">コピー</button>
-          <button class="btn btn-execute" onclick="executeSearch()" style="display:none;"
+          <button class="btn btn-execute" id="btn-search-execute" onclick="executeSearch()" style="display:none;"
                   {% if not segments or not keywords %}disabled{% endif %}>&#9889; 直接実行</button>
+          <span id="search-api-status" style="display:none; font-size:0.75rem; padding:2px 6px; border-radius:4px; background:#14532d; color:#4ade80;">Web検索ON</span>
           <span id="search-prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>
         <div class="prompt-box" id="search-prompt-text" style="display:none; margin-top:0.8rem; max-height:250px;"></div>
@@ -1950,6 +1951,18 @@ async function annotateAll() {
       document.querySelectorAll('.btn-execute').forEach(btn => {
         btn.style.display = 'inline-block';
       });
+      // Web検索APIの状態表示
+      const apiStatus = document.getElementById('search-api-status');
+      if (apiStatus) {
+        if (data.search_available) {
+          apiStatus.style.display = 'inline-block';
+        } else {
+          apiStatus.style.display = 'inline-block';
+          apiStatus.textContent = 'Web検索OFF';
+          apiStatus.style.background = '#422006';
+          apiStatus.style.color = '#fbbf24';
+        }
+      }
     }
   } catch(e) { /* Claude未対応環境ではボタン非表示のまま */ }
 })();
