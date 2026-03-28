@@ -2376,21 +2376,34 @@ function renderSegmentKeywords(segKeywords) {
   // 分節IDリストを更新
   window._segmentIds = segKeywords.map(s => s.segment_id);
 
-  const badgeClass = {
-    'regex': 'badge-regex', 'dict': 'badge-dict',
-    'ai': 'badge-ai', 'manual': 'badge-manual',
-    'ai_semantic': 'badge-semantic', 'dict_ig': 'badge-dict',
-    'dict_fterm': 'badge-dict', 'dict_uc': 'badge-dict',
-    'dict_i2f': 'badge-dict', 'dict_syn': 'badge-dict',
-    'dict_inci': 'badge-dict', 'spec': 'badge-spec',
-    'dictionary': 'badge-dict',
-  };
-  const badgeLabel = {
-    'regex': '正規表現', 'dict': '辞書', 'ai': 'AI', 'manual': '手動',
-    'ai_semantic': 'AI意味', 'dict_ig': '成分G', 'dict_fterm': 'Fterm',
-    'dict_uc': '上位概念', 'dict_i2f': 'Fterm逆', 'dict_syn': '同義語',
-    'dict_inci': 'INCI', 'spec': '実施例', 'dictionary': '辞書',
-  };
+  // source → badge 解決（prefix対応: "spec:【0015】" → spec, "dict:synonyms" → dict:synonyms）
+  function resolveBadge(source) {
+    const exact = {
+      'claim': ['badge-regex', '請求項'],
+      'regex': ['badge-regex', '正規表現'],
+      'manual': ['badge-manual', '手動'],
+      'ai': ['badge-ai', 'AI'],
+      'ai_semantic': ['badge-semantic', 'AI意味'],
+      'dict': ['badge-dict', '辞書'],
+      'dictionary': ['badge-dict', '辞書'],
+      'dict_ig': ['badge-dict', '成分G'],
+      'dict_fterm': ['badge-dict', 'Fterm'],
+      'dict_uc': ['badge-dict', '上位概念'],
+      'dict_i2f': ['badge-dict', 'Fterm逆'],
+      'dict_syn': ['badge-dict', '同義語'],
+      'dict_inci': ['badge-dict', 'INCI'],
+      'spec': ['badge-spec', '明細書'],
+      'dict:synonyms': ['badge-dict', '同義語'],
+      'dict:upper_concepts': ['badge-dict', '上位概念'],
+      'dict:inci': ['badge-dict', 'INCI'],
+      'dict:fterm': ['badge-dict', 'Fterm'],
+    };
+    if (exact[source]) return exact[source];
+    // prefix match: "spec:【0015】" → spec prefix
+    if (source.startsWith('spec:')) return ['badge-spec', '明細書'];
+    if (source.startsWith('dict:')) return ['badge-dict', '辞書'];
+    return ['badge-regex', source];
+  }
   const tierClass = { 'core': 'tier-core', 'extended': 'tier-extended', 'not': 'tier-not' };
   const tierBadge = {
     'core': '<span class="tier-badge tier-badge-core">C</span>',
@@ -2404,8 +2417,7 @@ function renderSegmentKeywords(segKeywords) {
 
     let kwHtml = '';
     for (const kw of seg.keywords) {
-      const bc = badgeClass[kw.source] || 'badge-regex';
-      const bl = badgeLabel[kw.source] || kw.source;
+      const [bc, bl] = resolveBadge(kw.source || '');
       const tc = kw.tier ? (tierClass[kw.tier] || '') : '';
       const tb = kw.tier ? (tierBadge[kw.tier] || '') : '';
       const typeTitle = kw.type ? ` title="${kw.type}"` : '';
