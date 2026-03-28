@@ -425,7 +425,14 @@ def suggest_keywords(case_id):
         segs = json.load(f)
 
     field = meta.get("field", "cosmetics")
-    result = _suggest(hongan, segs, field)
+
+    # keyword_dictionary.json があれば優先的に使用
+    kw_dict = _load_search_data(case_dir, "keyword_dictionary.json")
+    if kw_dict:
+        from modules.search_prompt_generator import convert_keyword_dict_to_groups
+        result = convert_keyword_dict_to_groups(kw_dict, segs)
+    else:
+        result = _suggest(hongan, segs, field)
 
     with open(case_dir / "keywords.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
