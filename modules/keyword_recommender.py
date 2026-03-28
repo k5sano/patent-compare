@@ -19,11 +19,32 @@ import os
 import re
 import json
 import logging
+import functools
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+# --- 辞書キャッシュ ---
+
+@functools.lru_cache(maxsize=32)
+def _cached_load_dict(field, dict_name):
+    """辞書ファイルを読み込み（キャッシュ付き）"""
+    dict_path = PROJECT_ROOT / "dictionaries" / field / dict_name
+    if dict_path.exists():
+        try:
+            with open(dict_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return json.dumps(data, ensure_ascii=False)  # lru_cache は dict を扱えないので文字列化
+        except Exception:
+            pass
+    return "{}"
+
+
+def _get_dict(field, dict_name):
+    """キャッシュから辞書を取得（デシリアライズ済み）"""
+    return json.loads(_cached_load_dict(field, dict_name))
 
 # --- ストップワード ---
 
@@ -455,6 +476,379 @@ def _extract_json_array(raw_text):
                     continue
 
     return None
+
+
+# --- Phase 3: AI意味理解 + 辞書確定展開 (recommend_semantic) ---
+
+def _build_dict_catalog(field):
+    """辞書カテゴリのカタログをAIプロンプト用にコンパクトに生成
+
+    AIに「この辞書にはこういうカテゴリがある」と示すことで、
+    AIが分節テキストを辞書カテゴリにマッピングできるようにする。
+    """
+    lines = []
+
+    # 1. ingredient_groups.json
+    ig = _get_dict(field, "ingredient_groups.json")
+    if ig:
+        lines.append("【成分グループ辞書】")
+        for cat_name, cat_data in ig.items():
+            if "sub_groups" in cat_data:
+                subs = list(cat_data["sub_groups"].keys())
+                examples = []
+                for sg_name, sg_items in cat_data["sub_groups"].items():
+                    examples.extend(sg_items[:2])
+                lines.append(
+                    f"  {cat_name}: サブ=[{', '.join(subs)}] "
+                    f"例=[{', '.join(examples[:8])}]"
+                )
+            elif "examples" in cat_data:
+                exs = cat_data["examples"][:5]
+                lines.append(f"  {cat_name}: 例=[{', '.join(exs)}]")
+
+    # 2. Fterm structure
+    fterm_files = {
+        "cosmetics": "fterm_4c083_structure.json",
+        "laminate": "fterm_4f100_structure.json",
+    }
+    fterm_name = fterm_files.get(field, "")
+    if fterm_name:
+        ft = _get_dict(field, fterm_name)
+        if ft:
+            lines.append("\n【Fterm分類】")
+            for cat_code, cat_data in ft.get("categories", {}).items():
+                label = cat_data.get("label", "")
+                entries = cat_data.get("entries", {})
+                entry_samples = []
+                for ecode, edata in list(entries.items())[:4]:
+                    entry_samples.append(f"{ecode}:{edata.get('label', '')}")
+                lines.append(f"  {cat_code}({label}): {', '.join(entry_samples)}")
+
+    # 3. upper_concepts.json
+    uc = _get_dict(field, "upper_concepts.json")
+    if uc:
+        lines.append("\n【上位概念辞書】")
+        for ingredient, data in uc.items():
+            uppers = data.get("upper_concepts", [])
+            lines.append(f"  {ingredient} → {', '.join(uppers[:4])}")
+
+    return "\n".join(lines)
+
+
+def _call_ai_for_semantic_analysis(segments, hongan, field):
+    """AIに分節の技術的意味理解＋辞書カテゴリマッピングを依頼
+
+    Returns:
+        {segment_id: {technical_meaning, ingredient_group_matches,
+                      fterm_matches, upper_concept_matches, additional_terms}}
+        または None（APIキー未設定・エラー時）
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        logger.info("ANTHROPIC_API_KEY 未設定 — semantic分析スキップ")
+        return None
+
+    # 分節リストを組み立て
+    seg_lines = []
+    seg_ids = []
+    for claim in segments:
+        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
+        if not is_indep:
+            continue
+        for seg in claim.get("segments", []):
+            seg_lines.append(f'{seg["id"]}: {seg["text"]}')
+            seg_ids.append(seg["id"])
+
+    if not seg_lines:
+        return None
+
+    field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
+    dict_catalog = _build_dict_catalog(field)
+    description_excerpt = _extract_description_excerpt(hongan, max_chars=2000)
+
+    prompt = f"""あなたは{field_label}分野の特許調査の専門家です。
+以下の請求項分節それぞれについて、技術的意味を理解し、当方の辞書カテゴリへのマッピングを行ってください。
+
+【分節リスト】
+{chr(10).join(seg_lines)}
+
+【辞書カタログ】
+{dict_catalog}
+
+【本願明細書（参考）】
+{description_excerpt}
+
+【出力形式】JSON配列で返してください:
+[
+  {{
+    "segment_id": "1A",
+    "technical_meaning": "この分節は油性基剤に関する記述で…",
+    "ingredient_group_matches": ["油剤", "油剤/炭化水素油"],
+    "fterm_matches": ["AC01", "AC02"],
+    "upper_concept_matches": ["流動パラフィン", "スクワラン"],
+    "additional_terms": {{
+      "core": ["特許公報で頻出する検索コア語"],
+      "extended": ["漏れ防止の拡張語"],
+      "not": ["ノイズ除外語"]
+    }}
+  }}
+]
+
+【重要な指示】
+- ingredient_group_matches: 辞書カタログの「成分グループ辞書」を参照し、分節内容に該当するカテゴリ名を記入。サブグループまで特定できる場合は「カテゴリ/サブグループ」形式（例: 油剤/シリコーン油）。
+- fterm_matches: 辞書カタログの「Fterm分類」を参照し、該当するFtermコード（AA01等）を記入。
+- upper_concept_matches: 辞書カタログの「上位概念辞書」を参照し、分節に関連する具体成分名を記入。
+- additional_terms: 辞書カタログに載っていないが検索に有用な語。core=高適合語、extended=漏れ防止語、not=ノイズ除外語。
+- 辞書カタログに完全一致しなくても、意味的に最も近いカテゴリを選んでください。
+- 技術的内容が薄い分節（「化粧料」のみ等）は各フィールドを空配列にしてください。
+- 1つの分節が複数カテゴリに該当する場合は全て列挙してください。
+"""
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw_text = response.content[0].text
+        ai_data = _extract_json_array(raw_text)
+
+        if not ai_data:
+            logger.warning("semantic分析: JSONを抽出できませんでした")
+            return None
+
+        # seg_id でインデックス化
+        result = {}
+        for item in ai_data:
+            sid = item.get("segment_id", "")
+            if sid in seg_ids:
+                result[sid] = item
+
+        logger.info("semantic分析: %d/%d 分節の結果を取得", len(result), len(seg_ids))
+        return result
+
+    except ImportError:
+        logger.warning("anthropic パッケージ未インストール — semantic分析スキップ")
+        return None
+    except Exception as e:
+        logger.warning("semantic分析エラー: %s", e)
+        return None
+
+
+def _expand_from_ai_mappings(ai_mapping, field):
+    """AIのカテゴリマッピングから辞書を使った確定的キーワード展開（8ステップ）
+
+    Parameters:
+        ai_mapping: 1分節分のAI結果 dict
+        field: 技術分野
+
+    Returns:
+        キーワードリスト [{term, source, type, tier}, ...]
+    """
+    keywords = []
+    seen = set()
+
+    def _add(term, source, kw_type, tier="core"):
+        if term and term not in seen:
+            seen.add(term)
+            keywords.append({
+                "term": term, "source": source, "type": kw_type, "tier": tier,
+            })
+
+    # --- Step 1: AI直接提案語 (additional_terms) ---
+    additional = ai_mapping.get("additional_terms", {})
+    if isinstance(additional, dict):
+        for term in additional.get("core", []):
+            _add(term, "ai_semantic", "AI意味理解(コア語)", "core")
+        for term in additional.get("extended", []):
+            _add(term, "ai_semantic", "AI意味理解(拡張語)", "extended")
+        for term in additional.get("not", []):
+            _add(term, "ai_semantic", "AI意味理解(NOT語)", "not")
+
+    # --- Step 2: ingredient_groups.json 展開 ---
+    ig = _get_dict(field, "ingredient_groups.json")
+    for match_name in ai_mapping.get("ingredient_group_matches", []):
+        parts = match_name.split("/")
+        cat_name = parts[0]
+        sub_name = parts[1] if len(parts) > 1 else None
+
+        # カテゴリ検索（完全一致 → 部分一致フォールバック）
+        cat_data = ig.get(cat_name)
+        if not cat_data:
+            for key in ig:
+                if cat_name in key or key in cat_name:
+                    cat_data = ig[key]
+                    cat_name = key
+                    break
+        if not cat_data:
+            continue
+
+        _add(cat_name, "dict_ig", "成分グループ", "core")
+
+        if "sub_groups" in cat_data:
+            if sub_name:
+                # 指定サブグループの成分を展開
+                sg_items = cat_data["sub_groups"].get(sub_name)
+                if not sg_items:
+                    for sg_key in cat_data["sub_groups"]:
+                        if sub_name in sg_key or sg_key in sub_name:
+                            sg_items = cat_data["sub_groups"][sg_key]
+                            sub_name = sg_key
+                            break
+                if sg_items:
+                    _add(sub_name, "dict_ig", "サブグループ", "core")
+                    for item in sg_items[:8]:
+                        _add(item, "dict_ig", f"{cat_name}/{sub_name}", "extended")
+            else:
+                # サブグループ全体を展開
+                for sg_key, sg_items in cat_data["sub_groups"].items():
+                    _add(sg_key, "dict_ig", f"{cat_name}サブ", "core")
+                    for item in sg_items[:3]:
+                        _add(item, "dict_ig", f"{cat_name}/{sg_key}", "extended")
+        elif "examples" in cat_data:
+            for item in cat_data["examples"][:8]:
+                _add(item, "dict_ig", f"{cat_name}例", "extended")
+
+    # --- Step 3: Fterm展開 ---
+    fterm_files = {
+        "cosmetics": "fterm_4c083_structure.json",
+        "laminate": "fterm_4f100_structure.json",
+    }
+    fterm_name = fterm_files.get(field, "")
+    if fterm_name:
+        ft = _get_dict(field, fterm_name)
+        categories = ft.get("categories", {})
+        for fcode in ai_mapping.get("fterm_matches", []):
+            cat_code = fcode[:2] if len(fcode) >= 2 else ""
+            cat_data = categories.get(cat_code, {})
+            entry = cat_data.get("entries", {}).get(fcode, {})
+            if entry:
+                label = entry.get("label", "")
+                if label:
+                    _add(label, "dict_fterm", f"Fterm({fcode})", "core")
+                for ex in entry.get("examples", [])[:5]:
+                    _add(ex, "dict_fterm", f"Fterm({fcode})例", "extended")
+
+    # --- Step 4: upper_concepts.json 展開 ---
+    uc = _get_dict(field, "upper_concepts.json")
+    for uc_name in ai_mapping.get("upper_concept_matches", []):
+        entry = uc.get(uc_name)
+        if not entry:
+            # 部分一致フォールバック
+            for key in uc:
+                if uc_name in key or key in uc_name:
+                    entry = uc[key]
+                    uc_name = key
+                    break
+        if not entry:
+            continue
+
+        _add(uc_name, "dict_uc", "上位概念キー", "core")
+        for up in entry.get("upper_concepts", []):
+            _add(up, "dict_uc", "上位概念", "core")
+        for sib in entry.get("same_fterm_siblings", []):
+            _add(sib, "dict_uc", "Fterm兄弟語", "extended")
+        for bsib in entry.get("broader_fterm_siblings", [])[:5]:
+            _add(bsib, "dict_uc", "上位Fterm兄弟語", "extended")
+        for bn in entry.get("brand_names", []):
+            _add(bn, "dict_uc", "商品名", "extended")
+
+    # --- Step 5: ingredient_to_fterm.json 逆引き ---
+    i2f = _get_dict(field, "ingredient_to_fterm.json")
+    if i2f:
+        target_codes = set()
+        # AI指定のFtermコード
+        target_codes.update(ai_mapping.get("fterm_matches", []))
+        # upper_concept成分のFtermコード
+        for uc_name in ai_mapping.get("upper_concept_matches", []):
+            target_codes.update(i2f.get(uc_name, []))
+
+        if target_codes:
+            count = 0
+            for ingredient, codes in i2f.items():
+                if ingredient in seen:
+                    continue
+                if any(c in target_codes for c in codes):
+                    _add(ingredient, "dict_i2f", "Fterm逆引き", "extended")
+                    count += 1
+                    if count >= 8:
+                        break
+
+    # --- Step 6: synonyms.json 展開 ---
+    synonyms = _get_dict(field, "synonyms.json")
+    if synonyms:
+        core_terms = [kw["term"] for kw in keywords if kw.get("tier") == "core"]
+        for term in core_terms:
+            for syn in synonyms.get(term, []):
+                _add(syn, "dict_syn", "同義語", "extended")
+
+    # --- Step 7: INCI名展開 ---
+    inci_ja = _get_dict(field, "inci_ja.json")
+    if inci_ja:
+        core_terms = [kw["term"] for kw in keywords if kw.get("tier") == "core"]
+        for term in core_terms:
+            if term in inci_ja:
+                entry = inci_ja[term]
+                inci_name = entry.get("inci_name", entry) if isinstance(entry, dict) else entry
+                if inci_name:
+                    _add(inci_name, "dict_inci", "INCI英名", "extended")
+
+    # Step 8: technical_meaning は呼び出し元 (recommend_semantic) で結果に付与
+
+    return keywords
+
+
+def recommend_semantic(segments, hongan, field):
+    """AI意味理解 + 辞書確定展開によるキーワード提案
+
+    Phase A: AIが各分節の技術的意味を理解し、辞書カテゴリにマッピング
+    Phase B: プログラムが辞書を引いて確定的にキーワードを展開
+
+    Parameters:
+        segments: 請求項分節データ
+        hongan: 本願構造化テキスト
+        field: 技術分野
+
+    Returns:
+        分節ごとのキーワードリスト（technical_meaning 付き）
+    """
+    # Phase A: AI呼び出し
+    ai_result = _call_ai_for_semantic_analysis(segments, hongan, field)
+    if not ai_result:
+        return []
+
+    # Phase B: 各分節を辞書展開
+    results = []
+    for claim in segments:
+        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
+        if not is_indep:
+            continue
+        for seg in claim.get("segments", []):
+            seg_id = seg["id"]
+            if seg_id not in ai_result:
+                results.append({
+                    "segment_id": seg_id,
+                    "segment_text": seg["text"],
+                    "keywords": [],
+                    "technical_meaning": "",
+                })
+                continue
+
+            mapping = ai_result[seg_id]
+            keywords = _expand_from_ai_mappings(mapping, field)
+
+            results.append({
+                "segment_id": seg_id,
+                "segment_text": seg["text"],
+                "keywords": keywords,
+                "technical_meaning": mapping.get("technical_meaning", ""),
+            })
+
+    logger.info("semantic提案: %d分節のキーワードを生成", len(results))
+    return results
 
 
 def recommend_ai(segments, hongan, field, case_dir=None):
