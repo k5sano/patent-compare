@@ -12,11 +12,11 @@
     --green: #22c55e; --yellow: #eab308; --red: #ef4444;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 70px; }
   .container { max-width: 960px; margin: 0 auto; padding: 2rem; }
   h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
   .subtitle { color: var(--text2); margin-bottom: 2rem; font-size: 0.9rem; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem; transition: border-color 0.2s; }
   .card:hover { border-color: var(--accent); }
   .card h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
   .card .meta { color: var(--text2); font-size: 0.85rem; display: flex; gap: 1rem; flex-wrap: wrap; }
@@ -41,6 +41,10 @@
   .btn { padding: 0.6rem 1.5rem; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; transition: background 0.2s; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover { background: var(--accent-hover); }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text2); }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger { background: var(--red); color: #fff; }
+  .btn-danger:hover { background: #dc2626; }
   .flash { padding: 0.8rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem; }
   .flash-success { background: #14532d; color: #4ade80; border: 1px solid #166534; }
   .flash-error { background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; }
@@ -60,6 +64,15 @@
   .modal-row { display:flex; gap:0.8rem; }
   .modal-row .modal-field { flex:1; }
   .modal-btns { display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem; }
+  /* auto-check チェックボックス */
+  .auto-check { position:absolute; left:1rem; top:50%; transform:translateY(-50%);
+    width:20px; height:20px; accent-color:var(--accent); z-index:3; cursor:pointer; }
+  /* オートモードバー */
+  #auto-bar { position:fixed; bottom:0; left:0; right:0; z-index:9998;
+    background:var(--surface); border-top:2px solid var(--accent); padding:0.8rem 2rem;
+    align-items:center; gap:1rem; flex-wrap:wrap; box-shadow:0 -4px 12px rgba(0,0,0,0.4); }
+  #auto-bar label { cursor:pointer; user-select:none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -98,6 +111,21 @@
   </div>
 </div>
 
+<!-- オートモード進捗モーダル -->
+<div class="modal-overlay" id="auto-progress-modal" onclick="if(event.target===this&&!window._autoRunning)closeAutoProgress()">
+  <div class="modal-box" style="width:700px; max-width:95vw;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+      <h3 style="margin:0;">オートモード</h3>
+      <button class="btn btn-outline" onclick="closeAutoProgress()" style="padding:0.3rem 0.8rem; font-size:0.8rem;">閉じる</button>
+    </div>
+    <div style="background:var(--surface2); border-radius:8px; overflow:hidden; height:8px; margin-bottom:0.8rem;">
+      <div id="auto-progress-bar" style="height:100%; background:var(--accent); width:0%; transition:width 0.3s;"></div>
+    </div>
+    <div id="auto-progress-text" style="font-size:0.85rem; color:var(--text2); margin-bottom:1rem;">準備中...</div>
+    <div id="auto-log" style="max-height:55vh; overflow-y:auto; background:var(--bg); border-radius:8px; padding:0.8rem; font-family:'Consolas','monospace'; font-size:0.82rem; line-height:1.6;"></div>
+  </div>
+</div>
+
 <div class="container">
   <h1>PatentCompare</h1>
   <p class="subtitle">特許審査拒絶理由構成支援システム</p>
@@ -131,8 +159,10 @@
   <div class="case-item" data-year="{{ c.year|default('', true) }}" data-month="{{ c.month|default('', true) }}"
        data-case-id="{{ c.case_id }}" data-title="{{ c.patent_title or c.title }}"
        style="position:relative;">
+    <input type="checkbox" class="auto-check" data-case-id="{{ c.case_id }}"
+           onclick="event.stopPropagation(); updateAutoSelection();">
     <a href="/case/{{ c.case_id }}" class="card-link">
-      <div class="card" style="padding-right:4rem;">
+      <div class="card" style="padding-left:3.5rem; padding-right:4rem;">
         <h3 class="case-title-display">{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
         <div class="meta">
           <span class="badge badge-blue">{{ c.field }}</span>
@@ -201,11 +231,32 @@
   </div>
 </div>
 
-<style>
-@keyframes spin { to { transform: rotate(360deg); } }
-</style>
+<!-- オートモード固定バー -->
+<div id="auto-bar" style="display:none;">
+  <span id="auto-count" style="font-weight:700; font-size:0.95rem;">0件選択</span>
+  <button class="btn btn-outline" onclick="selectAllVisible()" style="padding:0.2rem 0.6rem; font-size:0.78rem;">全選択</button>
+  <button class="btn btn-outline" onclick="deselectAll()" style="padding:0.2rem 0.6rem; font-size:0.78rem;">全解除</button>
+
+  <div style="display:flex; gap:0.8rem; font-size:0.82rem; align-items:center; margin-left:1rem;">
+    <label><input type="checkbox" checked class="auto-step-check" value="keywords"> KW</label>
+    <label><input type="checkbox" checked class="auto-step-check" value="presearch"> 予備検索</label>
+    <label><input type="checkbox" checked class="auto-step-check" value="download_citations"> 文献DL</label>
+    <label><input type="checkbox" checked class="auto-step-check" value="compare"> 対比</label>
+    <label><input type="checkbox" checked class="auto-step-check" value="excel"> Excel</label>
+  </div>
+
+  <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
+    <button class="btn btn-primary" id="btn-auto-run" onclick="startAutoRun()" style="padding:0.5rem 1.5rem; font-size:0.95rem;">
+      ▶ オートモード実行
+    </button>
+    <button class="btn btn-danger" id="btn-auto-stop" onclick="stopAutoRun()" style="display:none; padding:0.5rem 1rem;">
+      ■ 中断
+    </button>
+  </div>
+</div>
 
 <script>
+// ===== 案件作成 =====
 async function createCase() {
   const caseNumber = document.getElementById('new-case-number').value.trim();
   if (!caseNumber) { alert('公開番号を入力してください'); return; }
@@ -232,7 +283,6 @@ async function createCase() {
     btn.disabled = false;
 
     if (resp.status === 409) {
-      // 既存案件
       resultDiv.innerHTML = `<div style="padding:0.8rem; background:#422006; border-radius:8px; color:#fbbf24; font-size:0.9rem;">
         ${data.error} — <a href="/case/${data.case_id}" style="color:var(--accent);">開く</a>
       </div>`;
@@ -269,7 +319,6 @@ async function createCase() {
   }
 }
 
-// Enterキーでも送信
 document.getElementById('new-case-number').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') { e.preventDefault(); createCase(); }
 });
@@ -298,19 +347,16 @@ async function saveEditModal() {
     });
     const data = await resp.json();
     if (data.success) {
-      // DOM更新
       const item = document.querySelector(`.case-item[data-case-id="${caseId}"]`);
       if (item) {
         item.dataset.year = year;
         item.dataset.month = month;
         item.dataset.title = title;
-        // タイトル更新
         const h3 = item.querySelector('.case-title-display');
         if (h3) {
           const num = h3.textContent.split(' \u2014 ')[0];
           h3.textContent = num + ' \u2014 ' + (title || '');
         }
-        // 年月バッジ更新
         const ymBadge = item.querySelector('.case-ym-display');
         if (ymBadge) {
           let ymText = year;
@@ -329,16 +375,17 @@ async function saveEditModal() {
     alert('エラー: ' + e.message);
   }
 }
-// Escキーでモーダル閉じる
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') closeEditModal();
+  if (e.key === 'Escape') {
+    closeEditModal();
+    if (!window._autoRunning) closeAutoProgress();
+  }
 });
 
-// ===== 年度プルダウン生成（フィルタ＆新規作成共通） =====
+// ===== 年度プルダウン生成 =====
 (function() {
   const now = new Date();
   const currentYear = now.getFullYear();
-  // フィルタ用: 案件データから年を収集 + 前後の年も追加
   const items = document.querySelectorAll('.case-item');
   const years = new Set();
   items.forEach(el => {
@@ -349,7 +396,6 @@ document.addEventListener('keydown', function(e) {
 
   const sorted = Array.from(years).sort().reverse();
 
-  // フィルタ年プルダウン
   const filterYear = document.getElementById('filter-year');
   sorted.forEach(y => {
     const opt = document.createElement('option');
@@ -357,7 +403,6 @@ document.addEventListener('keydown', function(e) {
     filterYear.appendChild(opt);
   });
 
-  // 新規作成の年プルダウン
   const newYear = document.getElementById('new-year');
   sorted.forEach(y => {
     const opt = document.createElement('option');
@@ -366,7 +411,6 @@ document.addEventListener('keydown', function(e) {
     newYear.appendChild(opt);
   });
 
-  // 編集モーダルの年プルダウン
   const editYear = document.getElementById('edit-year');
   const editOptBlank = document.createElement('option');
   editOptBlank.value = ''; editOptBlank.textContent = '未設定';
@@ -398,6 +442,213 @@ function filterCases() {
     countEl.textContent = `${shown} / ${total}件`;
   } else {
     countEl.textContent = total > 0 ? `${total}件` : '';
+  }
+}
+
+// ================================================================
+// オートモード
+// ================================================================
+window._autoRunning = false;
+
+function updateAutoSelection() {
+  const checked = document.querySelectorAll('.auto-check:checked');
+  const bar = document.getElementById('auto-bar');
+  const count = document.getElementById('auto-count');
+  if (checked.length > 0) {
+    bar.style.display = 'flex';
+    count.textContent = checked.length + '件選択';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function selectAllVisible() {
+  document.querySelectorAll('.case-item').forEach(item => {
+    if (item.style.display !== 'none') {
+      const cb = item.querySelector('.auto-check');
+      if (cb) cb.checked = true;
+    }
+  });
+  updateAutoSelection();
+}
+
+function deselectAll() {
+  document.querySelectorAll('.auto-check').forEach(cb => cb.checked = false);
+  updateAutoSelection();
+}
+
+function startAutoRun() {
+  const checked = document.querySelectorAll('.auto-check:checked');
+  if (checked.length === 0) return;
+
+  const caseIds = Array.from(checked).map(cb => cb.dataset.caseId);
+  const stepChecks = document.querySelectorAll('.auto-step-check:checked');
+  const steps = Array.from(stepChecks).map(cb => cb.value);
+
+  if (steps.length === 0) {
+    alert('実行するステップを選択してください');
+    return;
+  }
+
+  // UI切替
+  window._autoRunning = true;
+  document.getElementById('btn-auto-run').style.display = 'none';
+  document.getElementById('btn-auto-stop').style.display = '';
+  document.getElementById('auto-progress-modal').classList.add('show');
+  document.getElementById('auto-log').innerHTML = '';
+  document.getElementById('auto-progress-bar').style.width = '0%';
+  document.getElementById('auto-progress-text').textContent = `${caseIds.length}件の処理を開始...`;
+
+  // fetch + ReadableStream でSSE受信
+  const controller = new AbortController();
+  window._autoAbortController = controller;
+
+  fetch('/auto/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({case_ids: caseIds, steps: steps}),
+    signal: controller.signal,
+  }).then(response => {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    function read() {
+      reader.read().then(({done, value}) => {
+        if (done) { onAutoComplete(); return; }
+        buffer += decoder.decode(value, {stream: true});
+
+        // SSEイベントをパース（\n\nで区切り）
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop(); // 未完了部分を残す
+
+        for (const part of parts) {
+          if (!part.trim()) continue;
+          let eventType = '';
+          let eventData = '';
+          for (const line of part.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.substring(7);
+            else if (line.startsWith('data: ')) eventData = line.substring(6);
+          }
+          if (eventType && eventData) {
+            try { handleAutoEvent(eventType, JSON.parse(eventData)); }
+            catch(e) { console.warn('SSE parse error', e); }
+          }
+        }
+        read();
+      }).catch(err => {
+        if (err.name !== 'AbortError') {
+          appendAutoLog('error', '通信エラー: ' + err.message);
+        }
+        onAutoComplete();
+      });
+    }
+    read();
+  }).catch(err => {
+    if (err.name !== 'AbortError') {
+      appendAutoLog('error', '接続エラー: ' + err.message);
+    }
+    onAutoComplete();
+  });
+}
+
+function stopAutoRun() {
+  if (window._autoAbortController) {
+    window._autoAbortController.abort();
+  }
+  appendAutoLog('info', '--- 中断されました ---');
+  onAutoComplete();
+}
+
+function onAutoComplete() {
+  window._autoRunning = false;
+  document.getElementById('btn-auto-run').style.display = '';
+  document.getElementById('btn-auto-stop').style.display = 'none';
+}
+
+function closeAutoProgress() {
+  document.getElementById('auto-progress-modal').classList.remove('show');
+  if (!window._autoRunning) {
+    location.reload(); // 完了後リロードで進捗ドット更新
+  }
+}
+
+const STEP_LABELS = {
+  keywords: 'キーワード提案',
+  presearch: '予備検索',
+  download_citations: '文献DL',
+  compare: '対比',
+  excel: 'Excel出力',
+};
+
+let _autoTotal = 1;
+
+function handleAutoEvent(type, data) {
+  const bar = document.getElementById('auto-progress-bar');
+  const text = document.getElementById('auto-progress-text');
+
+  switch(type) {
+    case 'case_start':
+      _autoTotal = data.total;
+      bar.style.width = ((data.index / data.total) * 100) + '%';
+      text.textContent = `(${data.index + 1}/${data.total}) ${data.case_id} 処理中...`;
+      appendAutoLog('info', `\n━━━ ${data.case_id} (${data.index + 1}/${data.total}) ━━━`);
+      highlightCase(data.case_id, 'processing');
+      break;
+
+    case 'step_start':
+      appendAutoLog('step', `  ▶ ${STEP_LABELS[data.step] || data.step}...`);
+      break;
+
+    case 'step_done':
+      appendAutoLog('done', `  ✓ ${STEP_LABELS[data.step] || data.step} — ${data.detail || ''}`);
+      break;
+
+    case 'step_error':
+      appendAutoLog('error', `  ✗ ${STEP_LABELS[data.step] || data.step}: ${data.error}`);
+      break;
+
+    case 'case_done':
+      appendAutoLog('done', `  ✓ 完了`);
+      bar.style.width = (((data.index + 1) / _autoTotal) * 100) + '%';
+      highlightCase(data.case_id, 'done');
+      break;
+
+    case 'case_error':
+      appendAutoLog('error', `  ✗ エラー: ${data.error}`);
+      highlightCase(data.case_id, 'error');
+      break;
+
+    case 'all_done':
+      bar.style.width = '100%';
+      text.textContent = `全 ${data.total} 件の処理が完了しました`;
+      appendAutoLog('info', `\n━━━ 全 ${data.total} 件完了 ━━━`);
+      onAutoComplete();
+      break;
+  }
+}
+
+function appendAutoLog(type, message) {
+  const log = document.getElementById('auto-log');
+  const div = document.createElement('div');
+  const colors = { info: '#94a3b8', step: '#60a5fa', done: '#4ade80', error: '#f87171' };
+  div.style.color = colors[type] || '#e2e8f0';
+  div.style.whiteSpace = 'pre-wrap';
+  div.textContent = message;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function highlightCase(caseId, status) {
+  const item = document.querySelector(`.case-item[data-case-id="${caseId}"]`);
+  if (!item) return;
+  const card = item.querySelector('.card');
+  if (!card) return;
+  card.style.borderWidth = '2px';
+  switch(status) {
+    case 'processing': card.style.borderColor = '#3b82f6'; break;
+    case 'done':       card.style.borderColor = '#22c55e'; break;
+    case 'error':      card.style.borderColor = '#ef4444'; break;
   }
 }
 </script>

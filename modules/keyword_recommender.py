@@ -978,7 +978,7 @@ def _extract_json_object(raw_text):
 def _call_ai_tech_analysis(prompt, field):
     """AIを呼び出してtech_analysisを取得。
 
-    API key → anthropic SDK (claude-sonnet-4)
+    API key → anthropic SDK (claude-opus-4-6)
     API keyなし → Claude CLI (call_claude)
     どちらも失敗 → None
 
@@ -992,7 +992,7 @@ def _call_ai_tech_analysis(prompt, field):
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-opus-4-6",
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
             )

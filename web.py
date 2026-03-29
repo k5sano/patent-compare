@@ -2377,6 +2377,402 @@ def stage_execute_stream(case_id):
     return Response(generate(), mimetype="application/x-ndjson")
 
 
+# ================================================================
+# オートモード（バッチ自動処理）
+# ================================================================
+
+def _sse_event(event_type, data):
+    """SSEイベント文字列を生成"""
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _auto_suggest_keywords(case_dir, segs, hongan, field):
+    """キーワード自動提案"""
+    from modules.keyword_recommender import recommend_by_tech_analysis
+    from modules.keyword_suggester import build_keyword_groups_from_pipeline
+
+    tech_analysis, pipeline_result = recommend_by_tech_analysis(segs, hongan, field)
+
+    if tech_analysis:
+        with open(case_dir / "tech_analysis.json", "w", encoding="utf-8") as f:
+            json.dump(tech_analysis, f, ensure_ascii=False, indent=2)
+
+    with open(case_dir / "segment_keywords.json", "w", encoding="utf-8") as f:
+        json.dump(pipeline_result, f, ensure_ascii=False, indent=2)
+
+    ai_groups = build_keyword_groups_from_pipeline(
+        pipeline_result, segs, field, hongan=hongan
+    )
+
+    with open(case_dir / "keywords.json", "w", encoding="utf-8") as f:
+        json.dump(ai_groups, f, ensure_ascii=False, indent=2)
+
+    return ai_groups
+
+
+def _auto_presearch(case_dir, segs, hongan, field, meta):
+    """予備検索: プロンプト生成 → Claude CLI → パース → 保存"""
+    from modules.search_prompt_generator import generate_presearch_prompt, parse_presearch_response
+    from modules.claude_client import call_claude
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    prompt = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
+
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "presearch_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    raw_response = call_claude(prompt, timeout=600)
+
+    tech_analysis, candidates, search_formulas, errors = parse_presearch_response(raw_response)
+
+    if tech_analysis:
+        _save_search_data(case_dir, "tech_analysis.json", tech_analysis)
+    if candidates:
+        _save_search_data(case_dir, "presearch_candidates.json", candidates)
+    if search_formulas:
+        _save_search_data(case_dir, "presearch_formulas.json", search_formulas)
+
+    return candidates or []
+
+
+def _auto_download_citations(case_id, case_dir, meta):
+    """候補文献のPDFダウンロード + テキスト抽出"""
+    from modules.patent_downloader import download_patent_pdf
+    from modules.pdf_extractor import extract_patent_pdf
+
+    candidates = _load_search_data(case_dir, "presearch_candidates.json")
+    if not candidates or not isinstance(candidates, list):
+        return {"total": 0, "downloaded": 0, "errors": ["候補がありません"]}
+
+    # 主引例候補を優先、副引例は上位3件まで
+    targets = []
+    main_count = 0
+    sub_count = 0
+    for c in candidates:
+        rel = c.get("relevance", c.get("role", ""))
+        if "主引例" in rel and main_count < 3:
+            targets.append(c)
+            main_count += 1
+        elif "副引例" in rel and sub_count < 3:
+            targets.append(c)
+            sub_count += 1
+        elif len(targets) < 6:
+            targets.append(c)
+
+    downloaded = 0
+    errors = []
+    (case_dir / "citations").mkdir(parents=True, exist_ok=True)
+
+    for c in targets:
+        patent_id = c.get("patent_id", c.get("doc_number", ""))
+        if not patent_id:
+            continue
+
+        doc_id = patent_id
+        for ch in '/\\:*?"<>| ':
+            doc_id = doc_id.replace(ch, '')
+
+        cit_path = case_dir / "citations" / f"{doc_id}.json"
+        if cit_path.exists():
+            downloaded += 1
+            continue
+
+        try:
+            dl_result = download_patent_pdf(patent_id, case_dir / "input", timeout=60)
+            if not dl_result["success"]:
+                errors.append(f"{patent_id}: DL失敗 - {dl_result.get('error', '')}")
+                continue
+
+            extracted = extract_patent_pdf(dl_result["path"], "citation")
+            actual_doc_id = extracted.get("patent_number", doc_id)
+            for ch in '/\\:*?"<>| ':
+                actual_doc_id = actual_doc_id.replace(ch, '')
+
+            rel = c.get("relevance", c.get("role", "副引例候補"))
+            extracted["role"] = rel
+            extracted["label"] = patent_id
+
+            with open(case_dir / "citations" / f"{actual_doc_id}.json", "w", encoding="utf-8") as f:
+                json.dump(extracted, f, ensure_ascii=False, indent=2)
+
+            citations = meta.get("citations", [])
+            if not any(ct["id"] == actual_doc_id for ct in citations):
+                citations.append({"id": actual_doc_id, "role": rel, "label": patent_id})
+                meta["citations"] = citations
+                save_case_meta(case_id, meta)
+
+            downloaded += 1
+        except Exception as e:
+            errors.append(f"{patent_id}: {str(e)}")
+
+    return {"total": len(targets), "downloaded": downloaded, "errors": errors}
+
+
+def _auto_compare(case_id, case_dir, segs, meta, field):
+    """対比: 全引用文献に対してプロンプト生成 → Claude実行 → パース"""
+    from modules.prompt_generator import generate_prompt as _gen
+    from modules.response_parser import parse_response, split_multi_response
+    from modules.claude_client import call_claude
+
+    citations = []
+    citation_ids = []
+    for cit in meta.get("citations", []):
+        cit_path = case_dir / "citations" / f"{cit['id']}.json"
+        if cit_path.exists():
+            with open(cit_path, "r", encoding="utf-8") as f:
+                citations.append(json.load(f))
+            citation_ids.append(cit["id"])
+
+    if not citations:
+        raise Exception("引用文献がありません")
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    prompt_text = _gen(segs, citations, keywords, field)
+
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "compare_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt_text)
+
+    timeout = 600 if len(citations) <= 2 else 900
+    raw_response = call_claude(prompt_text, timeout=timeout)
+
+    all_segment_ids = []
+    for claim in segs:
+        for seg in claim["segments"]:
+            all_segment_ids.append(seg["id"])
+
+    responses_dir = case_dir / "responses"
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    with open(responses_dir / "_last_raw_response.txt", "w", encoding="utf-8") as f:
+        f.write(raw_response)
+
+    result, errors = parse_response(raw_response, all_segment_ids)
+
+    saved_docs = []
+    if result:
+        per_doc = split_multi_response(result)
+        for doc_id, doc_result in per_doc.items():
+            resp_path = responses_dir / f"{doc_id}.json"
+            with open(resp_path, "w", encoding="utf-8") as f:
+                json.dump(doc_result, f, ensure_ascii=False, indent=2)
+            saved_docs.append(doc_id)
+
+    return {"num_docs": len(saved_docs), "errors": errors}
+
+
+def _auto_export_excel(case_dir, segs, meta):
+    """Excel出力"""
+    from modules.excel_writer import write_comparison_table
+
+    responses = {}
+    responses_dir = case_dir / "responses"
+    if responses_dir.exists():
+        for rfile in responses_dir.glob("*.json"):
+            if rfile.stem.startswith("_"):
+                continue
+            with open(rfile, "r", encoding="utf-8") as f:
+                responses[rfile.stem] = json.load(f)
+
+    if not responses:
+        raise Exception("回答データがありません")
+
+    citations_meta = {}
+    for cit in meta.get("citations", []):
+        cit_path = case_dir / "citations" / f"{cit['id']}.json"
+        if cit_path.exists():
+            with open(cit_path, "r", encoding="utf-8") as f:
+                citations_meta[cit["id"]] = json.load(f)
+
+    output_dir = case_dir / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{meta['case_id']}_対比表.xlsx"
+
+    write_comparison_table(
+        output_path=str(output_path),
+        case_meta=meta,
+        segments=segs,
+        responses=responses,
+        citations_meta=citations_meta,
+    )
+
+    return output_path
+
+
+@app.route("/auto/run", methods=["POST"])
+def auto_run():
+    """オートモード: 複数案件を順次自動処理（SSE）"""
+    data = request.get_json() or {}
+    case_ids = data.get("case_ids", [])
+    steps = data.get("steps", [
+        "keywords", "presearch", "download_citations", "compare", "excel"
+    ])
+
+    if not case_ids:
+        return jsonify({"error": "案件が選択されていません"}), 400
+
+    def generate():
+        for i, case_id in enumerate(case_ids):
+            try:
+                yield _sse_event("case_start", {
+                    "case_id": case_id,
+                    "index": i,
+                    "total": len(case_ids),
+                })
+
+                meta = load_case_meta(case_id)
+                if not meta:
+                    yield _sse_event("case_error", {
+                        "case_id": case_id,
+                        "error": "案件が見つかりません",
+                    })
+                    continue
+
+                case_dir = get_case_dir(case_id)
+
+                hongan_path = case_dir / "hongan.json"
+                segments_path = case_dir / "segments.json"
+                if not hongan_path.exists() or not segments_path.exists():
+                    yield _sse_event("case_error", {
+                        "case_id": case_id,
+                        "error": "本願テキストまたは分節データがありません",
+                    })
+                    continue
+
+                with open(hongan_path, "r", encoding="utf-8") as f:
+                    hongan = json.load(f)
+                with open(segments_path, "r", encoding="utf-8") as f:
+                    segs = json.load(f)
+
+                field = meta.get("field", "cosmetics")
+
+                # --- Step: キーワード提案 ---
+                if "keywords" in steps:
+                    yield _sse_event("step_start", {
+                        "case_id": case_id, "step": "keywords",
+                    })
+                    try:
+                        kw_groups = _auto_suggest_keywords(
+                            case_dir, segs, hongan, field
+                        )
+                        yield _sse_event("step_done", {
+                            "case_id": case_id, "step": "keywords",
+                            "detail": f"{len(kw_groups)}グループ生成",
+                        })
+                    except Exception as e:
+                        yield _sse_event("step_error", {
+                            "case_id": case_id, "step": "keywords",
+                            "error": str(e),
+                        })
+
+                # --- Step: 予備検索 ---
+                if "presearch" in steps:
+                    yield _sse_event("step_start", {
+                        "case_id": case_id, "step": "presearch",
+                    })
+                    try:
+                        candidates = _auto_presearch(
+                            case_dir, segs, hongan, field, meta
+                        )
+                        yield _sse_event("step_done", {
+                            "case_id": case_id, "step": "presearch",
+                            "detail": f"{len(candidates)}件の候補",
+                        })
+                    except Exception as e:
+                        yield _sse_event("step_error", {
+                            "case_id": case_id, "step": "presearch",
+                            "error": str(e),
+                        })
+
+                # --- Step: 引用文献DL ---
+                if "download_citations" in steps:
+                    yield _sse_event("step_start", {
+                        "case_id": case_id, "step": "download_citations",
+                    })
+                    try:
+                        dl_result = _auto_download_citations(
+                            case_id, case_dir, meta
+                        )
+                        yield _sse_event("step_done", {
+                            "case_id": case_id, "step": "download_citations",
+                            "detail": f"{dl_result['downloaded']}/{dl_result['total']}件DL",
+                        })
+                    except Exception as e:
+                        yield _sse_event("step_error", {
+                            "case_id": case_id, "step": "download_citations",
+                            "error": str(e),
+                        })
+
+                # --- Step: 対比実行 ---
+                if "compare" in steps:
+                    yield _sse_event("step_start", {
+                        "case_id": case_id, "step": "compare",
+                    })
+                    try:
+                        cmp_result = _auto_compare(
+                            case_id, case_dir, segs, meta, field
+                        )
+                        yield _sse_event("step_done", {
+                            "case_id": case_id, "step": "compare",
+                            "detail": f"{cmp_result['num_docs']}件対比完了",
+                        })
+                    except Exception as e:
+                        yield _sse_event("step_error", {
+                            "case_id": case_id, "step": "compare",
+                            "error": str(e),
+                        })
+
+                # --- Step: Excel出力 ---
+                if "excel" in steps:
+                    yield _sse_event("step_start", {
+                        "case_id": case_id, "step": "excel",
+                    })
+                    try:
+                        excel_path = _auto_export_excel(case_dir, segs, meta)
+                        yield _sse_event("step_done", {
+                            "case_id": case_id, "step": "excel",
+                            "detail": excel_path.name,
+                        })
+                    except Exception as e:
+                        yield _sse_event("step_error", {
+                            "case_id": case_id, "step": "excel",
+                            "error": str(e),
+                        })
+
+                yield _sse_event("case_done", {
+                    "case_id": case_id, "index": i,
+                })
+
+            except Exception as e:
+                yield _sse_event("case_error", {
+                    "case_id": case_id,
+                    "error": f"予期しないエラー: {str(e)}",
+                })
+
+        yield _sse_event("all_done", {"total": len(case_ids)})
+
+    return Response(
+        generate(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 if __name__ == "__main__":
     # templates ディレクトリがなければ作成
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
