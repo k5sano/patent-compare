@@ -23,11 +23,16 @@ def _extract_json_from_text(raw_text):
     対応パターン:
     - ```json ... ``` ブロック
     - { で始まり } で終わるテキスト
+    - 文献ごとに分割されたJSON（```json が複数回）
+    - 途中で切れたJSON（閉じ括弧の補完）
 
     Returns:
         dict: 単一文献の場合は {"comparisons": ...} 形式
               複数文献の場合は {"results": [...]} 形式
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     def _is_valid(data):
         if not isinstance(data, dict):
             return False
@@ -38,6 +43,10 @@ def _extract_json_from_text(raw_text):
         if "comparisons" in data:
             return True
         return False
+
+    def _is_single_doc(data):
+        """単一文献の結果かどうか"""
+        return isinstance(data, dict) and "comparisons" in data
 
     # パターン1: ```json ... ``` ブロック
     json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
@@ -50,6 +59,30 @@ def _extract_json_from_text(raw_text):
                 return data
         except json.JSONDecodeError:
             continue
+
+    # パターン1b: 複数の```jsonブロック → 各ブロックが単一文献 → results配列に結合
+    if len(matches) > 1:
+        single_docs = []
+        for match in matches:
+            try:
+                data = json.loads(match)
+                if _is_single_doc(data):
+                    single_docs.append(data)
+            except json.JSONDecodeError:
+                # 途中で切れたブロックの修復を試行
+                repaired = _try_repair_json(match)
+                if repaired and _is_single_doc(repaired):
+                    single_docs.append(repaired)
+        if single_docs:
+            logger.info("複数JSONブロックを結合: %d文献", len(single_docs))
+            return {"results": single_docs}
+
+    # パターン1c: 単一の```jsonブロックだが途中で切れている
+    if len(matches) == 1:
+        repaired = _try_repair_json(matches[0])
+        if repaired and _is_valid(repaired):
+            logger.info("途中切れJSONを修復")
+            return repaired
 
     # パターン2: 最外側の { ... } を探す
     brace_depth = 0
@@ -71,7 +104,87 @@ def _extract_json_from_text(raw_text):
                     start = None
                     continue
 
+    # パターン3: 最大の { で始まるテキスト片（閉じ切れていない場合の修復）
+    first_brace = raw_text.find('{')
+    if first_brace >= 0:
+        candidate = raw_text[first_brace:]
+        repaired = _try_repair_json(candidate)
+        if repaired and _is_valid(repaired):
+            logger.info("閉じ切れていないJSONを修復")
+            return repaired
+
     return None
+
+
+def _try_repair_json(text):
+    """途中で切れたJSONの修復を試みる
+
+    Claudeの長い回答がトークン上限で途切れた場合に、
+    閉じ括弧を補完してパースを試行する。
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    # まずそのままパースを試行
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 末尾の不完全な文字列値を削除（途中で切れた "judgment_reason": "..." 等）
+    # 最後の完全なプロパティまで巻き戻す
+    truncated = text.rstrip()
+
+    # 末尾のゴミ（途中の文字列値、カンマ等）を除去
+    # 安全な末尾文字: }, ], ", 数字, true, false, null
+    while truncated and truncated[-1] not in '{}[]"0123456789elfsu':
+        truncated = truncated[:-1].rstrip()
+
+    # 途中で切れた文字列リテラルを閉じる
+    # ダブルクォートの数が奇数なら閉じクォートを追加
+    if truncated.count('"') % 2 == 1:
+        truncated += '"'
+
+    # 閉じ括弧を補完
+    open_braces = 0
+    open_brackets = 0
+    in_string = False
+    escape = False
+    for ch in truncated:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            open_braces += 1
+        elif ch == '}':
+            open_braces -= 1
+        elif ch == '[':
+            open_brackets += 1
+        elif ch == ']':
+            open_brackets -= 1
+
+    # 末尾のカンマを除去（JSON的に不正）
+    truncated = truncated.rstrip()
+    if truncated and truncated[-1] == ',':
+        truncated = truncated[:-1]
+
+    # 閉じ括弧を追加
+    closing = ']' * max(0, open_brackets) + '}' * max(0, open_braces)
+    candidate = truncated + closing
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
 
 
 def _validate_response(data, required_segment_ids):

@@ -15,6 +15,7 @@ Claude CLIを呼ぶ前にPython側で検索を実行し、
 import os
 import re
 import logging
+import concurrent.futures
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import List, Optional
@@ -81,6 +82,9 @@ def inject_search_results(
 ) -> str:
     """プロンプトに検索結果を注入する
 
+    3つの検索を並列実行し、全体10秒でタイムアウト。
+    検索失敗・タイムアウト時もプロンプトはそのまま返す。
+
     Args:
         prompt_text: 元のプロンプト
         segments: 請求項分節データ (segments.json)
@@ -88,8 +92,13 @@ def inject_search_results(
         field: 技術分野
 
     Returns:
-        検索結果を注入したプロンプト
+        検索結果を注���したプロンプト
     """
+    api_key = _load_serpapi_key()
+    if not api_key:
+        logger.info("SerpAPIキー未設定 — 事前検索スキップ")
+        return prompt_text
+
     search_terms = _extract_search_keywords(segments, keywords, field)
     if not search_terms:
         logger.info("検索キーワード抽出不可 — 事前検索スキップ")
@@ -97,24 +106,23 @@ def inject_search_results(
 
     logger.info("事前検索キーワード: %s", search_terms)
 
-    # --- 複数戦略で検索 ---
+    # --- 3つの検索を並列実行・全体10秒でタイムアウト ---
     all_hits: List[SearchHit] = []
-
-    # 戦略1: Google Patents（国際）— Playwright直接検索
-    hits = _search_google_patents(search_terms)
-    all_hits.extend(hits)
-
-    # 戦略2: Google Patents（JP限定）— Playwright直接検索
-    hits_jp = _search_google_patents_jp(search_terms)
-    all_hits.extend(hits_jp)
-
-    # 戦略3: Google Scholar（SerpAPIキーがある場合のみ）
-    api_key = _load_serpapi_key()
-    if api_key:
-        hits_scholar = _search_google_scholar(api_key, search_terms, field)
-        all_hits.extend(hits_scholar)
-    else:
-        logger.info("SerpAPIキー未設定 — Google Scholar検索スキップ")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_search_google_patents, search_terms): "patents",
+            executor.submit(_search_google_patents_jp, search_terms): "patents_jp",
+            executor.submit(_search_google_scholar, api_key, search_terms, field): "scholar",
+        }
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=10):
+                try:
+                    all_hits.extend(future.result())
+                except Exception as e:
+                    logger.warning("検索失敗（スキップ）: %s", e)
+        except concurrent.futures.TimeoutError:
+            logger.warning("事前検索タイムアウト（10秒）— スキップして続行")
+            return prompt_text
 
     if not all_hits:
         logger.info("事前検索結果なし")
@@ -129,8 +137,7 @@ def inject_search_results(
     return (
         prompt_text
         + f"\n\n---\n\n{injection}\n\n"
-        "※上記は事前検索の参考情報です。これらを踏まえつつ、"
-        "あなた自身の知識も合わせて候補を提案してください。"
+        + "※上記は事前検索の参考情報です。"
     )
 
 

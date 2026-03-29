@@ -129,3 +129,33 @@ def all_tree_keys(field: str = "cosmetics") -> list:
         keys.add(node.get("label", ""))
     keys.discard("")
     return sorted(keys)
+
+
+def build_digest(field: str = "cosmetics", max_examples: int = 4) -> str:
+    """Fterm木構造をAIプロンプト用にコンパクトな1行1ノードのテキストに縮約する。
+
+    出力例:
+        AC18: POA付加体 (例: ポリオキシエチレンオクチルドデシルエーテル, ...)
+        AD04: ポリアルキレンオキシド (例: ポリエチレングリコール, PEG, ...)
+
+    Returns:
+        str: ダイジェストテキスト
+    """
+    nodes = get_nodes(field)
+    if not nodes:
+        return ""
+    lines = []
+    for code in sorted(nodes.keys()):
+        node = nodes[code]
+        label = node.get("label", "")
+        if not label:
+            continue
+        examples = node.get("examples", [])
+        if examples:
+            ex_str = ", ".join(examples[:max_examples])
+            if len(examples) > max_examples:
+                ex_str += ", ..."
+            lines.append(f"{code}: {label} (例: {ex_str})")
+        else:
+            lines.append(f"{code}: {label}")
+    return "\n".join(lines)

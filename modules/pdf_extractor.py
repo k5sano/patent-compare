@@ -60,6 +60,7 @@ DEPENDENCY_PATTERN = re.compile(
 
 # --- 英語請求項パターン ---
 CLAIM_PATTERN_EN = re.compile(r'\n\s*(\d+)\.\s+')
+CLAIM_PATTERN_WO = re.compile(r'\[Claim\s+(\d+)\]', re.I)  # WO形式: [Claim 1]
 CLAIM_SECTION_START_EN = re.compile(
     r'(?:What is claimed is|CLAIMS|The Claims|I claim|We claim)\s*:?\s*\n', re.I
 )
@@ -201,7 +202,7 @@ def detect_patent_number(pages_text):
                     return f"特開{year}-{num_padded}"
                 elif kind.startswith("B"):
                     return f"特許{year}-{num_padded}"
-            return groups[0].replace(" ", "")
+            return groups[0].replace(" ", "").replace("/", "")
     return None
 
 
@@ -392,6 +393,11 @@ def parse_claims_en(full_text):
 
     # 個別の請求項を抽出: "1. A method..." 形式
     claim_matches = list(CLAIM_PATTERN_EN.finditer(claim_area))
+
+    # WO形式フォールバック: [Claim 1], [Claim 2], ...
+    if not claim_matches:
+        claim_matches = list(CLAIM_PATTERN_WO.finditer(claim_area))
+
     if not claim_matches:
         return claims
 
@@ -619,6 +625,21 @@ def detect_tables(paragraphs):
     return tables
 
 
+def _guess_format_from_filename(pdf_path):
+    """ファイル名から特許フォーマットを推定（OCR言語選択のヒント用）"""
+    stem = Path(pdf_path).stem.upper()
+    if re.match(r'WO\s*\d', stem):
+        return "WO"
+    if re.match(r'EP\s*\d', stem):
+        return "WO"  # EP も英語段落形式
+    if re.match(r'US\s*\d', stem):
+        return "US"
+    # JPA, JPB, 特開, 特願 etc.
+    if re.match(r'JP', stem) or '特' in stem:
+        return "JP"
+    return None
+
+
 def extract_patent_pdf(pdf_path, doc_type="hongan"):
     """
     メインのPDF抽出関数
@@ -632,15 +653,35 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
     """
     pdf_path = Path(pdf_path)
 
-    # PDF全ページテキスト抽出（1st pass: フォーマット判定用にデフォルト言語で）
-    pages = extract_text_from_pdf(str(pdf_path))
+    # ファイル名からフォーマットヒントを取得
+    filename_hint = _guess_format_from_filename(pdf_path)
+
+    # ファイル名がWO/US/EPなら最初から英語OCRで抽出
+    if filename_hint and filename_hint != "JP":
+        first_lang = 'eng'
+    else:
+        first_lang = 'jpn'
+
+    # PDF全ページテキスト抽出（1st pass）
+    pages = extract_text_from_pdf(str(pdf_path), ocr_lang=first_lang)
     full_text = "\n".join(p["text"] for p in pages)
 
-    # フォーマット判定
+    # テキストがほぼ空の場合（スキャンPDF + OCR失敗）、逆の言語で再試行
+    content_chars = len(re.sub(r'\s+', '', full_text))
+    if content_chars < 100:
+        alt_lang = 'eng' if first_lang == 'jpn' else 'jpn'
+        pages = extract_text_from_pdf(str(pdf_path), ocr_lang=alt_lang)
+        full_text = "\n".join(p["text"] for p in pages)
+
+    # フォーマット判定（テキスト内容から）
     fmt = detect_format(full_text)
 
-    # 英語フォーマットの場合、OCR言語を切り替えて再抽出
-    if fmt != "JP":
+    # テキスト判定がデフォルトJPだがファイル名は英語系の場合、ファイル名を優先
+    if fmt == "JP" and filename_hint and filename_hint != "JP":
+        fmt = filename_hint
+
+    # フォーマットが英語系で、1st passがjpn OCRだった場合は英語OCRで再抽出
+    if fmt != "JP" and first_lang == 'jpn':
         pages = extract_text_from_pdf(str(pdf_path), ocr_lang='eng')
         full_text = "\n".join(p["text"] for p in pages)
 

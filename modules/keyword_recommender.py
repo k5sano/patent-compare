@@ -26,7 +26,8 @@ import functools
 from pathlib import Path
 
 from modules.fterm_dict import (
-    expand_term, all_tree_keys, get_synonyms, get_inci, codes_for_term
+    expand_term, all_tree_keys, get_synonyms, get_inci, codes_for_term,
+    get_nodes, build_digest,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,10 @@ STOP_WORDS = {
     "一つ", "一種", "複数", "少なくとも一つ",
     "第一", "第二", "第三", "第四", "第五",
     "前述", "後述", "同様", "対応", "関連",
+    # 追加: 請求項断片ゴミ語
+    "用化粧料", "以上含有", "種類含有", "項記載", "分以上", "吐出後",
+    "前記原液", "原液組成物", "記原液", "ール組成物", "成物原液",
+    "質量部", "体積比", "種以上",
 }
 
 # ============================================================
@@ -107,18 +112,47 @@ RE_NUMERIC_SINGLE = re.compile(
     r'(\d+\.?\d*)\s*(質量%|重量%|mass%|wt%|ppm|mm|μm|nm|℃)\s*'
     r'(以上|以下|未満|超|を超える|より多い|より少ない)?'
 )
-RE_PAREN_LABEL = re.compile(r'[\(（]([A-Za-zＡ-Ｚ])[\)）]\s*([^、。\)）]{2,20})')
+RE_PAREN_LABEL = re.compile(r'[\(（]([A-Za-zＡ-Ｚ])[\)）]\s*([^、。\)）\(（]{2,15})')
+
+# CJK文字範囲（前処理用）
+_CJK_CHAR = re.compile(r'[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F]')
+
+
+def _preprocess_text(text: str) -> str:
+    """PDF改行由来のスペースでCJK文字が分断される問題を修正。
+
+    例:
+      "ポリアルキ レングリコールエーテル" → "ポリアルキレングリコールエーテル"
+      "油状泡沫 性エアゾール用 化粧料" → "油状泡沫性エアゾール用化粧料"
+    """
+    if not text:
+        return text
+    # CJK文字の間にある半角スペースを除去
+    result = re.sub(
+        r'(?<=[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F])\s+(?=[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F])',
+        '', text
+    )
+    return result
 
 
 # ============================================================
 # Step 1: 正規表現による語句ピックアップ（共通部品）
 # ============================================================
 
+def _strip_prefix(term: str) -> str:
+    """「前記」「該」「上記」等の接頭辞を除去"""
+    for prefix in ("前記", "上記", "該", "当該", "前記した", "本"):
+        if term.startswith(prefix) and len(term) > len(prefix):
+            return term[len(prefix):]
+    return term
+
+
 def _pick_terms_from_text(text):
     """テキストから語句を機械的にピックアップ
 
     全パターン（カタカナ・漢字・数値条件・括弧ラベル）を適用し、
     STOP_WORDS 除外・重複除去済みのリストを返す。
+    テキストは前処理済み（CJKスペース除去済み）を想定。
 
     Returns:
         list of dict: [{"term": str, "source": "claim", "type": str}, ...]
@@ -127,7 +161,9 @@ def _pick_terms_from_text(text):
     seen = set()
 
     def _add(term, kw_type):
-        if term and term not in seen and term not in STOP_WORDS:
+        # 接頭辞除去
+        term = _strip_prefix(term)
+        if term and term not in seen and term not in STOP_WORDS and len(term) >= 2:
             seen.add(term)
             terms.append({"term": term, "source": "claim", "type": kw_type})
 
@@ -480,6 +516,208 @@ def _extract_json_array(raw_text):
 
 
 # ============================================================
+# Claude CLI フォールバック: Steps 2+3 一括実行
+# ============================================================
+
+def _cli_enrich_keywords(results, spec_text, field="cosmetics"):
+    """Claude CLI (call_claude) で Steps 2+3 を一括実行。
+
+    API key 不要。プロンプトに以下3ブロックを含める:
+    1. 分節+Step1キーワード
+    2. 明細書抜粋
+    3. Fterm辞書ダイジェスト
+
+    結果を results にマージする。
+    """
+    from modules.claude_client import call_claude, is_claude_available, ClaudeClientError
+
+    if not is_claude_available():
+        logger.warning("Claude CLI 利用不可 — CLI enrichment スキップ")
+        return
+
+    # 1. 分節+Step1キーワード 一覧
+    seg_lines = []
+    for item in results:
+        terms = [kw["term"] for kw in item["keywords"] if kw["type"] != "数値条件"]
+        term_str = ", ".join(terms[:12]) if terms else "(キーワードなし)"
+        seg_lines.append(f'{item["segment_id"]}: {item["segment_text"][:60]}')
+        seg_lines.append(f'  → Step1: {term_str}')
+    seg_block = "\n".join(seg_lines)
+
+    # 2. 明細書抜粋 (max 12KB)
+    spec_block = spec_text[:12000] if spec_text else "(明細書テキストなし)"
+
+    # 3. Fterm辞書ダイジェスト
+    dict_block = build_digest(field)
+    if not dict_block:
+        dict_block = "(Fterm辞書なし)"
+    else:
+        dict_block = dict_block[:6000]  # 最大6KB
+
+    # 全分節IDリスト
+    all_seg_ids = [item["segment_id"] for item in results]
+    seg_id_list = ", ".join(all_seg_ids)
+
+    field_role = {
+        "cosmetics": "化粧品技術者・化学の専門家",
+        "laminate": "高分子材料・積層フィルム技術の専門家",
+    }.get(field, "当該技術分野の専門家")
+
+    prompt = f"""あなたは{field_role}であり、特許調査に精通しています。
+以下の特許請求項の分節ごとに、明細書から関連する具体名を拾い、Fterm辞書から対応コードと関連語を選んでください。
+
+【分節とStep1キーワード】
+{seg_block}
+
+【明細書テキスト（段落番号付き）】
+{spec_block}
+
+【Fterm辞書（コード: ラベル (例: ...)）】
+{dict_block}
+
+【出力形式】フラットなJSON配列のみ返してください（説明文不要）:
+[{{"seg":"1A", "label":"グループの短いラベル",
+  "spec_terms":[{{"term":"具体名","para":"0019"}}],
+  "fterm_codes":["AC18"],
+  "fterm_examples":["ポリオキシエチレンステアリルエーテル"]}}]
+
+【ルール】
+- 全分節について必ず出力すること（省略禁止）。対象分節: {seg_id_list}
+- label: その分節の技術的テーマを表す短い名前（3〜15文字）
+- spec_terms: 明細書中でその分節のキーワードに関連して言及されている具体的な物質名・技術用語。paraは段落番号。明細書に実在するもののみ。最大8語。
+- fterm_codes: 辞書ダイジェスト中のコード（例: AC18, AD04）で、その分節のテーマに対応するもの。実在するコードのみ。最大5コード。
+- fterm_examples: 辞書の例示語の中から、その分節に関連するもの。辞書に実在するもののみ。最大5語。
+- 関連語がない分節でも seg と label は必ず出力すること。"""
+
+    try:
+        logger.info("CLI enrichment 開始: %d 分節, prompt=%d 文字",
+                     len(results), len(prompt))
+        raw = call_claude(prompt, timeout=300)
+        enrichment = _extract_json_array(raw)
+        if enrichment:
+            logger.info("CLI enrichment: %d 件取得", len(enrichment))
+            _merge_cli_enrichment(results, enrichment, field)
+        else:
+            logger.warning("CLI enrichment: JSONを抽出できませんでした")
+    except ClaudeClientError as e:
+        logger.warning("CLI enrichment エラー: %s", e)
+    except Exception as e:
+        logger.warning("CLI enrichment 予期しないエラー: %s", e)
+
+
+def _merge_cli_enrichment(results, enrichment, field):
+    """CLI enrichment の結果を results にマージ。
+
+    - spec_terms → type "明細書具体名" で追加
+    - fterm_codes → get_nodes()[code]["examples"] で展開、type "Fterm関連語"
+    - fterm_examples → ツリーに実在するか検証後追加
+    - _ai_label を results アイテムに保存
+    - 同義語/INCI展開も実行
+    """
+    nodes = get_nodes(field)
+    synonyms = get_synonyms(field)
+    inci_ja = get_inci(field)
+
+    # reverse_index で実在するexampleかを高速検証するためのセット
+    from modules.fterm_dict import get_reverse_index
+    rev_index = get_reverse_index(field)
+    all_examples = set(rev_index.keys())
+    for node in nodes.values():
+        for ex in node.get("examples", []):
+            all_examples.add(ex)
+
+    seg_map = {r["segment_id"]: r for r in results}
+    added_total = 0
+
+    for item in enrichment:
+        seg_id = item.get("seg", "")
+        if seg_id not in seg_map:
+            continue
+        target = seg_map[seg_id]
+        existing = {kw["term"] for kw in target["keywords"]}
+
+        # AI提供ラベルを保存
+        ai_label = item.get("label", "")
+        if ai_label:
+            target["_ai_label"] = ai_label
+
+        added = 0
+
+        # spec_terms: 明細書具体名
+        for st in item.get("spec_terms", []):
+            term = st.get("term", "").strip() if isinstance(st, dict) else ""
+            para = st.get("para", "") if isinstance(st, dict) else ""
+            if term and term not in existing and term not in STOP_WORDS:
+                source = f"spec:【{para}】" if para else "spec"
+                target["keywords"].append({
+                    "term": term, "source": source, "type": "明細書具体名",
+                })
+                existing.add(term)
+                added += 1
+
+        # fterm_codes: コードからexamplesを展開
+        for code in item.get("fterm_codes", []):
+            node = nodes.get(code)
+            if not node:
+                continue
+            for ex in node.get("examples", [])[:8]:
+                if ex not in existing and ex not in STOP_WORDS:
+                    target["keywords"].append({
+                        "term": ex, "source": f"dict:fterm/{code}",
+                        "type": "Fterm関連語",
+                    })
+                    existing.add(ex)
+                    added += 1
+
+        # fterm_examples: 実在検証後に追加
+        for ex in item.get("fterm_examples", []):
+            if isinstance(ex, str) and ex.strip():
+                ex = ex.strip()
+                if ex in all_examples and ex not in existing and ex not in STOP_WORDS:
+                    target["keywords"].append({
+                        "term": ex, "source": "dict:fterm/ai",
+                        "type": "Fterm関連語",
+                    })
+                    existing.add(ex)
+                    added += 1
+
+        # 同義語/INCI展開（Step1+明細書キーワードに対して）
+        for kw in list(target["keywords"]):
+            term = kw["term"]
+            # 同義語
+            syns = synonyms.get(term, [])
+            if isinstance(syns, str):
+                syns = [syns]
+            for syn in syns:
+                if syn not in existing and syn not in STOP_WORDS:
+                    target["keywords"].append({
+                        "term": syn, "source": "dict:synonyms",
+                        "type": "同義語",
+                    })
+                    existing.add(syn)
+                    added += 1
+            # INCI
+            inci_entry = inci_ja.get(term, {})
+            if isinstance(inci_entry, dict):
+                name = inci_entry.get("inci_name", "")
+            elif isinstance(inci_entry, str):
+                name = inci_entry
+            else:
+                name = ""
+            if name and name not in existing:
+                target["keywords"].append({
+                    "term": name, "source": "dict:inci",
+                    "type": "INCI英名",
+                })
+                existing.add(name)
+                added += 1
+
+        added_total += added
+
+    logger.info("CLI enrichment マージ: 計 %d 語追加", added_total)
+
+
+# ============================================================
 # メイン: キーワード収集パイプライン
 # ============================================================
 
@@ -490,7 +728,7 @@ def recommend_regex(segments, hongan, field):
     Step 2: AI で明細書から関連語を拾う（1回）
     Step 3: AI で辞書キーを照合→Python が辞書展開（1回）
 
-    ANTHROPIC_API_KEY 未設定時は Step 1 のみで返す。
+    ANTHROPIC_API_KEY 未設定時は Claude CLI フォールバックで Steps 2+3 を実行。
     各 Step でエラーが発生してもスキップして次へ進む。
 
     Parameters:
@@ -507,7 +745,8 @@ def recommend_regex(segments, hongan, field):
     results = []
     for claim in segments:
         for seg in claim.get("segments", []):
-            keywords = _pick_terms_from_text(seg["text"])
+            preprocessed = _preprocess_text(seg["text"])
+            keywords = _pick_terms_from_text(preprocessed)
             results.append({
                 "segment_id": seg["id"],
                 "segment_text": seg["text"],
@@ -518,17 +757,23 @@ def recommend_regex(segments, hongan, field):
                 len(results),
                 sum(len(r["keywords"]) for r in results))
 
-    # === Step 2: AI 明細書探索 ===
-    spec_text = _build_spec_excerpt(hongan, max_chars=8000)
-    if spec_text:
-        ai_spec = _ai_find_related_in_spec(results, spec_text, field)
-        if ai_spec:
-            _merge_step2_results(results, ai_spec)
+    # === 明細書テキスト準備 ===
+    spec_text = _build_spec_excerpt(hongan, max_chars=12000)
 
-    # === Step 3: AI 辞書照合 + Python 展開 ===
-    ai_dict = _ai_find_related_in_dicts(results, field)
-    if ai_dict:
-        _merge_step3_results(results, ai_dict, field)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        # === 既存 API パス (Steps 2+3) ===
+        if spec_text:
+            ai_spec = _ai_find_related_in_spec(results, spec_text, field)
+            if ai_spec:
+                _merge_step2_results(results, ai_spec)
+        ai_dict = _ai_find_related_in_dicts(results, field)
+        if ai_dict:
+            _merge_step3_results(results, ai_dict, field)
+    else:
+        # === Claude CLI フォールバック (Steps 2+3 一括) ===
+        logger.info("ANTHROPIC_API_KEY 未設定 — Claude CLI フォールバックで enrichment 実行")
+        _cli_enrich_keywords(results, spec_text, field)
 
     # === 最終重複除去 ===
     for item in results:
@@ -580,9 +825,6 @@ def recommend_from_dictionary(case_dir, segments):
     all_seg_ids = []
     seg_texts = {}
     for claim in segments:
-        is_indep = claim.get("is_independent", claim.get("claim_number") == 1)
-        if not is_indep:
-            continue
         for seg in claim.get("segments", []):
             all_seg_ids.append(seg["id"])
             seg_texts[seg["id"]] = seg["text"]

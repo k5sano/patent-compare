@@ -17,6 +17,13 @@ import json
 from pathlib import Path
 
 from modules.fterm_dict import codes_for_term, get_nodes, get_synonyms, get_inci
+from modules.keyword_recommender import _preprocess_text
+from modules.description_analyzer import (
+    extract_example_compounds,
+    extract_description_compounds,
+    COMPONENT_PATTERN,
+    CONCEPT_HINTS,
+)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
@@ -29,6 +36,11 @@ COLOR_NAMES = {
     5: "緑",
     6: "オレンジ",
     7: "ティール",
+    8: "黄",
+    9: "シアン",
+    10: "ライム",
+    11: "ピンク",
+    12: "ブラウン",
 }
 
 # 成分名らしい文字列のパターン（化粧品分野）
@@ -170,95 +182,115 @@ def lookup_fterm(keywords, field):
 
 
 def build_keyword_groups(segments, hongan, field):
-    """キーワードグループを構築"""
-    # 1. 分節からキーワード抽出
-    seg_keywords = extract_keywords_from_segments(segments, field)
+    """請求項1の全分節に対してグループを生成する。
 
-    # 2. 明細書から具体名抽出
-    concrete = extract_concrete_names_from_description(hongan, field)
+    スキップなし・上限なし。
+    キーワードの優先順位:
+      1. 実施例で使用された化合物（最重要）
+      2. 説明段落の例示化合物
+      3. 配合目的・配合量
+      4. 辞書（synonyms, inci_ja）による同義語・英名
+      5. Fterm辞書による展開
+    """
+    # 請求項1の分節を取得
+    claim1_segs = []
+    for claim in segments:
+        if claim.get("claim_number") == 1:
+            claim1_segs = claim.get("segments", [])
+            break
+    if not claim1_segs:
+        return []
 
-    # 3. 辞書ロード
+    # ① 実施例使用化合物を一括収集（全分節共通リソース）
+    example_compounds = extract_example_compounds(hongan)
+
+    # 辞書ロード（既存のまま）
     synonyms = get_synonyms(field)
-    inci_ja  = get_inci(field) if field == "cosmetics" else {}
+    inci_ja = get_inci(field) if field == "cosmetics" else {}
+    nodes = get_nodes(field)
 
     groups = []
-    group_id = 0
 
-    for seg_id, kw_list in seg_keywords.items():
-        if not kw_list:
-            continue
+    for idx, seg in enumerate(claim1_segs):
+        seg_id = seg["id"]
+        seg_text = _preprocess_text(seg.get("text", ""))
 
-        group_id += 1
-        if group_id > 7:
-            break  # 最大7グループ
+        seen = set()
+        keywords = []
 
-        # メインキーワード（最初のもの）をラベルに
-        main_kw = kw_list[0]["term"] if kw_list else seg_id
+        def add(term, source, kw_type):
+            t = term.strip()
+            if t and len(t) >= 2 and t not in seen:
+                seen.add(t)
+                keywords.append({"term": t, "source": source, "type": kw_type})
 
-        # このグループのキーワードを集約
-        all_keywords = list(kw_list)
+        # ── 上位概念語を分節テキストから取得 ──
+        concept = ""
+        for m in COMPONENT_PATTERN.finditer(seg_text):
+            name = m.group(0).strip()
+            if len(name) >= 3:
+                concept = name
+                add(name, "請求項1", "上位概念")
+                break
+        # カタカナフォールバック
+        if not concept:
+            m = re.search(r'[ァ-ヴー]{4,}', seg_text)
+            if m:
+                concept = m.group(0)
+                add(concept, "請求項1", "上位概念")
 
-        # 具体名を追加
-        for para_id, names in concrete.items():
-            for name_entry in names:
-                # メインキーワードと関連する具体名を紐付け
-                if any(kw["term"] in name_entry["term"] or
-                       name_entry["term"] in kw["term"]
-                       for kw in kw_list):
-                    all_keywords.append(name_entry)
+        # ── ② 実施例使用化合物を上位概念と照合して紐付け ──
+        hints = CONCEPT_HINTS.get(concept, [])
+        for ec in example_compounds:
+            # ヒント語でマッチ、または上位概念が化合物名に含まれる
+            if (any(h in ec["term"] for h in hints)
+                    or (concept and concept in ec["term"])):
+                add(ec["term"], ec["source"], ec["type"])
 
-        # 表記ゆれ（同義語）を追加
-        for kw in list(kw_list):
-            syns = synonyms.get(kw["term"], [])
-            for syn in syns:
-                all_keywords.append({
-                    "term": syn,
-                    "source": "辞書",
-                    "type": "同義語",
+        # ── ③ 説明段落の例示・目的・配合量 ──
+        if concept:
+            for kw in extract_description_compounds(hongan, concept):
+                add(kw["term"], kw["source"], kw["type"])
+
+        # ── ④ 辞書: synonyms.json（既存活用） ──
+        for syn in synonyms.get(concept, []):
+            add(syn, "辞書(synonyms)", "同義語")
+
+        # ── ⑤ 辞書: inci_ja.json（既存活用） ──
+        inci = inci_ja.get(concept, {})
+        if isinstance(inci, dict) and inci.get("inci_name"):
+            add(inci["inci_name"], "辞書(INCI)", "英名(INCI)")
+        elif isinstance(inci, str) and inci:
+            add(inci, "辞書(INCI)", "英名(INCI)")
+
+        # ── ⑥ Fterm辞書（既存活用） ──
+        fterm_list = []
+        seen_codes = set()
+        for code in codes_for_term(concept, field):
+            if code not in seen_codes:
+                seen_codes.add(code)
+                node = nodes.get(code, {})
+                fterm_list.append({
+                    "code": code,
+                    "desc": node.get("label", ""),
+                    "suffix": ".1で請求項限定",
                 })
 
-        # INCI名を追加
-        for kw in list(kw_list):
-            inci = inci_ja.get(kw["term"], {})
-            if isinstance(inci, dict) and inci.get("inci_name"):
-                all_keywords.append({
-                    "term": inci["inci_name"],
-                    "source": "辞書",
-                    "type": "英名",
-                })
-            elif isinstance(inci, str):
-                all_keywords.append({
-                    "term": inci,
-                    "source": "辞書",
-                    "type": "英名",
-                })
+        # ── フォールバック: キーワードが0件なら分節テキストを登録 ──
+        if not keywords:
+            simplified = re.sub(
+                r'[はがをにでのもとへや、。（）【】\s]', '', seg_text
+            )
+            add(simplified[:20] or seg_id, "分節テキスト", "フォールバック")
 
-        # Fterm検索
-        fterm_results = lookup_fterm(kw_list, field)
-
-        search_codes = {"fterm": [], "fi": []}
-        for term, fterms in fterm_results.items():
-            for ft in fterms:
-                if ft not in search_codes["fterm"]:
-                    search_codes["fterm"].append(ft)
-
-        # 重複除去
-        seen_terms = set()
-        unique_keywords = []
-        for kw in all_keywords:
-            if kw["term"] not in seen_terms:
-                seen_terms.add(kw["term"])
-                unique_keywords.append(kw)
-
-        group = {
-            "group_id": group_id,
-            "label": main_kw,
-            "color": COLOR_NAMES.get(group_id, "黒"),
+        groups.append({
+            "group_id": idx + 1,
+            "label": concept or seg_id,
+            "color": COLOR_NAMES.get(idx + 1, "黒"),
             "segment_ids": [seg_id],
-            "keywords": unique_keywords,
-            "search_codes": search_codes,
-        }
-        groups.append(group)
+            "keywords": keywords,
+            "search_codes": {"fterm": fterm_list, "fi": []},
+        })
 
     return groups
 
@@ -277,37 +309,81 @@ def suggest_keywords(hongan, segments, field):
     return build_keyword_groups(segments, hongan, field)
 
 
-def build_keyword_groups_from_pipeline(pipeline_result, segments, field):
+def build_keyword_groups_from_pipeline(pipeline_result, segments, field,
+                                       hongan=None):
     """
     recommend_regex() の出力（分節×キーワード）を
     グループ構造（group_id, label, keywords, search_codes）に変換する。
-    独立請求項の分節のみグループ化。
+    全分節についてグループを生成（空キーワードの分節もスキップしない）。
+
+    hongan が渡された場合、description_analyzer で実施例化合物・
+    明細書具体名・配合目的/量を追加エンリッチする。
     """
     nodes = get_nodes(field)
+    synonyms = get_synonyms(field)
+    inci_ja = get_inci(field) if field == "cosmetics" else {}
 
-    indep_seg_ids = {
-        seg["id"]
-        for claim in segments
-        if claim.get("is_independent", claim.get("claim_number") == 1)
-        for seg in claim.get("segments", [])
-    }
+    # ── 実施例化合物を一括収集（hongan がある場合のみ） ──
+    example_compounds = []
+    if hongan:
+        example_compounds = extract_example_compounds(hongan)
 
     groups = []
     group_id = 0
 
     for item in pipeline_result:
         seg_id = item["segment_id"]
-        if seg_id not in indep_seg_ids:
-            continue
-        kws = item["keywords"]
-        if not kws:
-            continue
+        kws = list(item["keywords"])  # コピー（元を汚さない）
+        seg_text = _preprocess_text(item.get("segment_text", ""))
 
         group_id += 1
-        if group_id > 7:
-            break
+        seen = {kw["term"] for kw in kws}
 
-        # Fterm コード収集
+        def _add(term, source, kw_type):
+            t = term.strip()
+            if t and len(t) >= 2 and t not in seen:
+                seen.add(t)
+                kws.append({"term": t, "source": source, "type": kw_type})
+
+        # ── 分節テキストから上位概念語を特定 ──
+        concept = ""
+        for m in COMPONENT_PATTERN.finditer(seg_text):
+            name = m.group(0).strip()
+            if len(name) >= 3:
+                concept = name
+                break
+        if not concept:
+            m = re.search(r'[ァ-ヴー]{4,}', seg_text)
+            if m:
+                concept = m.group(0)
+
+        # ── 実施例化合物を上位概念と照合 ──
+        if concept and example_compounds:
+            hints = CONCEPT_HINTS.get(concept, [])
+            for ec in example_compounds:
+                if (any(h in ec["term"] for h in hints)
+                        or (concept and concept in ec["term"])):
+                    _add(ec["term"], ec["source"], ec["type"])
+
+        # ── 明細書具体名・配合目的・配合量 ──
+        if concept and hongan:
+            for kw in extract_description_compounds(hongan, concept):
+                _add(kw["term"], kw["source"], kw["type"])
+
+        # ── 辞書: synonyms ──
+        if concept:
+            for syn in synonyms.get(concept, []):
+                _add(syn, "辞書(synonyms)", "同義語")
+
+        # ── 辞書: INCI ──
+        if concept:
+            inci = inci_ja.get(concept, {})
+            if isinstance(inci, dict) and inci.get("inci_name"):
+                _add(inci["inci_name"], "辞書(INCI)", "英名(INCI)")
+            elif isinstance(inci, str) and inci:
+                _add(inci, "辞書(INCI)", "英名(INCI)")
+
+        # ── Fterm コード収集 ──
         fterm_list = []
         seen_codes = set()
         for kw in kws:
@@ -321,9 +397,27 @@ def build_keyword_groups_from_pipeline(pipeline_result, segments, field):
                     })
                     seen_codes.add(code)
 
+        # ── ラベル決定 ──
+        ai_label = item.get("_ai_label", "")
+        if ai_label:
+            label = ai_label
+        elif concept:
+            label = concept
+        elif kws:
+            label = kws[0]["term"]
+        else:
+            label = seg_text[:20].strip() if seg_text else seg_id
+
+        # ── フォールバック: キーワードが0件 ──
+        if not kws:
+            simplified = re.sub(
+                r'[はがをにでのもとへや、。（）【】\s]', '', seg_text
+            )
+            _add(simplified[:20] or seg_id, "分節テキスト", "フォールバック")
+
         groups.append({
             "group_id": group_id,
-            "label": kws[0]["term"] if kws else seg_id,
+            "label": label,
             "color": COLOR_NAMES.get(group_id, "黒"),
             "segment_ids": [seg_id],
             "keywords": kws,

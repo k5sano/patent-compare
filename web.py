@@ -270,7 +270,15 @@ def upload_hongan(case_id):
     file.save(str(save_path))
 
     # テキスト抽出
-    result = extract_patent_pdf(str(save_path), "hongan")
+    try:
+        result = extract_patent_pdf(str(save_path), "hongan")
+    except Exception as e:
+        return jsonify({"error": f"PDF抽出失敗: {e}"}), 400
+
+    if not result.get("claims") and not result.get("paragraphs"):
+        # テキスト抽出もOCRも失敗した場合は警告付きで続行
+        result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
+
     with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -317,8 +325,18 @@ def upload_citation(case_id):
     save_path = case_dir / "input" / file.filename
     file.save(str(save_path))
 
-    result = extract_patent_pdf(str(save_path), "citation")
+    try:
+        result = extract_patent_pdf(str(save_path), "citation")
+    except Exception as e:
+        return jsonify({"error": f"PDF抽出失敗: {e}"}), 400
+
+    if not result.get("claims") and not result.get("paragraphs"):
+        result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
+
     doc_id = result.get("patent_number", Path(file.filename).stem)
+    # ファイル名に使えない文字を除去（WO2009/043909 → WO2009043909）
+    for ch in '/\\:*?"<>|':
+        doc_id = doc_id.replace(ch, '')
     result["role"] = role
     result["label"] = label or doc_id
 
@@ -427,16 +445,45 @@ def suggest_keywords(case_id):
 
     field = meta.get("field", "cosmetics")
 
+    # 既存の手動追加キーワードを segment_id ごとに保存
+    kw_path = case_dir / "keywords.json"
+    manual_by_seg = {}  # segment_id -> [kw, ...]
+    if kw_path.exists():
+        try:
+            with open(kw_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            for group in existing:
+                for seg_id in group.get("segment_ids", []):
+                    for kw in group.get("keywords", []):
+                        if kw.get("type") == "手動追加" or kw.get("source") == "manual" or kw.get("source") == "手動":
+                            manual_by_seg.setdefault(seg_id, []).append(kw)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
     # 4ステップパイプライン実行
     pipeline_result = recommend_regex(segs, hongan, field)
 
-    # グループ構造に変換
-    result = build_keyword_groups_from_pipeline(pipeline_result, segs, field)
+    # segment_keywords.json にも保存
+    with open(case_dir / "segment_keywords.json", "w", encoding="utf-8") as f:
+        json.dump(pipeline_result, f, ensure_ascii=False, indent=2)
 
-    with open(case_dir / "keywords.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    # グループ構造に変換（hongan渡しで実施例化合物・明細書具体名もエンリッチ）
+    ai_groups = build_keyword_groups_from_pipeline(pipeline_result, segs, field, hongan=hongan)
 
-    return jsonify(result)
+    # 手動追加キーワードを復元マージ
+    for group in ai_groups:
+        existing_terms = {kw["term"] for kw in group["keywords"]}
+        for seg_id in group.get("segment_ids", []):
+            for mkw in manual_by_seg.get(seg_id, []):
+                if mkw["term"] not in existing_terms:
+                    group["keywords"].append(mkw)
+                    existing_terms.add(mkw["term"])
+
+    # replaceモード: AI結果で全置換
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(ai_groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify(ai_groups)
 
 
 @app.route("/case/<case_id>/keywords", methods=["GET"])
@@ -515,6 +562,46 @@ def delete_keyword(case_id):
     return jsonify({"success": True})
 
 
+@app.route("/case/<case_id>/keywords/edit", methods=["POST"])
+def edit_keyword(case_id):
+    """キーワードの文字列を修正"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+    old_term = (data.get("old_term") or "").strip()
+    new_term = (data.get("new_term") or "").strip()
+
+    if not old_term or not new_term:
+        return jsonify({"error": "old_term と new_term は必須です"}), 400
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    updated = False
+    for group in groups:
+        if group["group_id"] == group_id:
+            for kw in group["keywords"]:
+                if kw["term"] == old_term:
+                    kw["term"] = new_term
+                    updated = True
+                    break
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    if not updated:
+        return jsonify({"error": f"キーワード「{old_term}」が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
+
+
 @app.route("/case/<case_id>/keywords/group/add", methods=["POST"])
 def add_keyword_group(case_id):
     """キーワードグループを新規追加"""
@@ -543,6 +630,139 @@ def add_keyword_group(case_id):
         json.dump(groups, f, ensure_ascii=False, indent=2)
 
     return jsonify({"success": True, "group_id": new_id})
+
+
+@app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
+def fterm_candidates(case_id):
+    """本願のFterm候補一覧を返す（classification.json + Fterm辞書）"""
+    from modules.fterm_dict import get_nodes
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    field = meta.get("field", "cosmetics") if meta else "cosmetics"
+
+    candidates = []  # [{code, label, source, note?}]
+    seen = set()
+
+    # ソース1: classification.json のFterm（本願に直接推薦されたもの）
+    cls_path = case_dir / "search" / "classification.json"
+    if cls_path.exists():
+        with open(cls_path, "r", encoding="utf-8") as f:
+            cls_data = json.load(f)
+        for ft in cls_data.get("fterm", []):
+            code = ft.get("code", "")
+            if code and code not in seen:
+                seen.add(code)
+                candidates.append({
+                    "code": code,
+                    "label": ft.get("label", ""),
+                    "source": "本願分類",
+                    "type": ft.get("type", ""),
+                    "note": ft.get("note", ""),
+                })
+
+    # ソース2: keywords.json で既に使われているFterm
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            groups = json.load(f)
+        for g in groups:
+            for ft in g.get("search_codes", {}).get("fterm", []):
+                code = ft.get("code", "")
+                if code and code not in seen:
+                    seen.add(code)
+                    candidates.append({
+                        "code": code,
+                        "label": ft.get("desc", ""),
+                        "source": "既存グループ",
+                    })
+
+    # ソース3: Fterm辞書ノード（depth >= 2の具体的なコード）
+    try:
+        nodes = get_nodes(field)
+        for code, node in nodes.items():
+            if node.get("depth", 0) >= 2 and code not in seen:
+                seen.add(code)
+                candidates.append({
+                    "code": code,
+                    "label": node.get("label", ""),
+                    "source": "辞書",
+                    "examples": (node.get("examples") or [])[:3],
+                })
+    except Exception:
+        pass
+
+    return jsonify(candidates)
+
+
+@app.route("/case/<case_id>/keywords/fterm/add", methods=["POST"])
+def add_fterm(case_id):
+    """Ftermコードをグループに追加"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+    code = (data.get("code") or "").strip()
+    desc = (data.get("desc") or "").strip()
+    if not code:
+        return jsonify({"error": "Ftermコードを入力してください"}), 400
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            if "search_codes" not in group:
+                group["search_codes"] = {}
+            if "fterm" not in group["search_codes"]:
+                group["search_codes"]["fterm"] = []
+            # 重複チェック
+            existing = [ft["code"] for ft in group["search_codes"]["fterm"]]
+            if code in existing:
+                return jsonify({"error": f"Fterm「{code}」は既に存在します"}), 400
+            group["search_codes"]["fterm"].append({"code": code, "desc": desc})
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True, "code": code, "desc": desc})
+
+
+@app.route("/case/<case_id>/keywords/fterm/delete", methods=["POST"])
+def delete_fterm(case_id):
+    """Ftermコードをグループから削除"""
+    case_dir = get_case_dir(case_id)
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return jsonify({"error": "キーワードデータがありません"}), 404
+
+    data = request.get_json() or {}
+    group_id = data.get("group_id")
+    code = (data.get("code") or "").strip()
+
+    with open(kw_path, "r", encoding="utf-8") as f:
+        groups = json.load(f)
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            if "search_codes" in group and "fterm" in group["search_codes"]:
+                group["search_codes"]["fterm"] = [
+                    ft for ft in group["search_codes"]["fterm"] if ft["code"] != code
+                ]
+            break
+    else:
+        return jsonify({"error": f"グループ{group_id}が見つかりません"}), 404
+
+    with open(kw_path, "w", encoding="utf-8") as f:
+        json.dump(groups, f, ensure_ascii=False, indent=2)
+
+    return jsonify({"success": True})
 
 
 @app.route("/case/<case_id>/keywords/group/delete", methods=["POST"])
@@ -1384,6 +1604,12 @@ def compare_execute(case_id):
     for claim in segs:
         for seg in claim["segments"]:
             all_segment_ids.append(seg["id"])
+
+    # デバッグ: raw_responseを保存
+    raw_path = case_dir / "responses" / "_last_raw_response.txt"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(raw_path, "w", encoding="utf-8") as f:
+        f.write(raw_response)
 
     result, errors = parse_response(raw_response, all_segment_ids)
 

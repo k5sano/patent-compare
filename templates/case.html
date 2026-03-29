@@ -276,6 +276,27 @@
   .kw-term:hover { border-bottom-color: var(--text2); }
   .kw-edit-input { border: 1px solid var(--accent); border-radius: 3px; font-size: 0.82rem; padding: 0 4px; background: var(--surface1); color: var(--text1); width: auto; min-width: 4em; }
 
+  /* Fterm ドロップダウン */
+  .fterm-dropdown {
+    position: absolute; top: 100%; left: 0; z-index: 9999;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5); width: 380px; max-height: 300px;
+    overflow-y: auto; padding: 4px 0; font-size: 0.78rem;
+  }
+  .fterm-dd-item {
+    padding: 5px 10px; cursor: pointer; display: flex; gap: 6px; align-items: baseline;
+    border-bottom: 1px solid var(--border);
+  }
+  .fterm-dd-item:last-child { border-bottom: none; }
+  .fterm-dd-item:hover { background: var(--surface2); }
+  .fterm-dd-item.highlighted { background: rgba(59,130,246,0.15); }
+  .fterm-dd-code { color: #60a5fa; font-weight: 600; white-space: nowrap; min-width: 70px; }
+  .fterm-dd-label { color: var(--text); flex: 1; }
+  .fterm-dd-source { color: var(--text2); font-size: 0.7rem; white-space: nowrap; }
+  .fterm-dd-examples { color: var(--text2); font-size: 0.7rem; margin-top: 1px; }
+  .fterm-dd-section { padding: 3px 10px; font-size: 0.7rem; color: var(--accent); font-weight: 600;
+    background: var(--surface2); position: sticky; top: 0; }
+
   /* テキスト選択キーワード追加ポップオーバー */
   #kw-add-popover { display: none; position: absolute; z-index: 9999; background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); padding: 12px; min-width: 200px; max-width: 320px; }
@@ -450,7 +471,7 @@
         <button class="btn btn-primary" id="btn-suggest" onclick="suggestKeywords()">
           AI自動提案
         </button>
-        <button class="btn btn-outline" onclick="addNewGroup()">+ グループ追加</button>
+        <button class="btn btn-outline" onclick="addNewGroup(event)">+ グループ追加</button>
         <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
         <div class="loading-msg" id="loading-suggest" style="margin:0;">
           <div class="spinner"></div>
@@ -1541,11 +1562,11 @@ function renderKwTag(gid, kw) {
   const typeLabel = kw.type || '';
   const badgeClass = typeToBadgeClass(typeLabel);
   return `<span class="kw-tag" style="background:var(--surface2); display:inline-flex; align-items:center;
-    gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}">
+    gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}" data-gid="${gid}">
     <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
-    <span>${escHtml(kw.term)}</span>
+    <span class="kw-term-text" title="ダブルクリックで編集"
+      style="cursor:text;">${escHtml(kw.term)}</span>
     <button class="kw-del" title="削除"
-      onclick="deleteKeyword(${gid}, '${escAttr(kw.term)}')"
       style="background:none; border:none; color:var(--text2); cursor:pointer; font-size:0.85rem;
              padding:0 2px; line-height:1; border-radius:50%;">&times;</button>
   </span>`;
@@ -1553,13 +1574,30 @@ function renderKwTag(gid, kw) {
 
 function renderFterms(g) {
   const fterms = g.search_codes && g.search_codes.fterm ? g.search_codes.fterm : [];
-  if (!fterms.length) return '';
   const items = fterms.map(ft =>
     `<span style="font-size:0.75rem; padding:1px 6px; background:#1e3a5f; color:#60a5fa;
-      border-radius:4px; margin:1px;">${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span></span>`
+      border-radius:4px; margin:1px; display:inline-flex; align-items:center; gap:3px;">
+      ${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span>
+      <button class="fterm-del" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
+        style="background:none; border:none; color:#60a5fa; cursor:pointer; font-size:0.8rem;
+               padding:0 1px; opacity:0.6;" title="削除">&times;</button>
+    </span>`
   ).join('');
   return `<div style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px;">
     <span style="font-size:0.75rem; color:var(--text2);">Fterm:</span> ${items}
+    <span class="fterm-picker-wrap" style="display:inline-flex; align-items:center; gap:3px; margin-left:4px; position:relative;">
+      <input class="fterm-add-input" type="text" placeholder="コード追加..." data-gid="${g.group_id}"
+        style="font-size:0.75rem; padding:1px 6px; border:1px solid var(--border); border-radius:4px;
+               background:var(--bg); color:var(--text); width:160px;"
+        onfocus="openFtermPicker(${g.group_id}, this)"
+        oninput="filterFtermPicker(this)"
+        onkeydown="if(event.key==='Enter'){addFterm(${g.group_id}, this); closeFtermPicker();}
+                   if(event.key==='Escape'){closeFtermPicker();}">
+      <button style="background:none; border:1px solid var(--border); color:#60a5fa; cursor:pointer;
+                     font-size:0.75rem; padding:1px 6px; border-radius:4px;"
+              onclick="addFterm(${g.group_id}, this.previousElementSibling); closeFtermPicker();">+</button>
+      <div class="fterm-dropdown" id="fterm-dd-${g.group_id}" style="display:none;"></div>
+    </span>
   </div>`;
 }
 
@@ -1591,9 +1629,9 @@ async function suggestKeywords() {
   try {
     const res = await fetch(`/case/${CASE_ID}/keywords/suggest`, { method: 'POST' });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'エラー'); }
-    kwGroups = await res.json();
+    kwGroups = await res.json();   // サーバー側でreplaceモード: AI結果で全置換（手動追加は保持）
     renderGroups();
-    showKwSaveMsg('AI提案が完了しました');
+    showKwSaveMsg('AI提案で全グループを再生成しました');
   } catch(e) {
     alert('エラー: ' + e.message);
   } finally {
@@ -1602,25 +1640,30 @@ async function suggestKeywords() {
   }
 }
 
-async function addNewGroup() {
-  const label = prompt('グループのラベルを入力:', '新規グループ');
-  if (label === null) return;
+async function addNewGroup(evt) {
+  if (evt) { evt.preventDefault(); evt.stopPropagation(); }
+  const label = '新規グループ';
   try {
     const res = await fetch(`/case/${CASE_ID}/keywords/group/add`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ label: label.trim() || '新規グループ', segment_ids: [] })
+      body: JSON.stringify({ label, segment_ids: [] })
     });
     if (!res.ok) throw new Error('追加失敗');
     const d = await res.json();
     kwGroups.push({
       group_id: d.group_id,
-      label: label.trim() || '新規グループ',
+      label,
       segment_ids: [],
       keywords: [],
       search_codes: { fterm: [], fi: [] }
     });
     renderGroups();
+    // 追加したグループのラベル入力にフォーカス
+    setTimeout(() => {
+      const el = document.querySelector(`#kw-group-${d.group_id} .kw-label-edit`);
+      if (el) { el.focus(); el.select(); }
+    }, 100);
     showKwSaveMsg('グループを追加しました');
   } catch(e) { alert(e.message); }
 }
@@ -1726,6 +1769,287 @@ async function deleteKeyword(gid, term) {
   } catch(e) { alert(e.message); }
 }
 
+function startEditKeyword(spanEl) {
+  const tag = spanEl.closest('.kw-tag');
+  const gid = parseInt(tag.dataset.gid);
+  const oldTerm = tag.dataset.term;
+
+  // 既に編集中なら無視
+  if (tag.querySelector('.kw-edit-input')) return;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = oldTerm;
+  input.className = 'kw-edit-input';
+  input.style.cssText = 'font-size:0.8rem; padding:1px 4px; border:1px solid var(--primary); border-radius:4px; background:var(--bg); color:var(--text1); width:' + Math.max(80, oldTerm.length * 12) + 'px; outline:none;';
+
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); saveEditKeyword(tag, gid, oldTerm, input.value); }
+    if (e.key === 'Escape') { e.preventDefault(); cancelEditKeyword(tag, oldTerm); }
+  };
+  input.onblur = () => {
+    // 少し遅延して、blur時に保存（Enterで既に保存されていたらスキップ）
+    setTimeout(() => {
+      if (tag.querySelector('.kw-edit-input')) {
+        saveEditKeyword(tag, gid, oldTerm, input.value);
+      }
+    }, 150);
+  };
+
+  spanEl.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+function cancelEditKeyword(tag, oldTerm) {
+  const input = tag.querySelector('.kw-edit-input');
+  if (!input) return;
+  const span = document.createElement('span');
+  span.className = 'kw-term-text';
+  span.setAttribute('ondblclick', 'startEditKeyword(this)');
+  span.title = 'ダブルクリックで編集';
+  span.style.cursor = 'text';
+  span.textContent = oldTerm;
+  input.replaceWith(span);
+}
+
+async function saveEditKeyword(tag, gid, oldTerm, newTerm) {
+  newTerm = (newTerm || '').trim();
+  if (!newTerm || newTerm === oldTerm) {
+    cancelEditKeyword(tag, oldTerm);
+    return;
+  }
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/edit`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, old_term: oldTerm, new_term: newTerm })
+    });
+    if (!res.ok) throw new Error('修正失敗');
+
+    // ローカルデータ更新
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      const kw = g.keywords.find(k => k.term === oldTerm);
+      if (kw) kw.term = newTerm;
+    }
+
+    // DOM更新
+    tag.dataset.term = newTerm;
+    // 削除ボタンのonclickも更新
+    const delBtn = tag.querySelector('.kw-del');
+    if (delBtn) delBtn.setAttribute('onclick', `deleteKeyword(${gid}, '${escAttr(newTerm)}')`);
+    // input → span に戻す
+    const input = tag.querySelector('.kw-edit-input');
+    if (input) {
+      const span = document.createElement('span');
+      span.className = 'kw-term-text';
+      span.setAttribute('ondblclick', 'startEditKeyword(this)');
+      span.title = 'ダブルクリックで編集';
+      span.style.cursor = 'text';
+      span.textContent = newTerm;
+      input.replaceWith(span);
+    }
+
+    showKwToast(`「${oldTerm}」→「${newTerm}」に修正しました`);
+  } catch(e) {
+    alert(e.message);
+    cancelEditKeyword(tag, oldTerm);
+  }
+}
+
+// ================================================================
+// Fterm ピッカー（候補ドロップダウン）
+// ================================================================
+let _ftermCandidates = null;  // キャッシュ
+let _ftermPickerGid = null;
+
+async function _loadFtermCandidates() {
+  if (_ftermCandidates) return _ftermCandidates;
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fterm/candidates`);
+    if (res.ok) _ftermCandidates = await res.json();
+    else _ftermCandidates = [];
+  } catch(e) { _ftermCandidates = []; }
+  return _ftermCandidates;
+}
+
+async function openFtermPicker(gid, inputEl) {
+  _ftermPickerGid = gid;
+  const candidates = await _loadFtermCandidates();
+  const dd = document.getElementById(`fterm-dd-${gid}`);
+  if (!dd) return;
+
+  // 既にグループに追加済みのコードを除外
+  const g = kwGroups.find(g => g.group_id === gid);
+  const existing = new Set();
+  if (g && g.search_codes && g.search_codes.fterm) {
+    g.search_codes.fterm.forEach(ft => existing.add(ft.code));
+  }
+
+  const filtered = candidates.filter(c => !existing.has(c.code));
+  _renderFtermDropdown(dd, filtered, gid, '');
+  dd.style.display = 'block';
+
+  // 外側クリックで閉じる
+  setTimeout(() => {
+    document.addEventListener('click', _closeFtermPickerOutside, { once: true, capture: true });
+  }, 100);
+}
+
+function _closeFtermPickerOutside(e) {
+  if (e.target.closest('.fterm-picker-wrap')) {
+    // ピッカー内のクリックなら再度リスナー設定
+    setTimeout(() => {
+      document.addEventListener('click', _closeFtermPickerOutside, { once: true, capture: true });
+    }, 100);
+    return;
+  }
+  closeFtermPicker();
+}
+
+function closeFtermPicker() {
+  document.querySelectorAll('.fterm-dropdown').forEach(dd => dd.style.display = 'none');
+  _ftermPickerGid = null;
+}
+
+function filterFtermPicker(inputEl) {
+  const gid = parseInt(inputEl.dataset.gid);
+  const dd = document.getElementById(`fterm-dd-${gid}`);
+  if (!dd || !_ftermCandidates) return;
+
+  const q = (inputEl.value || '').trim().toLowerCase();
+  const g = kwGroups.find(g => g.group_id === gid);
+  const existing = new Set();
+  if (g && g.search_codes && g.search_codes.fterm) {
+    g.search_codes.fterm.forEach(ft => existing.add(ft.code));
+  }
+
+  const filtered = _ftermCandidates.filter(c => {
+    if (existing.has(c.code)) return false;
+    if (!q) return true;
+    return c.code.toLowerCase().includes(q)
+      || (c.label || '').toLowerCase().includes(q)
+      || ((c.examples || []).join(' ')).toLowerCase().includes(q);
+  });
+
+  _renderFtermDropdown(dd, filtered, gid, q);
+  dd.style.display = 'block';
+}
+
+function _renderFtermDropdown(dd, items, gid, query) {
+  if (!items.length) {
+    dd.innerHTML = '<div style="padding:8px 10px; color:var(--text2);">候補なし</div>';
+    return;
+  }
+
+  // ソース別にグループ化（本願分類を先頭に）
+  const bySource = {};
+  const sourceOrder = ['本願分類', '既存グループ', '辞書'];
+  items.forEach(c => {
+    const src = c.source || '辞書';
+    if (!bySource[src]) bySource[src] = [];
+    bySource[src].push(c);
+  });
+
+  let html = '';
+  for (const src of sourceOrder) {
+    const group = bySource[src];
+    if (!group || !group.length) continue;
+    html += `<div class="fterm-dd-section">${escHtml(src)}（${group.length}件）</div>`;
+    const limit = src === '辞書' ? 30 : group.length;  // 辞書は多いので30件まで
+    for (let i = 0; i < Math.min(limit, group.length); i++) {
+      const c = group[i];
+      const examples = (c.examples || []).join(', ');
+      html += `<div class="fterm-dd-item" data-code="${escAttr(c.code)}" data-label="${escAttr(c.label || '')}"
+        onclick="selectFtermCandidate(${gid}, '${escAttr(c.code)}', '${escAttr(c.label || '')}')">
+        <span class="fterm-dd-code">${escHtml(c.code)}</span>
+        <span class="fterm-dd-label">${escHtml(c.label || '')}${examples ? `<span class="fterm-dd-examples"> (${escHtml(examples)})</span>` : ''}</span>
+        ${c.type ? `<span class="fterm-dd-source">${escHtml(c.type)}</span>` : ''}
+      </div>`;
+    }
+    if (src === '辞書' && group.length > limit) {
+      html += `<div style="padding:4px 10px; color:var(--text2); font-size:0.7rem;">...他${group.length - limit}件（入力で絞り込み）</div>`;
+    }
+  }
+  dd.innerHTML = html;
+}
+
+async function selectFtermCandidate(gid, code, label) {
+  closeFtermPicker();
+  // 入力欄にコードを設定してaddFtermを呼ぶ
+  const input = document.querySelector(`.fterm-add-input[data-gid="${gid}"]`);
+  if (input) input.value = code;
+
+  // descをlabelで設定してサーバーに送信
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fterm/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code, desc: label })
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || '追加失敗'); }
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      if (!g.search_codes) g.search_codes = {};
+      if (!g.search_codes.fterm) g.search_codes.fterm = [];
+      g.search_codes.fterm.push({ code, desc: label });
+    }
+    if (input) input.value = '';
+    renderGroups();
+    showKwToast(`Fterm「${code} ${label}」を追加しました`);
+  } catch(e) { alert(e.message); }
+}
+
+// ================================================================
+// Fterm 追加・削除
+// ================================================================
+async function addFterm(gid, inputEl) {
+  const code = (inputEl.value || '').trim();
+  if (!code) return;
+  // 候補リストからlabelを取得
+  let desc = '';
+  if (_ftermCandidates) {
+    const match = _ftermCandidates.find(c => c.code === code);
+    if (match) desc = match.label || '';
+  }
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fterm/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code, desc })
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || '追加失敗'); }
+    const d = await res.json();
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      if (!g.search_codes) g.search_codes = {};
+      if (!g.search_codes.fterm) g.search_codes.fterm = [];
+      g.search_codes.fterm.push({ code: d.code, desc: d.desc || '' });
+    }
+    inputEl.value = '';
+    renderGroups();
+    showKwToast(`Fterm「${d.code}」を追加しました`);
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteFterm(gid, code) {
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fterm/delete`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code })
+    });
+    if (!res.ok) throw new Error('削除失敗');
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g && g.search_codes && g.search_codes.fterm) {
+      g.search_codes.fterm = g.search_codes.fterm.filter(ft => ft.code !== code);
+    }
+    renderGroups();
+    showKwToast(`Fterm「${code}」を削除しました`);
+  } catch(e) { alert(e.message); }
+}
+
 // ================================================================
 // コピー機能
 // ================================================================
@@ -1806,6 +2130,35 @@ function showKwToast(msg) {
 
 document.addEventListener('DOMContentLoaded', () => {
   renderGroups();
+
+  // イベントデリゲーション: キーワードタグの編集・削除
+  const kwContainer = document.getElementById('kw-groups-container');
+  if (kwContainer) {
+    // ダブルクリックで編集
+    kwContainer.addEventListener('dblclick', (e) => {
+      const termSpan = e.target.closest('.kw-term-text');
+      if (termSpan) { startEditKeyword(termSpan); }
+    });
+    // ×ボタンで削除
+    kwContainer.addEventListener('click', (e) => {
+      const delBtn = e.target.closest('.kw-del');
+      if (delBtn) {
+        const tag = delBtn.closest('.kw-tag');
+        if (tag) {
+          const gid = parseInt(tag.dataset.gid);
+          const term = tag.dataset.term;
+          deleteKeyword(gid, term);
+        }
+      }
+      // Fterm 削除ボタン
+      const ftDel = e.target.closest('.fterm-del');
+      if (ftDel) {
+        const gid = parseInt(ftDel.dataset.gid);
+        const code = ftDel.dataset.code;
+        deleteFterm(gid, code);
+      }
+    });
+  }
 });
 
 // ===== 対比（複数文献対応） =====
