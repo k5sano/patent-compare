@@ -1530,8 +1530,10 @@ function renderGroup(g) {
     <div style="display:flex; gap:4px; margin-left:auto; flex-shrink:0;">
       <button class="kw-group-btn" title="このグループのキーワードを他のグループにコピー"
               onclick="openCopyModal(${g.group_id})">コピー</button>
+      <button class="kw-group-btn kw-group-btn-del" title="選択したキーワード・Ftermを削除"
+              onclick="deleteSelected(${g.group_id})">選択削除</button>
       <button class="kw-group-btn kw-group-btn-del" title="グループ削除"
-              onclick="deleteGroup(${g.group_id})">削除</button>
+              onclick="deleteGroup(${g.group_id})">グループ削除</button>
     </div>
   </div>
 
@@ -1563,12 +1565,11 @@ function renderKwTag(gid, kw) {
   const badgeClass = typeToBadgeClass(typeLabel);
   return `<span class="kw-tag" style="background:var(--surface2); display:inline-flex; align-items:center;
     gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}" data-gid="${gid}">
+    <input type="checkbox" class="kw-sel" data-gid="${gid}" data-term="${escAttr(kw.term)}"
+      style="margin:0; cursor:pointer; accent-color:#ef4444;">
     <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
     <span class="kw-term-text" title="ダブルクリックで編集"
       style="cursor:text;">${escHtml(kw.term)}</span>
-    <button class="kw-del" title="削除"
-      style="background:none; border:none; color:var(--text2); cursor:pointer; font-size:0.85rem;
-             padding:0 2px; line-height:1; border-radius:50%;">&times;</button>
   </span>`;
 }
 
@@ -1577,10 +1578,9 @@ function renderFterms(g) {
   const items = fterms.map(ft =>
     `<span style="font-size:0.75rem; padding:1px 6px; background:#1e3a5f; color:#60a5fa;
       border-radius:4px; margin:1px; display:inline-flex; align-items:center; gap:3px;">
+      <input type="checkbox" class="fterm-sel" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
+        style="margin:0; cursor:pointer; accent-color:#ef4444; width:12px; height:12px;">
       ${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span>
-      <button class="fterm-del" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
-        style="background:none; border:none; color:#60a5fa; cursor:pointer; font-size:0.8rem;
-               padding:0 1px; opacity:0.6;" title="削除">&times;</button>
     </span>`
   ).join('');
   return `<div style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px;">
@@ -1681,6 +1681,57 @@ async function deleteGroup(gid) {
     renderGroups();
     showKwSaveMsg('グループを削除しました');
   } catch(e) { alert(e.message); }
+}
+
+async function deleteSelected(gid) {
+  const groupEl = document.getElementById('kw-group-' + gid);
+  if (!groupEl) return;
+  const g = kwGroups.find(g => g.group_id === gid);
+  if (!g) return;
+
+  // 選択されたキーワード
+  const selKws = Array.from(groupEl.querySelectorAll('.kw-sel:checked')).map(cb => cb.dataset.term);
+  // 選択されたFterm
+  const selFts = Array.from(groupEl.querySelectorAll('.fterm-sel:checked')).map(cb => cb.dataset.code);
+
+  if (selKws.length === 0 && selFts.length === 0) {
+    alert('削除する項目をチェックしてください');
+    return;
+  }
+
+  const msg = [];
+  if (selKws.length > 0) msg.push(`キーワード ${selKws.length}件`);
+  if (selFts.length > 0) msg.push(`Fterm ${selFts.length}件`);
+  if (!confirm(`${msg.join('、')}を削除しますか？`)) return;
+
+  // キーワード削除
+  for (const term of selKws) {
+    try {
+      await fetch(`/case/${CASE_ID}/keywords/delete`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ group_id: gid, term })
+      });
+    } catch(e) { console.warn('kw delete failed', term, e); }
+  }
+  g.keywords = (g.keywords || []).filter(kw => !selKws.includes(kw.term));
+
+  // Fterm削除
+  for (const code of selFts) {
+    try {
+      await fetch(`/case/${CASE_ID}/keywords/fterm/delete`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ group_id: gid, code })
+      });
+    } catch(e) { console.warn('fterm delete failed', code, e); }
+  }
+  if (g.search_codes && g.search_codes.fterm) {
+    g.search_codes.fterm = g.search_codes.fterm.filter(ft => !selFts.includes(ft.code));
+  }
+
+  renderGroups();
+  showKwSaveMsg(`${msg.join('、')}を削除しました`);
 }
 
 async function renameGroup(gid, newLabel) {
@@ -2139,24 +2190,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const termSpan = e.target.closest('.kw-term-text');
       if (termSpan) { startEditKeyword(termSpan); }
     });
-    // ×ボタンで削除
+    // チェックボックスのクリックがバブルアップしてdblclick等に干渉しないようにする
     kwContainer.addEventListener('click', (e) => {
-      const delBtn = e.target.closest('.kw-del');
-      if (delBtn) {
-        const tag = delBtn.closest('.kw-tag');
-        if (tag) {
-          const gid = parseInt(tag.dataset.gid);
-          const term = tag.dataset.term;
-          deleteKeyword(gid, term);
-        }
-      }
-      // Fterm 削除ボタン
-      const ftDel = e.target.closest('.fterm-del');
-      if (ftDel) {
-        const gid = parseInt(ftDel.dataset.gid);
-        const code = ftDel.dataset.code;
-        deleteFterm(gid, code);
-      }
+      // チェックボックス自体はデフォルト動作に任せる
     });
   }
 });

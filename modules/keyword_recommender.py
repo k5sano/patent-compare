@@ -795,6 +795,464 @@ def recommend_regex(segments, hongan, field):
 
 
 # ============================================================
+# 新パイプライン: AI技術構造化ベースのキーワード選定
+# ============================================================
+
+def _build_definition_excerpt(hongan, max_chars=8000):
+    """明細書の定義・説明セクションを優先抽出。
+
+    section が "手段", "実施形態" のパラグラフを優先。
+    次に "効果", "技術分野", "背景技術"。
+    """
+    if not hongan:
+        return ""
+    priority = ["手段", "実施形態", "効果", "技術分野", "背景技術"]
+    lines = []
+    total = 0
+    seen_ids = set()
+    for section in priority:
+        for para in hongan.get("paragraphs", []):
+            if para.get("section") == section and para["id"] not in seen_ids:
+                text = _preprocess_text(para.get("text", ""))
+                line = f"【{para['id']}】{text}"
+                if total + len(line) > max_chars:
+                    return "\n".join(lines)
+                lines.append(line)
+                total += len(line)
+                seen_ids.add(para["id"])
+    return "\n".join(lines)
+
+
+def _build_example_excerpt(hongan, max_chars=4000):
+    """実施例・比較例セクションを抽出。"""
+    if not hongan:
+        return ""
+    lines = []
+    total = 0
+    for para in hongan.get("paragraphs", []):
+        if para.get("section") in ("実施例", "比較例"):
+            text = _preprocess_text(para.get("text", ""))
+            line = f"【{para['id']}】{text}"
+            if total + len(line) > max_chars:
+                break
+            lines.append(line)
+            total += len(line)
+    return "\n".join(lines)
+
+
+def _build_segments_text(segments):
+    """請求項分節テキストをAIプロンプト用に整形（独立項のみ）"""
+    lines = []
+    for claim in segments:
+        if not claim.get("is_independent", False):
+            continue
+        for seg in claim.get("segments", []):
+            text = _preprocess_text(seg.get("text", ""))
+            lines.append(f"[{seg['id']}] {text}")
+    return "\n".join(lines)
+
+
+def _build_tech_analysis_prompt(segments, hongan, field):
+    """tech_analysis 用のAIプロンプトを生成。
+
+    Returns:
+        str: プロンプト文字列
+    """
+    seg_text = _build_segments_text(segments)
+    def_text = _build_definition_excerpt(hongan, max_chars=8000)
+    ex_text = _build_example_excerpt(hongan, max_chars=4000)
+
+    # 全分節IDリスト
+    all_seg_ids = []
+    for claim in segments:
+        for seg in claim.get("segments", []):
+            all_seg_ids.append(seg["id"])
+    seg_id_list = ", ".join(all_seg_ids)
+
+    field_role = {
+        "cosmetics": "化粧品化学・特許調査の専門家",
+        "laminate": "高分子材料・積層フィルム技術の専門家",
+    }.get(field, "当該技術分野の専門家")
+
+    prompt = f"""あなたは{field_role}です。
+以下の特許請求項と明細書から、技術構造化とキーワード抽出を行ってください。
+
+## 請求項分節
+{seg_text}
+
+## 明細書（定義・説明セクション）
+{def_text if def_text else "(なし)"}
+
+## 明細書（実施例セクション）
+{ex_text if ex_text else "(なし)"}
+
+## 指示
+
+請求項の構成要件を**技術概念単位**でグルーピングし、各要素について以下3つのソースからキーワードを網羅的に抽出してください。
+
+- **claim_terms**: 請求項テキストに現れる成分名・効果・作用（原文そのまま、分割禁止）
+- **definition_terms**: 明細書の定義セクションに記載された上位概念・具体名・商品名（段落番号付き）
+- **example_terms**: 実施例の配合表等に記載された具体的な化合物名（段落番号付き）
+- **synonyms**: 同義語（ja: 和名・化学名、en: INCI名・英語学術用語）
+
+## 出力形式（JSONのみ、説明文不要）
+```json
+{{
+  "core_sentence": "技術の一文要約",
+  "elements": {{
+    "A_xxx": {{
+      "label": "要素ラベル（3〜15文字）",
+      "segment_ids": ["1A", "1B"],
+      "claim_terms": ["アミノ酸系カチオン界面活性剤"],
+      "definition_terms": [
+        {{"term": "ステアリン酸ジメチルアミノプロピルアミド", "para": "0025", "type": "具体名"}},
+        {{"term": "カチナールMTB-40", "para": "0026", "type": "商品名"}}
+      ],
+      "example_terms": [
+        {{"term": "ステアリン酸ジメチルアミノプロピルアミド", "para": "0045", "examples": ["実施例1"]}}
+      ],
+      "synonyms": {{
+        "ja": ["第三級アミン型カチオン界面活性剤"],
+        "en": ["stearamidopropyl dimethylamine"]
+      }}
+    }}
+  }}
+}}
+```
+
+## ルール（厳守）
+1. definition_terms は明細書に**実際に書かれている語句のみ**。推測で追加しない。
+2. example_terms は実施例の配合表に**実際に記載されている化合物名のみ**。
+3. claim_terms は請求項テキストに現れる語句を**そのまま**使う。「アミノ酸系カチオン界面活性剤」を「アミノ」「カチオン」に分割しないこと。
+4. **全分節**（{seg_id_list}）を必ずいずれかの要素の segment_ids に含めること。漏れ禁止。
+5. 要素数に上限なし。技術的に意味のある単位で分ける。
+6. label は技術内容を端的に表す日本語（3〜15文字）。"""
+
+    return prompt
+
+
+def _extract_json_object(raw_text):
+    """テキストからJSON objectを抽出"""
+    # パターン1: ```json ... ``` ブロック
+    json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
+    matches = json_block_pattern.findall(raw_text)
+    for match in matches:
+        try:
+            data = json.loads(match)
+            if isinstance(data, dict) and "elements" in data:
+                return data
+        except json.JSONDecodeError:
+            continue
+
+    # パターン2: 最外側の { ... } を探す
+    brace_depth = 0
+    start = None
+    for i, ch in enumerate(raw_text):
+        if ch == '{':
+            if brace_depth == 0:
+                start = i
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0 and start is not None:
+                candidate = raw_text[start:i + 1]
+                try:
+                    data = json.loads(candidate)
+                    if isinstance(data, dict) and "elements" in data:
+                        return data
+                except json.JSONDecodeError:
+                    start = None
+                    continue
+
+    # パターン3: 途中切れJSON修復
+    from modules.response_parser import _try_repair_json
+    first_brace = raw_text.find('{')
+    if first_brace >= 0:
+        repaired = _try_repair_json(raw_text[first_brace:])
+        if isinstance(repaired, dict) and "elements" in repaired:
+            return repaired
+
+    return None
+
+
+def _call_ai_tech_analysis(prompt, field):
+    """AIを呼び出してtech_analysisを取得。
+
+    API key → anthropic SDK (claude-sonnet-4)
+    API keyなし → Claude CLI (call_claude)
+    どちらも失敗 → None
+
+    Returns:
+        dict or None: tech_analysis JSON
+    """
+    # 方法1: Anthropic API (API key あり)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if api_key:
+        try:
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=8192,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text
+            result = _extract_json_object(raw)
+            if result:
+                logger.info("tech_analysis: Anthropic API で取得 (%d 要素)",
+                            len(result.get("elements", {})))
+                return result
+            logger.warning("tech_analysis: API応答からJSONを抽出できませんでした")
+        except ImportError:
+            logger.info("anthropic パッケージ未インストール — CLI フォールバック")
+        except Exception as e:
+            logger.warning("tech_analysis API エラー: %s — CLI フォールバック", e)
+
+    # 方法2: Claude CLI (API keyなし or API失敗)
+    try:
+        from modules.claude_client import call_claude, is_claude_available, ClaudeClientError
+        if not is_claude_available():
+            logger.warning("Claude CLI 利用不可")
+            return None
+        logger.info("tech_analysis: Claude CLI で実行 (prompt=%d 文字)", len(prompt))
+        raw = call_claude(prompt, timeout=300)
+        result = _extract_json_object(raw)
+        if result:
+            logger.info("tech_analysis: CLI で取得 (%d 要素)",
+                        len(result.get("elements", {})))
+            return result
+        logger.warning("tech_analysis: CLI応答からJSONを抽出できませんでした")
+    except Exception as e:
+        logger.warning("tech_analysis CLI エラー: %s", e)
+
+    return None
+
+
+def _tech_analysis_to_pipeline_result(tech_analysis, segments):
+    """tech_analysis を pipeline_result 形式に変換。
+
+    1つの element が複数の segment_ids を持つ場合、
+    各 segment_id に対して同じキーワードセットを持つ item を作る。
+
+    Returns:
+        list of dict: [{"segment_id": "1A", "segment_text": "...",
+                        "keywords": [...], "_ai_label": "..."}, ...]
+    """
+    # 全分節テキストマップ
+    seg_texts = {}
+    for claim in segments:
+        for seg in claim.get("segments", []):
+            seg_texts[seg["id"]] = seg.get("text", "")
+
+    elements = tech_analysis.get("elements", {})
+
+    # segment_id → (element_key, element_data) マッピング
+    seg_to_elements = {}
+    for key, elem in elements.items():
+        for sid in elem.get("segment_ids", []):
+            if sid not in seg_to_elements:
+                seg_to_elements[sid] = []
+            seg_to_elements[sid].append((key, elem))
+
+    results = []
+    all_seg_ids = list(seg_texts.keys())
+
+    for seg_id in all_seg_ids:
+        keywords = []
+        seen = set()
+        ai_label = ""
+
+        mapped_elements = seg_to_elements.get(seg_id, [])
+
+        for elem_key, elem in mapped_elements:
+            if not ai_label:
+                ai_label = elem.get("label", "")
+
+            # claim_terms
+            for t in elem.get("claim_terms", []):
+                if isinstance(t, str) and t.strip() and t not in seen:
+                    seen.add(t)
+                    keywords.append({
+                        "term": t, "source": "claim", "type": "請求項語句"
+                    })
+
+            # definition_terms
+            for d in elem.get("definition_terms", []):
+                if isinstance(d, dict):
+                    term = d.get("term", "").strip()
+                    para = d.get("para", "")
+                    dtype = d.get("type", "具体名")
+                else:
+                    term, para, dtype = str(d), "", "具体名"
+                if term and term not in seen:
+                    seen.add(term)
+                    source = f"定義【{para}】" if para else "定義"
+                    keywords.append({
+                        "term": term, "source": source, "type": dtype
+                    })
+
+            # example_terms
+            for e in elem.get("example_terms", []):
+                if isinstance(e, dict):
+                    term = e.get("term", "").strip()
+                    para = e.get("para", "")
+                else:
+                    term, para = str(e), ""
+                if term and term not in seen:
+                    seen.add(term)
+                    source = f"実施例【{para}】" if para else "実施例"
+                    keywords.append({
+                        "term": term, "source": source, "type": "実施例化合物"
+                    })
+
+            # synonyms.ja
+            for t in elem.get("synonyms", {}).get("ja", []):
+                if isinstance(t, str) and t.strip() and t not in seen:
+                    seen.add(t)
+                    keywords.append({
+                        "term": t, "source": "AI同義語(JA)", "type": "同義語"
+                    })
+
+            # synonyms.en
+            for t in elem.get("synonyms", {}).get("en", []):
+                if isinstance(t, str) and t.strip() and t not in seen:
+                    seen.add(t)
+                    keywords.append({
+                        "term": t, "source": "AI同義語(EN)", "type": "英名"
+                    })
+
+        item = {
+            "segment_id": seg_id,
+            "segment_text": seg_texts.get(seg_id, ""),
+            "keywords": keywords,
+        }
+        if ai_label:
+            item["_ai_label"] = ai_label
+
+        results.append(item)
+
+    return results
+
+
+def _dict_expand_pipeline_result(results, field):
+    """pipeline_result の各キーワードに対して辞書展開を実行。
+
+    - codes_for_term() で Fterm コード紐付け
+    - synonyms.json で同義語展開
+    - inci_ja.json で INCI 名展開
+    """
+    synonyms = get_synonyms(field)
+    inci_ja = get_inci(field)
+    added_total = 0
+
+    for item in results:
+        existing = {kw["term"] for kw in item["keywords"]}
+
+        # 現在のキーワードリストのコピーに対して展開
+        for kw in list(item["keywords"]):
+            term = kw["term"]
+
+            # 同義語展開
+            syns = synonyms.get(term, [])
+            if isinstance(syns, str):
+                syns = [syns]
+            for syn in syns:
+                if syn and syn not in existing and syn not in STOP_WORDS:
+                    item["keywords"].append({
+                        "term": syn, "source": "dict:synonyms", "type": "同義語"
+                    })
+                    existing.add(syn)
+                    added_total += 1
+
+            # INCI展開
+            inci_entry = inci_ja.get(term, {})
+            if isinstance(inci_entry, dict):
+                name = inci_entry.get("inci_name", "")
+            elif isinstance(inci_entry, str):
+                name = inci_entry
+            else:
+                name = ""
+            if name and name not in existing:
+                item["keywords"].append({
+                    "term": name, "source": "dict:inci", "type": "INCI英名"
+                })
+                existing.add(name)
+                added_total += 1
+
+    logger.info("辞書展開: 計 %d 語追加", added_total)
+
+
+def _fallback_regex_anchors(segments, hongan, field):
+    """AI非使用時のフォールバック。
+
+    正規表現のカタカナ断片・漢字断片をやめ、
+    分節テキスト自体をアンカー語として使う簡易版。
+    """
+    results = []
+    for claim in segments:
+        for seg in claim.get("segments", []):
+            preprocessed = _preprocess_text(seg["text"])
+            # 分節テキストから意味のある語句のみ（ストップワード除外）
+            keywords = _pick_terms_from_text(preprocessed)
+            results.append({
+                "segment_id": seg["id"],
+                "segment_text": seg["text"],
+                "keywords": keywords,
+            })
+    # 辞書展開
+    _dict_expand_pipeline_result(results, field)
+    return results
+
+
+def recommend_by_tech_analysis(segments, hongan, field):
+    """新メインエントリポイント: AI技術構造化ベースのキーワード選定。
+
+    AI技術構造化 → 明細書定義セクション解析 → 実施例抽出 → 辞書展開
+
+    Parameters:
+        segments: 請求項分節データ (segments.json)
+        hongan: 本願構造化テキスト (hongan.json)
+        field: "cosmetics" | "laminate" | etc.
+
+    Returns:
+        tuple: (tech_analysis_dict or None, pipeline_result_list)
+    """
+    # Step 1: AIプロンプト生成 & 呼び出し
+    prompt = _build_tech_analysis_prompt(segments, hongan, field)
+    logger.info("tech_analysis プロンプト生成: %d 文字", len(prompt))
+
+    tech_analysis = _call_ai_tech_analysis(prompt, field)
+
+    if tech_analysis and tech_analysis.get("elements"):
+        # Step 2: tech_analysis → pipeline_result 変換
+        results = _tech_analysis_to_pipeline_result(tech_analysis, segments)
+        logger.info("tech_analysis 変換完了: %d 分節", len(results))
+
+        # Step 3: Python側で辞書展開（AIなし）
+        _dict_expand_pipeline_result(results, field)
+
+        # 最終重複除去
+        for item in results:
+            seen = set()
+            unique = []
+            for kw in item["keywords"]:
+                if kw["term"] not in seen:
+                    seen.add(kw["term"])
+                    unique.append(kw)
+            item["keywords"] = unique
+
+        logger.info("新パイプライン完了: %d 分節、計 %d 語",
+                    len(results),
+                    sum(len(r["keywords"]) for r in results))
+        return tech_analysis, results
+    else:
+        # フォールバック: 正規表現ベース
+        logger.warning("tech_analysis 取得失敗 — フォールバックで実行")
+        results = _fallback_regex_anchors(segments, hongan, field)
+        return None, results
+
+
+# ============================================================
 # keyword_dictionary.json からのキーワード構築（後方互換）
 # ============================================================
 

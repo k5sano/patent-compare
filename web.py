@@ -427,7 +427,7 @@ def save_segments(case_id):
 
 @app.route("/case/<case_id>/keywords/suggest", methods=["POST"])
 def suggest_keywords(case_id):
-    from modules.keyword_recommender import recommend_regex
+    from modules.keyword_recommender import recommend_by_tech_analysis
     from modules.keyword_suggester import build_keyword_groups_from_pipeline
 
     case_dir = get_case_dir(case_id)
@@ -460,8 +460,13 @@ def suggest_keywords(case_id):
         except (json.JSONDecodeError, ValueError):
             pass
 
-    # 4ステップパイプライン実行
-    pipeline_result = recommend_regex(segs, hongan, field)
+    # AI tech_analysis パイプライン実行
+    tech_analysis, pipeline_result = recommend_by_tech_analysis(segs, hongan, field)
+
+    # tech_analysis.json を保存（AI分析結果）
+    if tech_analysis:
+        with open(case_dir / "tech_analysis.json", "w", encoding="utf-8") as f:
+            json.dump(tech_analysis, f, ensure_ascii=False, indent=2)
 
     # segment_keywords.json にも保存
     with open(case_dir / "segment_keywords.json", "w", encoding="utf-8") as f:
@@ -1743,12 +1748,12 @@ def _sync_to_keyword_groups(case_dir, seg_keywords, field):
 
 @app.route("/case/<case_id>/keywords/suggest-by-segment", methods=["POST"])
 def suggest_keywords_by_segment(case_id):
-    """分節別キーワード提案（パイプライン版: Step 1→2→3）
+    """分節別キーワード提案（tech_analysis パイプライン版）
 
     Returns:
         segment_keywords.json 形式のリスト
     """
-    from modules.keyword_recommender import recommend_regex
+    from modules.keyword_recommender import recommend_by_tech_analysis
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -1766,7 +1771,12 @@ def suggest_keywords_by_segment(case_id):
         segs = json.load(f)
 
     field = meta.get("field", "cosmetics")
-    result = recommend_regex(segs, hongan, field)
+    tech_analysis, result = recommend_by_tech_analysis(segs, hongan, field)
+
+    # tech_analysis.json を保存
+    if tech_analysis:
+        with open(case_dir / "tech_analysis.json", "w", encoding="utf-8") as f:
+            json.dump(tech_analysis, f, ensure_ascii=False, indent=2)
 
     # segment_keywords.json に保存
     with open(case_dir / "segment_keywords.json", "w", encoding="utf-8") as f:
