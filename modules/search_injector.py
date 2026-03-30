@@ -79,6 +79,7 @@ def inject_search_results(
     segments: list,
     keywords: Optional[list] = None,
     field: str = "cosmetics",
+    tech_analysis: Optional[dict] = None,
 ) -> str:
     """プロンプトに検索結果を注入する
 
@@ -90,39 +91,57 @@ def inject_search_results(
         segments: 請求項分節データ (segments.json)
         keywords: キーワードグループ (keywords.json, optional)
         field: 技術分野
+        tech_analysis: tech_analysis.json のデータ (optional)
 
     Returns:
         検索結果を注���したプロンプト
     """
     api_key = _load_serpapi_key()
-    if not api_key:
-        logger.info("SerpAPIキー未設定 — 事前検索スキップ")
+    # SerpAPIキーがなくてもPlaywright検索（Google Patents）は実行可能
+
+    # 複数の検索式を生成（分節ごと / キーワードグループごと）
+    queries = _build_search_queries(segments, keywords, field,
+                                    tech_analysis=tech_analysis)
+    if not queries:
+        logger.info("検索式生成不可 — 事前検索スキップ")
         return prompt_text
 
-    search_terms = _extract_search_keywords(segments, keywords, field)
-    if not search_terms:
-        logger.info("検索キーワード抽出不可 — 事前検索スキップ")
-        return prompt_text
+    # _format_results 用にフラットなキーワードリストも保持
+    search_terms = _extract_search_keywords(segments, keywords, field,
+                                            tech_analysis=tech_analysis)
 
-    logger.info("事前検索キーワード: %s", search_terms)
+    logger.info("事前検索: %d検索式を並列実行 — %s", len(queries), queries)
 
-    # --- 3つの検索を並列実行・全体10秒でタイムアウト ---
+    # --- 検索式ごとに国際+JP、全件並列実行 ---
+    # 各検索式 × (国際, JP) + Scholar(あれば) = 最大 N*2+1 並列
     all_hits: List[SearchHit] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {
-            executor.submit(_search_google_patents, search_terms): "patents",
-            executor.submit(_search_google_patents_jp, search_terms): "patents_jp",
-            executor.submit(_search_google_scholar, api_key, search_terms, field): "scholar",
-        }
+    futures = {}
+    num_workers = len(queries) * 2 + (1 if api_key else 0)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+        for i, q in enumerate(queries):
+            futures[executor.submit(
+                _search_google_patents_query, q, "", 5
+            )] = f"patents_{i}"
+            futures[executor.submit(
+                _search_google_patents_query, q, "JP", 5
+            )] = f"patents_jp_{i}"
+
+        if api_key:
+            futures[executor.submit(
+                _search_google_scholar, api_key, search_terms, field
+            )] = "scholar"
+        else:
+            logger.info("SerpAPIキー未設定 — Google Scholar検索スキップ（Patents検索は実行）")
+
         try:
-            for future in concurrent.futures.as_completed(futures, timeout=10):
+            for future in concurrent.futures.as_completed(futures, timeout=60):
                 try:
                     all_hits.extend(future.result())
                 except Exception as e:
-                    logger.warning("検索失敗（スキップ）: %s", e)
+                    logger.warning("検索失敗（スキップ）: %s — %s", futures[future], e)
         except concurrent.futures.TimeoutError:
-            logger.warning("事前検索タイムアウト（10秒）— スキップして続行")
-            return prompt_text
+            logger.warning("事前検索タイムアウト（60秒）— 取得済み結果で続行")
 
     if not all_hits:
         logger.info("事前検索結果なし")
@@ -155,11 +174,35 @@ def _extract_search_keywords(
     segments: list,
     keywords: Optional[list] = None,
     field: str = "cosmetics",
+    tech_analysis: Optional[dict] = None,
 ) -> List[str]:
-    """分節とキーワードグループから検索用語を抽出"""
+    """分節とキーワードグループから検索用語を抽出
+
+    優先順位:
+    1. tech_analysis から技術概念語（AI分析済み、最も精度が高い）
+    2. keywords.json のキーワードグループ（ユーザー選定済み）
+    3. 正規表現による分節からの簡易抽出（フォールバック）
+    """
     terms: List[str] = []
 
-    # 1. キーワードグループがあればそこから取得（ユーザーが選定済み）
+    # 1. tech_analysis から主要技術概念を取得（最優先）
+    if tech_analysis and isinstance(tech_analysis, dict):
+        for seg_key, seg_data in tech_analysis.items():
+            if not isinstance(seg_data, dict):
+                continue
+            # technical_concept フィールド
+            concept = seg_data.get("technical_concept", "")
+            if concept and len(concept) >= 2:
+                terms.append(concept)
+            # keywords リスト
+            ta_keywords = seg_data.get("keywords", [])
+            if isinstance(ta_keywords, list):
+                for kw in ta_keywords[:2]:
+                    kw_str = str(kw).strip()
+                    if kw_str and len(kw_str) >= 2:
+                        terms.append(kw_str)
+
+    # 2. キーワードグループがあればそこから取得（ユーザーが選定済み）
     if keywords and isinstance(keywords, list):
         for group in keywords:
             for kw in group.get("keywords", [])[:3]:
@@ -167,7 +210,7 @@ def _extract_search_keywords(
                 if term and len(term) >= 2:
                     terms.append(term)
 
-    # 2. 分節から名詞句を簡易抽出（キーワードが不足する場合）
+    # 3. 分節から名詞句を簡易抽出（キーワードが不足する場合）
     #    請求項1の全分節を走査 + ストップワード除外
     if len(terms) < 4:
         for claim in segments:
@@ -185,21 +228,77 @@ def _extract_search_keywords(
                         terms.append(w)
             break
 
-    # 重複除去して最大8語
-    return list(dict.fromkeys(terms))[:8]
+    # 重複除去して最大10語（tech_analysisがある場合は語数増加）
+    return list(dict.fromkeys(terms))[:10]
+
+
+def _build_search_queries(
+    segments: list,
+    keywords: Optional[list] = None,
+    field: str = "cosmetics",
+    tech_analysis: Optional[dict] = None,
+) -> List[str]:
+    """複数の検索式を生成する
+
+    tech_analysis がある場合は分節ごとに検索式を生成。
+    なければキーワードグループごと、最終手段は全語結合の1式。
+    """
+    queries: List[str] = []
+
+    # 1. tech_analysis から分節ごとの検索式
+    if tech_analysis and isinstance(tech_analysis, dict):
+        for seg_key, seg_data in tech_analysis.items():
+            if not isinstance(seg_data, dict):
+                continue
+            parts = []
+            concept = seg_data.get("technical_concept", "")
+            if concept:
+                parts.append(concept)
+            ta_keywords = seg_data.get("keywords", [])
+            if isinstance(ta_keywords, list):
+                for kw in ta_keywords[:3]:
+                    kw_str = str(kw).strip()
+                    if kw_str and len(kw_str) >= 2:
+                        parts.append(kw_str)
+            if parts:
+                queries.append(" ".join(parts))
+
+    # 2. キーワードグループごとの検索式
+    if keywords and isinstance(keywords, list):
+        for group in keywords:
+            parts = []
+            for kw in group.get("keywords", [])[:4]:
+                term = kw.get("term", "") if isinstance(kw, dict) else str(kw)
+                if term and len(term) >= 2:
+                    parts.append(term)
+            if parts:
+                queries.append(" ".join(parts))
+
+    # 3. フォールバック: 全キーワードを1式にまとめる
+    if not queries:
+        all_terms = _extract_search_keywords(segments, keywords, field,
+                                             tech_analysis=tech_analysis)
+        if all_terms:
+            queries.append(" ".join(all_terms[:5]))
+
+    # 重複除去
+    return list(dict.fromkeys(queries))
 
 
 # --- 検索戦略 ---
 
-def _search_google_patents(search_terms: List[str]) -> List[SearchHit]:
-    """Playwright経由でGoogle Patents検索（国際）"""
+def _search_google_patents_query(
+    query: str, country: str = "", max_results: int = 5,
+) -> List[SearchHit]:
+    """Playwright経由でGoogle Patents検索（1検索式）"""
     from modules.google_patents_scraper import search_google_patents
 
-    query = " ".join(search_terms[:5])
-    logger.info("Google Patents検索 (Playwright): %s", query)
+    source = "google_patents_jp" if country == "JP" else "google_patents"
+    label = f"Google Patents{'(' + country + ')' if country else ''}"
+    logger.info("%s検索 (Playwright): %s", label, query)
 
     try:
-        raw_hits = search_google_patents(query, max_results=8)
+        raw_hits = search_google_patents(query, country=country, max_results=max_results)
         return [
             SearchHit(
                 patent_id=h.patent_id,
@@ -207,7 +306,7 @@ def _search_google_patents(search_terms: List[str]) -> List[SearchHit]:
                 assignee=h.assignee,
                 priority_date=h.priority_date,
                 snippet=h.snippet,
-                source="google_patents",
+                source=source,
                 url=h.url,
                 pdf_url=h.pdf_url,
                 is_patent=h.is_patent,
@@ -215,35 +314,7 @@ def _search_google_patents(search_terms: List[str]) -> List[SearchHit]:
             for h in raw_hits
         ]
     except Exception as e:
-        logger.warning("Google Patents検索エラー: %s", e)
-        return []
-
-
-def _search_google_patents_jp(search_terms: List[str]) -> List[SearchHit]:
-    """Playwright経由でGoogle Patents検索（日本特許限定）"""
-    from modules.google_patents_scraper import search_google_patents
-
-    query = " ".join(search_terms[:4])
-    logger.info("Google Patents JP検索 (Playwright): %s", query)
-
-    try:
-        raw_hits = search_google_patents(query, country="JP", max_results=5)
-        return [
-            SearchHit(
-                patent_id=h.patent_id,
-                title=h.title,
-                assignee=h.assignee,
-                priority_date=h.priority_date,
-                snippet=h.snippet,
-                source="google_patents_jp",
-                url=h.url,
-                pdf_url=h.pdf_url,
-                is_patent=h.is_patent,
-            )
-            for h in raw_hits
-        ]
-    except Exception as e:
-        logger.warning("Google Patents JP検索エラー: %s", e)
+        logger.warning("%s検索エラー: %s", label, e)
         return []
 
 

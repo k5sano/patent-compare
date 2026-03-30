@@ -2411,8 +2411,9 @@ def _auto_suggest_keywords(case_dir, segs, hongan, field):
 
 
 def _auto_presearch(case_dir, segs, hongan, field, meta):
-    """予備検索: プロンプト生成 → Claude CLI → パース → 保存"""
+    """予備検索: プロンプト生成 → リアル検索注入 → Claude CLI → パース → 検証 → 保存"""
     from modules.search_prompt_generator import generate_presearch_prompt, parse_presearch_response
+    from modules.search_injector import inject_search_results
     from modules.claude_client import call_claude
 
     keywords = None
@@ -2421,20 +2422,29 @@ def _auto_presearch(case_dir, segs, hongan, field, meta):
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
 
+    # tech_analysis.json が既に存在すれば読み込んで検索キーワード抽出に活用
+    ta = _load_search_data(case_dir, "tech_analysis.json")
+
     prompt = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
+
+    # Playwright事前検索（Google Patents）を注入
+    prompt = inject_search_results(prompt, segs, keywords, field, tech_analysis=ta)
 
     prompts_dir = case_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
     with open(prompts_dir / "presearch_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt)
 
-    raw_response = call_claude(prompt, timeout=600)
+    # MCP検索サーバーも有効化
+    raw_response = call_claude(prompt, timeout=600, use_search=True)
 
     tech_analysis, candidates, search_formulas, errors = parse_presearch_response(raw_response)
 
     if tech_analysis:
         _save_search_data(case_dir, "tech_analysis.json", tech_analysis)
     if candidates:
+        # 候補文献の実在性をGoogle Patentsで検証
+        candidates = _verify_candidates(candidates)
         _save_search_data(case_dir, "presearch_candidates.json", candidates)
     if search_formulas:
         _save_search_data(case_dir, "presearch_formulas.json", search_formulas)
@@ -2442,10 +2452,76 @@ def _auto_presearch(case_dir, segs, hongan, field, meta):
     return candidates or []
 
 
+def _verify_candidates(candidates):
+    """候補文献の特許番号がGoogle Patentsで実在するか並列検証する
+
+    非特許文献（論文・規格等）はスキップ。
+    実在確認できた場合は出願人情報を上書きし verified=True フラグを付与。
+    最大3並列でPlaywright検索を実行し、全体60秒でタイムアウト。
+    """
+    from modules.google_patents_scraper import search_google_patents
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # 検証対象と非対象を分離
+    to_verify = []  # (index, candidate, patent_id)
+    for i, c in enumerate(candidates):
+        pid = c.get("patent_id", c.get("doc_number", ""))
+        if not pid:
+            continue
+        if any(tag in pid for tag in ("論文", "規格", "製品", "[Scholar]")):
+            c["verified"] = None  # 検証対象外
+            continue
+        to_verify.append((i, c, pid))
+
+    if not to_verify:
+        return candidates
+
+    def _check_one(pid):
+        """1件の特許番号を検証"""
+        return search_google_patents(pid, max_results=1)
+
+    logger.info("候補検証開始: %d件を並列検証", len(to_verify))
+    with ThreadPoolExecutor(max_workers=len(to_verify)) as executor:
+        future_map = {
+            executor.submit(_check_one, pid): (i, c, pid)
+            for i, c, pid in to_verify
+        }
+        try:
+            for future in as_completed(future_map, timeout=60):
+                idx, c, pid = future_map[future]
+                try:
+                    hits = future.result()
+                    if hits:
+                        c["verified"] = True
+                        if hits[0].assignee:
+                            c["applicant"] = hits[0].assignee
+                        if hits[0].title:
+                            c["title_verified"] = hits[0].title
+                        logger.info("候補検証OK: %s → %s", pid, hits[0].assignee or "(出願人不明)")
+                    else:
+                        c["verified"] = False
+                        logger.warning("候補検証NG: %s — Google Patentsで見つかりません", pid)
+                except Exception as e:
+                    c["verified"] = False
+                    logger.warning("候補検証エラー: %s — %s", pid, e)
+        except Exception:
+            logger.warning("候補検証タイムアウト（60秒）— 検証済み分で続行")
+
+    verified_count = sum(1 for c in candidates if c.get("verified") is True)
+    logger.info("候補検証完了: %d/%d件が実在確認", verified_count, len(to_verify))
+    return candidates
+
+
 def _auto_download_citations(case_id, case_dir, meta):
-    """候補文献のPDFダウンロード + テキスト抽出"""
+    """候補文献のPDFダウンロード + テキスト抽出（並列）"""
     from modules.patent_downloader import download_patent_pdf
     from modules.pdf_extractor import extract_patent_pdf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
+    import logging
+    logger = logging.getLogger(__name__)
 
     candidates = _load_search_data(case_dir, "presearch_candidates.json")
     if not candidates or not isinstance(candidates, list):
@@ -2466,71 +2542,107 @@ def _auto_download_citations(case_id, case_dir, meta):
         elif len(targets) < 6:
             targets.append(c)
 
-    downloaded = 0
-    errors = []
     (case_dir / "citations").mkdir(parents=True, exist_ok=True)
 
+    # 既にダウンロード済みのものを除外
+    to_download = []
+    already_done = 0
     for c in targets:
         patent_id = c.get("patent_id", c.get("doc_number", ""))
         if not patent_id:
             continue
-
         doc_id = patent_id
         for ch in '/\\:*?"<>| ':
             doc_id = doc_id.replace(ch, '')
-
         cit_path = case_dir / "citations" / f"{doc_id}.json"
         if cit_path.exists():
-            downloaded += 1
-            continue
+            already_done += 1
+        else:
+            to_download.append((c, patent_id, doc_id))
 
-        try:
-            dl_result = download_patent_pdf(patent_id, case_dir / "input", timeout=60)
-            if not dl_result["success"]:
-                errors.append(f"{patent_id}: DL失敗 - {dl_result.get('error', '')}")
-                continue
+    if not to_download:
+        return {"total": len(targets), "downloaded": already_done, "errors": []}
 
-            extracted = extract_patent_pdf(dl_result["path"], "citation")
-            actual_doc_id = extracted.get("patent_number", doc_id)
-            for ch in '/\\:*?"<>| ':
-                actual_doc_id = actual_doc_id.replace(ch, '')
+    meta_lock = threading.Lock()
 
-            rel = c.get("relevance", c.get("role", "副引例候補"))
-            extracted["role"] = rel
-            extracted["label"] = patent_id
+    def _download_one(candidate, patent_id, doc_id):
+        """1件のPDFダウンロード + テキスト抽出"""
+        dl_result = download_patent_pdf(patent_id, case_dir / "input", timeout=60)
+        if not dl_result["success"]:
+            return None, f"{patent_id}: DL失敗 - {dl_result.get('error', '')}"
 
-            with open(case_dir / "citations" / f"{actual_doc_id}.json", "w", encoding="utf-8") as f:
-                json.dump(extracted, f, ensure_ascii=False, indent=2)
+        extracted = extract_patent_pdf(dl_result["path"], "citation")
+        actual_doc_id = extracted.get("patent_number", doc_id)
+        for ch in '/\\:*?"<>| ':
+            actual_doc_id = actual_doc_id.replace(ch, '')
 
-            citations = meta.get("citations", [])
-            if not any(ct["id"] == actual_doc_id for ct in citations):
-                citations.append({"id": actual_doc_id, "role": rel, "label": patent_id})
-                meta["citations"] = citations
-                save_case_meta(case_id, meta)
+        rel = candidate.get("relevance", candidate.get("role", "副引例候補"))
+        extracted["role"] = rel
+        extracted["label"] = patent_id
 
-            downloaded += 1
-        except Exception as e:
-            errors.append(f"{patent_id}: {str(e)}")
+        with open(case_dir / "citations" / f"{actual_doc_id}.json", "w", encoding="utf-8") as f:
+            json.dump(extracted, f, ensure_ascii=False, indent=2)
 
+        return (actual_doc_id, rel, patent_id), None
+
+    downloaded = already_done
+    errors = []
+    logger.info("引例DL開始: %d件を並列ダウンロード（%d件はキャッシュ済み）",
+                len(to_download), already_done)
+
+    with ThreadPoolExecutor(max_workers=len(to_download)) as executor:
+        futures = {
+            executor.submit(_download_one, c, pid, did): pid
+            for c, pid, did in to_download
+        }
+        for future in as_completed(futures, timeout=300):
+            pid = futures[future]
+            try:
+                result, error = future.result()
+                if error:
+                    errors.append(error)
+                elif result:
+                    actual_doc_id, rel, patent_id = result
+                    # meta更新はスレッドセーフに
+                    with meta_lock:
+                        citations = meta.get("citations", [])
+                        if not any(ct["id"] == actual_doc_id for ct in citations):
+                            citations.append({"id": actual_doc_id, "role": rel, "label": patent_id})
+                            meta["citations"] = citations
+                            save_case_meta(case_id, meta)
+                    downloaded += 1
+                    logger.info("引例DL完了: %s", pid)
+            except Exception as e:
+                errors.append(f"{pid}: {str(e)}")
+                logger.warning("引例DLエラー: %s — %s", pid, e)
+
+    logger.info("引例DL完了: %d/%d件成功", downloaded, len(targets))
     return {"total": len(targets), "downloaded": downloaded, "errors": errors}
 
 
 def _auto_compare(case_id, case_dir, segs, meta, field):
-    """対比: 全引用文献に対してプロンプト生成 → Claude実行 → パース"""
+    """対比: 引用文献ごとに個別プロンプト生成 → 並列Claude実行 → パース
+
+    引例を1件ずつ個別にClaudeへ送ることで:
+    - コンテキストサイズを削減（全引例まとめより大幅に小さい）
+    - 並列実行で総所要時間を短縮
+    - 1件の失敗が他に影響しない
+    """
     from modules.prompt_generator import generate_prompt as _gen
     from modules.response_parser import parse_response, split_multi_response
     from modules.claude_client import call_claude
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import logging
+    logger = logging.getLogger(__name__)
 
-    citations = []
-    citation_ids = []
+    citations_map = {}  # doc_id -> citation_data
     for cit in meta.get("citations", []):
         cit_path = case_dir / "citations" / f"{cit['id']}.json"
         if cit_path.exists():
             with open(cit_path, "r", encoding="utf-8") as f:
-                citations.append(json.load(f))
-            citation_ids.append(cit["id"])
+                citations_map[cit["id"]] = json.load(f)
 
-    if not citations:
+    if not citations_map:
         raise Exception("引用文献がありません")
 
     keywords = None
@@ -2539,16 +2651,6 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
 
-    prompt_text = _gen(segs, citations, keywords, field)
-
-    prompts_dir = case_dir / "prompts"
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    with open(prompts_dir / "compare_prompt.txt", "w", encoding="utf-8") as f:
-        f.write(prompt_text)
-
-    timeout = 600 if len(citations) <= 2 else 900
-    raw_response = call_claude(prompt_text, timeout=timeout)
-
     all_segment_ids = []
     for claim in segs:
         for seg in claim["segments"]:
@@ -2556,21 +2658,56 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
 
     responses_dir = case_dir / "responses"
     responses_dir.mkdir(parents=True, exist_ok=True)
-    with open(responses_dir / "_last_raw_response.txt", "w", encoding="utf-8") as f:
-        f.write(raw_response)
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    result, errors = parse_response(raw_response, all_segment_ids)
+    def _compare_one(doc_id, citation_data):
+        """1件の引用文献に対して対比を実行"""
+        prompt_text = _gen(segs, [citation_data], keywords, field)
+
+        # 個別プロンプトも保存
+        with open(prompts_dir / f"compare_prompt_{doc_id}.txt", "w", encoding="utf-8") as f:
+            f.write(prompt_text)
+
+        raw_response = call_claude(prompt_text, timeout=600)
+
+        with open(responses_dir / f"_raw_{doc_id}.txt", "w", encoding="utf-8") as f:
+            f.write(raw_response)
+
+        result, errors = parse_response(raw_response, all_segment_ids)
+        return doc_id, result, errors
 
     saved_docs = []
-    if result:
-        per_doc = split_multi_response(result)
-        for doc_id, doc_result in per_doc.items():
-            resp_path = responses_dir / f"{doc_id}.json"
-            with open(resp_path, "w", encoding="utf-8") as f:
-                json.dump(doc_result, f, ensure_ascii=False, indent=2)
-            saved_docs.append(doc_id)
+    all_errors = []
+    logger.info("対比実行開始: %d件を並列処理", len(citations_map))
 
-    return {"num_docs": len(saved_docs), "errors": errors}
+    with ThreadPoolExecutor(max_workers=len(citations_map)) as executor:
+        futures = {
+            executor.submit(_compare_one, doc_id, cit_data): doc_id
+            for doc_id, cit_data in citations_map.items()
+        }
+        for future in as_completed(futures, timeout=900):
+            doc_id = futures[future]
+            try:
+                doc_id, result, errors = future.result()
+                all_errors.extend(errors or [])
+                if result:
+                    per_doc = split_multi_response(result)
+                    for rid, doc_result in per_doc.items():
+                        resp_path = responses_dir / f"{rid}.json"
+                        with open(resp_path, "w", encoding="utf-8") as f:
+                            json.dump(doc_result, f, ensure_ascii=False, indent=2)
+                        saved_docs.append(rid)
+                    logger.info("対比完了: %s", doc_id)
+                else:
+                    all_errors.append(f"{doc_id}: パース結果なし")
+                    logger.warning("対比パース失敗: %s", doc_id)
+            except Exception as e:
+                all_errors.append(f"{doc_id}: {str(e)}")
+                logger.warning("対比エラー: %s — %s", doc_id, e)
+
+    logger.info("対比完了: %d/%d件成功", len(saved_docs), len(citations_map))
+    return {"num_docs": len(saved_docs), "errors": all_errors}
 
 
 def _auto_export_excel(case_dir, segs, meta):
