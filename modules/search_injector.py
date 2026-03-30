@@ -116,7 +116,7 @@ def inject_search_results(
     # 各検索式 × (国際, JP) + Scholar(あれば) = 最大 N*2+1 並列
     all_hits: List[SearchHit] = []
     futures = {}
-    num_workers = len(queries) * 2 + (1 if api_key else 0)
+    num_workers = min(len(queries) * 2 + (1 if api_key else 0), 6)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
         for i, q in enumerate(queries):

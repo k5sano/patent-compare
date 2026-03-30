@@ -2483,7 +2483,7 @@ def _verify_candidates(candidates):
         return search_google_patents(pid, max_results=1)
 
     logger.info("候補検証開始: %d件を並列検証", len(to_verify))
-    with ThreadPoolExecutor(max_workers=len(to_verify)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(to_verify), 6)) as executor:
         future_map = {
             executor.submit(_check_one, pid): (i, c, pid)
             for i, c, pid in to_verify
@@ -2590,7 +2590,7 @@ def _auto_download_citations(case_id, case_dir, meta):
     logger.info("引例DL開始: %d件を並列ダウンロード（%d件はキャッシュ済み）",
                 len(to_download), already_done)
 
-    with ThreadPoolExecutor(max_workers=len(to_download)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(to_download), 6)) as executor:
         futures = {
             executor.submit(_download_one, c, pid, did): pid
             for c, pid, did in to_download
@@ -2681,7 +2681,7 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
     all_errors = []
     logger.info("対比実行開始: %d件を並列処理", len(citations_map))
 
-    with ThreadPoolExecutor(max_workers=len(citations_map)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(citations_map), 6)) as executor:
         futures = {
             executor.submit(_compare_one, doc_id, cit_data): doc_id
             for doc_id, cit_data in citations_map.items()
@@ -2795,43 +2795,77 @@ def auto_run():
 
                 field = meta.get("field", "cosmetics")
 
-                # --- Step: キーワード提案 ---
-                if "keywords" in steps:
-                    yield _sse_event("step_start", {
-                        "case_id": case_id, "step": "keywords",
-                    })
-                    try:
-                        kw_groups = _auto_suggest_keywords(
-                            case_dir, segs, hongan, field
-                        )
-                        yield _sse_event("step_done", {
-                            "case_id": case_id, "step": "keywords",
-                            "detail": f"{len(kw_groups)}グループ生成",
-                        })
-                    except Exception as e:
-                        yield _sse_event("step_error", {
-                            "case_id": case_id, "step": "keywords",
-                            "error": str(e),
-                        })
+                # --- Step: キーワード提案 + 予備検索（並列実行） ---
+                # keywords と presearch は独立実行可能:
+                # - presearch は keywords.json がなくても tech_analysis から検索式生成可能
+                # - keywords が先に完了すれば presearch のClaude呼び出しで活用される
+                run_kw = "keywords" in steps
+                run_ps = "presearch" in steps
 
-                # --- Step: 予備検索 ---
-                if "presearch" in steps:
-                    yield _sse_event("step_start", {
-                        "case_id": case_id, "step": "presearch",
-                    })
-                    try:
-                        candidates = _auto_presearch(
-                            case_dir, segs, hongan, field, meta
-                        )
-                        yield _sse_event("step_done", {
+                if run_kw or run_ps:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    import queue
+
+                    sse_queue = queue.Queue()
+
+                    def _run_keywords():
+                        sse_queue.put(_sse_event("step_start", {
+                            "case_id": case_id, "step": "keywords",
+                        }))
+                        try:
+                            kw_groups = _auto_suggest_keywords(
+                                case_dir, segs, hongan, field
+                            )
+                            sse_queue.put(_sse_event("step_done", {
+                                "case_id": case_id, "step": "keywords",
+                                "detail": f"{len(kw_groups)}グループ生成",
+                            }))
+                            return kw_groups
+                        except Exception as e:
+                            sse_queue.put(_sse_event("step_error", {
+                                "case_id": case_id, "step": "keywords",
+                                "error": str(e),
+                            }))
+                            return None
+
+                    def _run_presearch():
+                        sse_queue.put(_sse_event("step_start", {
                             "case_id": case_id, "step": "presearch",
-                            "detail": f"{len(candidates)}件の候補",
-                        })
-                    except Exception as e:
-                        yield _sse_event("step_error", {
-                            "case_id": case_id, "step": "presearch",
-                            "error": str(e),
-                        })
+                        }))
+                        try:
+                            cands = _auto_presearch(
+                                case_dir, segs, hongan, field, meta
+                            )
+                            sse_queue.put(_sse_event("step_done", {
+                                "case_id": case_id, "step": "presearch",
+                                "detail": f"{len(cands)}件の候補",
+                            }))
+                            return cands
+                        except Exception as e:
+                            sse_queue.put(_sse_event("step_error", {
+                                "case_id": case_id, "step": "presearch",
+                                "error": str(e),
+                            }))
+                            return []
+
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        futures = {}
+                        if run_kw:
+                            futures[pool.submit(_run_keywords)] = "keywords"
+                        if run_ps:
+                            futures[pool.submit(_run_presearch)] = "presearch"
+
+                        candidates = []
+                        for future in as_completed(futures, timeout=900):
+                            # キューに溜まったSSEイベントを送出
+                            while not sse_queue.empty():
+                                yield sse_queue.get_nowait()
+                            if futures[future] == "presearch":
+                                candidates = future.result() or []
+
+                        # 残りのSSEイベントを送出
+                        while not sse_queue.empty():
+                            yield sse_queue.get_nowait()
 
                 # --- Step: 引用文献DL ---
                 if "download_citations" in steps:
