@@ -156,10 +156,17 @@ def _build_search_instructions(field):
 2. **副引例候補（2～5件）**: 主引例でカバーされない構成要件（×判定となりうるもの）を補完する文献。
 3. **技術常識文献（1～3件）**: 当該分野で周知・慣用の技術であることを示す文献（教科書的特許、総説特許）。
 
-### 候補の多様性
-- 同一出願人の文献に偏らないこと
+### 候補の選定優先順位
+- **本願出願人自身の先行特許を最優先で検索すること**（自社の先行出願は最も関連性が高い引例になりやすい）
 - 出願日が本願より前の文献を優先（ただし技術常識は時期を問わない）
 - 日本特許・米国特許・WO出願を幅広く含めること
+- 出願人の文献だけでなく、他社の文献も含めて多様性を確保すること
+
+### 引用文献チェーン（拒絶理由引例の活用）
+- **本願自身が引用している文献**（明細書の背景技術・引用文献リスト）は、Y文献（進歩性否定の組合せ引例）となる可能性が高いため、必ず候補として検討すること
+- 一致度の高い有望文献が見つかったら、その文献の**拒絶理由通知で引用された文献**（被引用文献）も候補として検討すること
+- 特にカテゴリX（新規性否定）・Y（進歩性否定の組合せ引例）として引用された文献は、本願に対しても有力な引例となりやすい
+- Google Patentsの"Cited by"や"Similar documents"も参照し、関連文献を芋づる式に辿ること
 
 ### 特許番号のフォーマット
 - 日本: JP + 公開番号（例: JPH05-123456, JP2024-037328）
@@ -448,6 +455,80 @@ def _build_keywords_text(keywords):
 
 # ---- Stage 1: 予備検索 ----
 
+_QUERY_STOP_WORDS = {
+    "前記", "含有", "含有する", "からなる", "有する", "備える",
+    "において", "であって", "であり", "おける", "よる", "する",
+    "された", "される", "および", "ならびに", "または", "もしくは",
+    "以上", "以下", "未満", "超える", "含む", "特徴", "記載",
+}
+
+
+def _build_recommended_queries(segments, keywords, field, case_meta=None):
+    """presearchプロンプト用の推奨検索クエリを生成
+
+    キーワードグループと分節テキストから、Claudeがツール検索に使うべき
+    クエリのヒントを生成する。
+    """
+    queries = []
+
+    # 0. 出願人名での検索（自社先行出願は最重要引例）
+    if case_meta:
+        applicant = case_meta.get("applicant", "")
+        if applicant:
+            # 出願人名 + 技術分野キーワードで検索
+            field_kw = {"cosmetics": "化粧", "laminate": "積層"}.get(field, "")
+            if field_kw:
+                queries.append(f"{applicant} {field_kw}")
+            else:
+                queries.append(applicant)
+
+    # 1. キーワードグループごとの検索式（日本語）
+    if keywords and isinstance(keywords, list):
+        for group in keywords:
+            parts = []
+            for kw in group.get("keywords", [])[:4]:
+                term = kw.get("term", "") if isinstance(kw, dict) else str(kw)
+                if term and len(term) >= 2 and term not in _QUERY_STOP_WORDS:
+                    parts.append(term)
+            if parts:
+                queries.append(" ".join(parts))
+
+    # 2. 分節テキストから名詞句を抽出してフォールバック検索式を作成
+    if len(queries) < 2:
+        for claim in segments:
+            if claim.get("claim_number") != 1:
+                continue
+            seg_terms = []
+            for seg in claim.get("segments", []):
+                text = seg.get("text", "")
+                words = re.findall(
+                    r'[ァ-ヴー]{3,}|[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料)?',
+                    text,
+                )
+                for w in words:
+                    if w not in _QUERY_STOP_WORDS and len(w) >= 2:
+                        seg_terms.append(w)
+            if seg_terms:
+                queries.append(" ".join(list(dict.fromkeys(seg_terms))[:5]))
+            break
+
+    # 3. 英語クエリを追加（分野に基づく簡易生成）
+    if keywords and isinstance(keywords, list):
+        en_parts = []
+        for group in keywords:
+            for kw in group.get("keywords", [])[:2]:
+                if isinstance(kw, dict):
+                    term = kw.get("term", "")
+                    kw_type = kw.get("type", "")
+                    if "EN" in kw_type.upper() or "INCI" in kw_type.upper():
+                        en_parts.append(term)
+        if en_parts:
+            queries.append(" ".join(en_parts[:5]))
+
+    # 重複除去して最大5式
+    return list(dict.fromkeys(queries))[:5]
+
+
 def generate_presearch_prompt(segments, hongan, keywords, field="cosmetics", case_meta=None):
     """Stage 1: 予備検索（プレサーチ）プロンプトを生成
 
@@ -485,9 +566,33 @@ def generate_presearch_prompt(segments, hongan, keywords, field="cosmetics", cas
 - Ftermテーマ: 4F100（積層体）
 - 層構成（基材層/バリア層/シーラント層等）の同義語も含めてください。"""
 
+    # 推奨検索クエリを生成
+    recommended_queries = _build_recommended_queries(segments, keywords, field, case_meta=case_meta)
+    recommended_queries_section = ""
+    if recommended_queries:
+        lines = ["### 推奨検索クエリ（以下のクエリでツール検索を実行してください）"]
+        for i, q in enumerate(recommended_queries, 1):
+            lines.append(f"- 検索{i}: \"{q}\"")
+        recommended_queries_section = "\n".join(lines)
+
     return f"""## 役割
 あなたは{field_label}分野の特許調査に精通したリサーチエージェントです。
 以下の特許出願の技術内容を分析し、先行技術の予備検索（プレサーチ）を行ってください。
+
+## 重要: 検索ツールの使用
+
+あなたは以下の検索ツールを利用できます。候補文献の提示前に**必ず**検索を実行してください：
+- `mcp__patent-search__search_patents_google` — Google Patents 国際検索
+- `mcp__patent-search__search_patents_google_jp` — Google Patents 日本特許限定検索
+- `mcp__patent-search__search_patents_google_scholar` — Google Scholar 学術文献検索
+
+手順:
+1. まず技術構造化（Stage 1-2）を行う
+2. 構造化した要素ごとに検索クエリを作成し、上記ツールで検索を実行
+3. 検索結果に基づいて候補文献を提示（訓練データからの推測のみに頼らない）
+4. 検索で見つからなかった候補は confidence: "low (未検証)" と明記
+
+{recommended_queries_section}
 
 ## タスク（以下の順序で実行）
 
@@ -514,6 +619,12 @@ def generate_presearch_prompt(segments, hongan, keywords, field="cosmetics", cas
 - **特許**（JP/US/WO/EP/CN/KR）: 5件程度
 - **論文・規格**: 3件程度（あれば）
 - **製品・Web・動画**: 2件程度（あれば）
+
+**重要: 本願出願人自身の先行特許を最優先で検索してください。** 自社の先行出願は最も関連性の高い引例になりやすいです。出願人名での検索を必ず行ってください。
+
+**本願の引用文献:** 本願の明細書に記載された引用文献（背景技術・引用文献リスト）はY文献（進歩性否定の組合せ引例）となる可能性が高いため、必ず候補として検討してください。
+
+**引用文献チェーン:** 一致度の高い有望文献が見つかったら、その文献の拒絶理由通知で引用された文献（X/Yカテゴリ）も候補として追加してください。Google Patentsの"Cited by"や類似文献も参照し、関連文献を芋づる式に辿ってください。
 
 各候補には以下を付与：
 - ★一致度（1-5、5が最も関連性が高い）
