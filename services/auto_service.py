@@ -163,20 +163,20 @@ def _auto_download_citations(case_id, case_dir, meta):
     if not candidates or not isinstance(candidates, list):
         return {"total": 0, "downloaded": 0, "errors": ["候補がありません"]}
 
-    # 主引例候補を優先、副引例は上位3件まで
-    targets = []
-    main_count = 0
-    sub_count = 0
+    # 候補をスコア順にソートし、上位6件を対象
+    # relevance_score があればそれを使い、なければ出現順
+    scored = []
     for c in candidates:
+        score = c.get("relevance_score", 0)
         rel = c.get("relevance", c.get("role", ""))
-        if "主引例" in rel and main_count < 3:
-            targets.append(c)
-            main_count += 1
-        elif "副引例" in rel and sub_count < 3:
-            targets.append(c)
-            sub_count += 1
-        elif len(targets) < 6:
-            targets.append(c)
+        # 主引例・X引例を優先
+        if any(k in rel for k in ("主引例", "X引例", "X/Y")):
+            score = max(score, 10)
+        elif any(k in rel for k in ("副引例", "Y引例")):
+            score = max(score, 5)
+        scored.append((score, c))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    targets = [c for _, c in scored[:6]]
 
     (case_dir / "citations").mkdir(parents=True, exist_ok=True)
 
