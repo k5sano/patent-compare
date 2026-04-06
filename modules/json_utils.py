@@ -16,6 +16,23 @@ logger = logging.getLogger(__name__)
 _JSON_BLOCK_RE = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
 
 
+def _sanitize_json_text(text):
+    """JSON文字列内の不正な制御文字を除去する。
+
+    Claude CLIの応答にはJSON文字列値の中にリテラルな改行・タブ等が
+    含まれることがあり、strict=True の json.loads() が失敗する。
+    NULLバイトも除去する。
+    """
+    if not text:
+        return text
+    return text.replace('\x00', '')
+
+
+def _loads(text):
+    """制御文字を許容する json.loads ラッパー"""
+    return json.loads(text, strict=False)
+
+
 def try_repair_json(text):
     """途中で切れたJSONの修復を試みる。
 
@@ -25,12 +42,13 @@ def try_repair_json(text):
     Returns:
         パース済みオブジェクト、または修復不能なら None
     """
-    text = text.strip()
+    text = _sanitize_json_text(text)
     if not text:
         return None
+    text = text.strip()
 
     try:
-        return json.loads(text)
+        return _loads(text)
     except json.JSONDecodeError:
         pass
 
@@ -79,7 +97,7 @@ def try_repair_json(text):
     candidate = truncated + closing
 
     try:
-        return json.loads(candidate)
+        return _loads(candidate)
     except json.JSONDecodeError:
         return None
 
@@ -95,6 +113,10 @@ def extract_json_object(raw_text, required_key=None, repair=True):
     Returns:
         dict or None
     """
+    raw_text = _sanitize_json_text(raw_text)
+    if not raw_text:
+        return None
+
     def _accepts(data):
         if not isinstance(data, dict):
             return False
@@ -106,7 +128,7 @@ def extract_json_object(raw_text, required_key=None, repair=True):
     matches = _JSON_BLOCK_RE.findall(raw_text)
     for match in matches:
         try:
-            data = json.loads(match)
+            data = _loads(match)
             if _accepts(data):
                 return data
         except json.JSONDecodeError:
@@ -133,7 +155,7 @@ def extract_json_object(raw_text, required_key=None, repair=True):
             if brace_depth == 0 and start is not None:
                 candidate = raw_text[start:i + 1]
                 try:
-                    data = json.loads(candidate)
+                    data = _loads(candidate)
                     if _accepts(data):
                         return data
                 except json.JSONDecodeError:
@@ -162,6 +184,10 @@ def extract_json_array(raw_text, repair=True):
     Returns:
         list or None
     """
+    raw_text = _sanitize_json_text(raw_text)
+    if not raw_text:
+        return None
+
     def _accepts(data):
         return isinstance(data, list) and len(data) > 0
 
@@ -169,7 +195,7 @@ def extract_json_array(raw_text, repair=True):
     matches = _JSON_BLOCK_RE.findall(raw_text)
     for match in matches:
         try:
-            data = json.loads(match)
+            data = _loads(match)
             if _accepts(data):
                 return data
         except json.JSONDecodeError:
@@ -188,7 +214,7 @@ def extract_json_array(raw_text, repair=True):
             if bracket_depth == 0 and start is not None:
                 candidate = raw_text[start:i + 1]
                 try:
-                    data = json.loads(candidate)
+                    data = _loads(candidate)
                     if _accepts(data):
                         return data
                 except json.JSONDecodeError:

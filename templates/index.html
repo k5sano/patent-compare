@@ -12,7 +12,7 @@
     --green: #22c55e; --yellow: #eab308; --red: #ef4444;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 70px; }
+  body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 90px; }
   .container { max-width: 960px; margin: 0 auto; padding: 2rem; }
   h1 { font-size: 1.8rem; margin-bottom: 0.3rem; }
   .subtitle { color: var(--text2); margin-bottom: 2rem; font-size: 0.9rem; }
@@ -65,15 +65,18 @@
   .modal-row .modal-field { flex:1; }
   .modal-btns { display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem; }
   /* auto-check チェックボックス */
-  .auto-check-label { position:absolute; left:0.5rem; top:0; bottom:0; width:2.5rem;
-    display:flex; align-items:center; justify-content:center; z-index:10; cursor:pointer; }
-  .auto-check { width:20px; height:20px; accent-color:var(--accent); cursor:pointer; pointer-events:auto; }
+  .auto-check-label { position:absolute; left:0; top:0; bottom:0; width:3rem;
+    display:flex; align-items:center; justify-content:center; z-index:10; cursor:pointer;
+    border-radius:12px 0 0 12px; transition:background 0.15s; }
+  .auto-check-label:hover { background:rgba(59,130,246,0.15); }
+  .auto-check { width:18px; height:18px; accent-color:var(--accent); cursor:pointer; pointer-events:auto; }
   .card-link { position:relative; z-index:1; }
-  /* オートモードバー */
-  #auto-bar { position:fixed; bottom:0; left:0; right:0; z-index:9998;
+  /* オートモードバー（常時表示） */
+  #auto-bar { position:fixed; bottom:0; left:0; right:0; z-index:9998; display:flex;
     background:var(--surface); border-top:2px solid var(--accent); padding:0.8rem 2rem;
     align-items:center; gap:1rem; flex-wrap:wrap; box-shadow:0 -4px 12px rgba(0,0,0,0.4); }
   #auto-bar label { cursor:pointer; user-select:none; }
+  #btn-auto-run:disabled { opacity:0.4; cursor:not-allowed; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
@@ -236,13 +239,14 @@
   </div>
 </div>
 
-<!-- オートモード固定バー -->
-<div id="auto-bar" style="display:none;">
+<!-- オートモード固定バー（常時表示） -->
+<div id="auto-bar">
   <span id="auto-count" style="font-weight:700; font-size:0.95rem;">0件選択</span>
+  <span id="auto-hint" style="font-size:0.82rem; color:var(--text2);">— 左端のチェックで案件を選択</span>
   <button class="btn btn-outline" onclick="selectAllVisible()" style="padding:0.2rem 0.6rem; font-size:0.78rem;">全選択</button>
   <button class="btn btn-outline" onclick="deselectAll()" style="padding:0.2rem 0.6rem; font-size:0.78rem;">全解除</button>
 
-  <div style="display:flex; gap:0.8rem; font-size:0.82rem; align-items:center; margin-left:1rem;">
+  <div id="auto-step-options" style="display:none; gap:0.8rem; font-size:0.82rem; align-items:center; margin-left:1rem;">
     <label><input type="checkbox" checked class="auto-step-check" value="keywords"> KW</label>
     <label><input type="checkbox" checked class="auto-step-check" value="presearch"> 予備検索</label>
     <label><input type="checkbox" checked class="auto-step-check" value="download_citations"> 文献DL</label>
@@ -251,8 +255,8 @@
   </div>
 
   <div style="margin-left:auto; display:flex; gap:0.5rem; align-items:center;">
-    <button class="btn btn-primary" id="btn-auto-run" onclick="startAutoRun()" style="padding:0.5rem 1.5rem; font-size:0.95rem;">
-      ▶ オートモード実行
+    <button class="btn btn-primary" id="btn-auto-run" onclick="startAutoRun()" disabled style="padding:0.5rem 1.5rem; font-size:0.95rem;">
+      ▶ オート実行
     </button>
     <button class="btn btn-danger" id="btn-auto-stop" onclick="stopAutoRun()" style="display:none; padding:0.5rem 1rem;">
       ■ 中断
@@ -483,14 +487,15 @@ window._autoRunning = false;
 
 function updateAutoSelection() {
   const checked = document.querySelectorAll('.auto-check:checked');
-  const bar = document.getElementById('auto-bar');
   const count = document.getElementById('auto-count');
-  if (checked.length > 0) {
-    bar.style.display = 'flex';
-    count.textContent = checked.length + '件選択';
-  } else {
-    bar.style.display = 'none';
-  }
+  const hint = document.getElementById('auto-hint');
+  const stepOpts = document.getElementById('auto-step-options');
+  const runBtn = document.getElementById('btn-auto-run');
+  const n = checked.length;
+  count.textContent = n > 0 ? n + '件選択' : '0件選択';
+  hint.style.display = n > 0 ? 'none' : '';
+  stepOpts.style.display = n > 0 ? 'flex' : 'none';
+  runBtn.disabled = n === 0;
 }
 
 function selectAllVisible() {
