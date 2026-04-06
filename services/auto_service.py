@@ -180,11 +180,31 @@ def _auto_download_citations(case_id, case_dir, meta):
 
     (case_dir / "citations").mkdir(parents=True, exist_ok=True)
 
+    import re as _re
+
+    def _clean_patent_id(raw_id):
+        """patent_idから余計な文字を除去して正規化"""
+        if not raw_id:
+            return ""
+        # 括弧付き注釈を除去: （推定）、(本願自身)、(推定: ...)等
+        cleaned = _re.sub(r'[\(（][^)）]*[\)）]', '', raw_id).strip()
+        # XXXXXX等のプレースホルダーを含む場合は無効
+        if 'XXXX' in cleaned or 'xxxx' in cleaned:
+            return ""
+        # 「推定:」「推定：」を含む場合も無効
+        if '推定' in cleaned:
+            return ""
+        # 先頭の「推定: 」等のプレフィックスを除去
+        cleaned = _re.sub(r'^[^A-Za-z0-9]*', '', cleaned)
+        # 末尾のゴミを除去
+        cleaned = _re.sub(r'[^A-Za-z0-9]+$', '', cleaned)
+        return cleaned
+
     # 既にダウンロード済みのものを除外
     to_download = []
     already_done = 0
     for c in targets:
-        patent_id = c.get("patent_id", c.get("doc_number", ""))
+        patent_id = _clean_patent_id(c.get("patent_id", c.get("doc_number", "")))
         if not patent_id:
             continue
         doc_id = patent_id
