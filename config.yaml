@@ -27,17 +27,24 @@ highlight_colors:
 
 # プロンプト生成設定
 prompt:
+  max_total_chars: 80000
   max_citation_chars: 50000
   section_priority:
     - 実施例
+    - 比較例
     - 請求項
-    - 定義
-    - その他
+    - 手段
+    - 効果
+    - 実施形態
+    - 課題
+    - 背景技術
+    - 技術分野
 
 # Excel出力設定
 excel:
   max_citation_columns: 10
 
 # SerpAPI設定（Google Patents検索用）
-# https://serpapi.com/ でAPIキーを取得してください
+# 環境変数 SERPAPI_KEY を設定してください
+# https://serpapi.com/ でAPIキーを取得
 serpapi_key: ""

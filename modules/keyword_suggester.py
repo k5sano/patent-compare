@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from modules.fterm_dict import codes_for_term, get_nodes, get_synonyms, get_inci
-from modules.keyword_recommender import _preprocess_text
+from modules.text_preprocessing import preprocess_text as _preprocess_text
 from modules.description_analyzer import (
     extract_example_compounds,
     extract_description_compounds,

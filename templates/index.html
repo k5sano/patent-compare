@@ -65,8 +65,10 @@
   .modal-row .modal-field { flex:1; }
   .modal-btns { display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem; }
   /* auto-check チェックボックス */
-  .auto-check { position:absolute; left:1rem; top:50%; transform:translateY(-50%);
-    width:20px; height:20px; accent-color:var(--accent); z-index:3; cursor:pointer; }
+  .auto-check-label { position:absolute; left:0.5rem; top:0; bottom:0; width:2.5rem;
+    display:flex; align-items:center; justify-content:center; z-index:10; cursor:pointer; }
+  .auto-check { width:20px; height:20px; accent-color:var(--accent); cursor:pointer; pointer-events:auto; }
+  .card-link { position:relative; z-index:1; }
   /* オートモードバー */
   #auto-bar { position:fixed; bottom:0; left:0; right:0; z-index:9998;
     background:var(--surface); border-top:2px solid var(--accent); padding:0.8rem 2rem;
@@ -151,6 +153,7 @@
       <option value="11">11月</option><option value="12">12月</option>
     </select>
     <span id="filter-count" style="font-size:0.8rem; color:var(--text2);"></span>
+    <button class="btn btn-outline" id="btn-select-all" onclick="toggleSelectAll()" style="padding:0.2rem 0.8rem; font-size:0.8rem; margin-left:auto;">ALL</button>
   </div>
 
   <div id="cases-list">
@@ -159,8 +162,10 @@
   <div class="case-item" data-year="{{ c.year|default('', true) }}" data-month="{{ c.month|default('', true) }}"
        data-case-id="{{ c.case_id }}" data-title="{{ c.patent_title or c.title }}"
        style="position:relative;">
-    <input type="checkbox" class="auto-check" data-case-id="{{ c.case_id }}"
-           onclick="event.stopPropagation(); updateAutoSelection();">
+    <label class="auto-check-label" onclick="event.stopPropagation();">
+      <input type="checkbox" class="auto-check" data-case-id="{{ c.case_id }}"
+             onclick="event.stopPropagation(); updateAutoSelection();">
+    </label>
     <a href="/case/{{ c.case_id }}" class="card-link">
       <div class="card" style="padding-left:3.5rem; padding-right:4rem;">
         <h3 class="case-title-display">{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
@@ -421,12 +426,21 @@ document.addEventListener('keydown', function(e) {
     editYear.appendChild(opt);
   });
 
+  // sessionStorageからフィルタ値を復元
+  const savedYear = sessionStorage.getItem('filter-year');
+  const savedMonth = sessionStorage.getItem('filter-month');
+  if (savedYear) filterYear.value = savedYear;
+  if (savedMonth) document.getElementById('filter-month').value = savedMonth;
+
   filterCases();
 })();
 
 function filterCases() {
   const year = document.getElementById('filter-year').value;
   const month = document.getElementById('filter-month').value;
+  // 選択をsessionStorageに保存
+  sessionStorage.setItem('filter-year', year);
+  sessionStorage.setItem('filter-month', month);
   const items = document.querySelectorAll('.case-item');
   let shown = 0;
   items.forEach(el => {
@@ -443,6 +457,23 @@ function filterCases() {
   } else {
     countEl.textContent = total > 0 ? `${total}件` : '';
   }
+}
+
+function toggleSelectAll() {
+  const items = document.querySelectorAll('.case-item');
+  // 表示中の案件だけ対象
+  const visibleChecks = [];
+  items.forEach(item => {
+    if (item.style.display !== 'none') {
+      const cb = item.querySelector('.auto-check');
+      if (cb) visibleChecks.push(cb);
+    }
+  });
+  const allChecked = visibleChecks.every(cb => cb.checked);
+  visibleChecks.forEach(cb => cb.checked = !allChecked);
+  updateAutoSelection();
+  // ボタンラベル切替
+  document.getElementById('btn-select-all').textContent = allChecked ? 'ALL' : '解除';
 }
 
 // ================================================================

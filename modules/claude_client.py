@@ -46,7 +46,10 @@ class ClaudeExecutionError(ClaudeClientError):
 
 
 def _load_serpapi_key():
-    """config.yamlからSerpAPIキーを読み込む"""
+    """SerpAPIキーを読み込む（環境変数優先、config.yamlフォールバック）"""
+    key = os.environ.get("SERPAPI_KEY", "")
+    if key:
+        return key
     config_path = PROJECT_ROOT / "config.yaml"
     if config_path.exists():
         try:

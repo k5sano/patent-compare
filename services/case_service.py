@@ -1,0 +1,353 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""案件データ管理サービス"""
+
+import json
+import re
+import shutil
+import yaml
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+
+def get_cases_dir():
+    return PROJECT_ROOT / "cases"
+
+
+def get_case_dir(case_id):
+    return get_cases_dir() / case_id
+
+
+def _get_search_dir(case_dir):
+    """search/ サブディレクトリを返す（なければ作成）"""
+    d = Path(case_dir) / "search"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def load_search_data(case_dir, filename):
+    """search/ 配下のJSONファイルを読み込む（なければ None）"""
+    p = Path(case_dir) / "search" / filename
+    if p.exists():
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def save_search_data(case_dir, filename, data):
+    """search/ 配下にJSONファイルを保存"""
+    d = _get_search_dir(case_dir)
+    with open(d / filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_case_meta(case_id):
+    p = get_case_dir(case_id) / "case.yaml"
+    if p.exists():
+        with open(p, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    return None
+
+
+def save_case_meta(case_id, meta):
+    p = get_case_dir(case_id) / "case.yaml"
+    with open(p, "w", encoding="utf-8") as f:
+        yaml.dump(meta, f, allow_unicode=True, default_flow_style=False)
+
+
+def list_all_cases():
+    cases_dir = get_cases_dir()
+    cases = []
+    if cases_dir.exists():
+        for d in sorted(cases_dir.iterdir()):
+            if d.is_dir() and (d / "case.yaml").exists():
+                meta = load_case_meta(d.name)
+                if meta:
+                    has_hongan = (d / "hongan.json").exists()
+                    has_segments = (d / "segments.json").exists()
+                    has_keywords = (d / "keywords.json").exists()
+                    num_citations = len(list((d / "citations").glob("*.json"))) if (d / "citations").exists() else 0
+                    num_responses = len(list((d / "responses").glob("*.json"))) if (d / "responses").exists() else 0
+                    has_excel = any((d / "output").glob("*.xlsx")) if (d / "output").exists() else False
+
+                    meta["_has_hongan"] = has_hongan
+                    meta["_has_segments"] = has_segments
+                    meta["_has_keywords"] = has_keywords
+                    meta["_num_citations"] = num_citations
+                    meta["_num_responses"] = num_responses
+                    meta["_has_excel"] = has_excel
+                    cases.append(meta)
+    return cases
+
+
+def create_case(case_number, year="", month="", field="cosmetics"):
+    """新規案件を作成。PDF自動DL・抽出を含む。
+
+    Returns:
+        dict: 結果情報
+    """
+    from modules.patent_downloader import download_patent_pdf
+    from modules.pdf_extractor import extract_patent_pdf
+    from modules.claim_segmenter import segment_claims
+
+    case_id = case_number
+    case_dir = get_case_dir(case_id)
+    if case_dir.exists():
+        return {"error": f"案件 '{case_id}' は既に存在します", "case_id": case_id}
+
+    # 公開番号 → Google Patents用ID
+    m = re.match(r'(\d{4})-(\d+)', case_number)
+    if m:
+        year_part, serial = m.group(1), m.group(2)
+        jp_id = f"JP{year_part}{serial.zfill(6)}A"
+    else:
+        jp_id = case_number
+
+    for sub in ["input", "citations", "prompts", "responses", "output"]:
+        (case_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    meta = {
+        "case_id": case_id,
+        "jp_id": jp_id,
+        "title": "",
+        "field": field,
+        "year": year,
+        "month": month,
+        "citations": [],
+    }
+    save_case_meta(case_id, meta)
+
+    dl_result = download_patent_pdf(jp_id, case_dir / "input", timeout=60)
+    if not dl_result["success"]:
+        return {
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": False,
+            "error": dl_result.get("error", "PDFダウンロード失敗"),
+            "google_patents_url": dl_result.get("google_patents_url", ""),
+        }
+
+    try:
+        result = extract_patent_pdf(dl_result["path"], "hongan")
+        with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+
+        patent_number = result.get("patent_number", "")
+        patent_title = result.get("patent_title", "")
+        meta["patent_number"] = patent_number
+        meta["patent_title"] = patent_title
+        meta["title"] = patent_title
+        save_case_meta(case_id, meta)
+
+        num_segments = 0
+        if result.get("claims"):
+            segs = segment_claims(result["claims"])
+            with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+                json.dump(segs, f, ensure_ascii=False, indent=2)
+            num_segments = sum(len(c.get("segments", [])) for c in segs)
+
+        return {
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": True,
+            "patent_number": patent_number,
+            "patent_title": patent_title,
+            "num_claims": len(result.get("claims", [])),
+            "num_paragraphs": len(result.get("paragraphs", [])),
+            "num_segments": num_segments,
+        }
+
+    except Exception as e:
+        return {
+            "success": True,
+            "case_id": case_id,
+            "pdf_downloaded": True,
+            "error": f"PDF抽出エラー: {str(e)}",
+        }
+
+
+def upload_hongan(case_id, save_path):
+    """本願PDFをテキスト抽出・分節"""
+    from modules.pdf_extractor import extract_patent_pdf
+    from modules.claim_segmenter import segment_claims
+
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    case_dir = get_case_dir(case_id)
+
+    try:
+        result = extract_patent_pdf(str(save_path), "hongan")
+    except Exception as e:
+        return {"error": f"PDF抽出失敗: {e}"}, 400
+
+    if not result.get("claims") and not result.get("paragraphs"):
+        result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
+
+    with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    extracted_number = result.get("patent_number", "")
+    extracted_title = result.get("patent_title", "")
+    if extracted_number:
+        meta["patent_number"] = extracted_number
+    if extracted_title:
+        meta["patent_title"] = extracted_title
+    save_case_meta(case_id, meta)
+
+    if result.get("claims"):
+        segs = segment_claims(result["claims"])
+        with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False, indent=2)
+
+    return {
+        "success": True,
+        "patent_number": extracted_number,
+        "patent_title": extracted_title,
+        "num_claims": len(result.get("claims", [])),
+        "num_paragraphs": len(result.get("paragraphs", [])),
+    }, 200
+
+
+def upload_citation(case_id, save_path, role="主引例", label=""):
+    """引用文献PDFをテキスト抽出して登録"""
+    from modules.pdf_extractor import extract_patent_pdf
+
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    case_dir = get_case_dir(case_id)
+
+    try:
+        result = extract_patent_pdf(str(save_path), "citation")
+    except Exception as e:
+        return {"error": f"PDF抽出失敗: {e}"}, 400
+
+    if not result.get("claims") and not result.get("paragraphs"):
+        result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
+
+    doc_id = result.get("patent_number", Path(save_path).stem)
+    for ch in '/\\:*?"<>|':
+        doc_id = doc_id.replace(ch, '')
+    result["role"] = role
+    result["label"] = label or doc_id
+
+    with open(case_dir / "citations" / f"{doc_id}.json", "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    citations = meta.get("citations", [])
+    if not any(c["id"] == doc_id for c in citations):
+        citations.append({"id": doc_id, "role": role, "label": label or doc_id})
+        meta["citations"] = citations
+        save_case_meta(case_id, meta)
+
+    return {
+        "success": True,
+        "doc_id": doc_id,
+        "num_claims": len(result.get("claims", [])),
+        "num_paragraphs": len(result.get("paragraphs", [])),
+    }, 200
+
+
+def delete_citation(case_id, citation_id):
+    """引用文献を個別削除"""
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    case_dir = get_case_dir(case_id)
+
+    for subdir in ["citations", "responses", "prompts"]:
+        for pattern in [f"{citation_id}.json", f"{citation_id}_prompt.txt", f"*{citation_id}*"]:
+            for f in (case_dir / subdir).glob(pattern):
+                f.unlink()
+
+    meta["citations"] = [c for c in meta.get("citations", []) if c["id"] != citation_id]
+    save_case_meta(case_id, meta)
+    return {"success": True}, 200
+
+
+def clear_all_citations(case_id):
+    """全引用文献・回答をクリア"""
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    case_dir = get_case_dir(case_id)
+
+    for subdir in ["citations", "responses", "prompts"]:
+        d = case_dir / subdir
+        if d.exists():
+            for f in d.iterdir():
+                if f.is_file():
+                    f.unlink()
+
+    meta["citations"] = []
+    save_case_meta(case_id, meta)
+    return {"success": True}, 200
+
+
+def delete_case(case_id):
+    case_dir = get_case_dir(case_id)
+    if case_dir.exists():
+        shutil.rmtree(str(case_dir))
+
+
+def update_case_meta(case_id, data):
+    """案件メタ情報を更新"""
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    for key in ["patent_number", "patent_title", "title", "field", "year", "month"]:
+        if key in data:
+            meta[key] = data[key]
+    save_case_meta(case_id, meta)
+    return {"success": True}, 200
+
+
+def load_json_file(case_id, filename):
+    """案件ディレクトリ直下のJSONファイルを読み込む"""
+    p = get_case_dir(case_id) / filename
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                text = f.read()
+            text = text.replace('\x00', '')
+            return json.loads(text, strict=False)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+    return None
+
+
+def save_json_file(case_id, filename, data):
+    """案件ディレクトリ直下にJSONファイルを保存"""
+    p = get_case_dir(case_id) / filename
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def find_citation_pdf(input_dir, citation_id):
+    """input/ディレクトリから引用文献IDに対応するPDFを探す"""
+    if not input_dir.exists():
+        return None
+
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+
+    cid_hw = citation_id.translate(fw2hw)
+    normalized = re.sub(r'[\s\-/]', '', cid_hw)
+    digits = re.sub(r'[^\d]', '', cid_hw)
+
+    for pdf_file in input_dir.glob("*.pdf"):
+        stem = pdf_file.stem
+        stem_hw = stem.translate(fw2hw)
+        stem_normalized = re.sub(r'[\s\-/]', '', stem_hw)
+        if stem_normalized == normalized:
+            return pdf_file
+        if len(digits) >= 6 and digits in stem_normalized:
+            return pdf_file
+
+    return None

@@ -16,6 +16,8 @@
 import re
 import json
 
+from modules.models import Relevance
+
 
 def generate_search_prompt(segments, keywords, field="cosmetics", case_meta=None):
     """分節+キーワードから先行技術検索プロンプトを生成
@@ -294,39 +296,8 @@ def parse_search_response(raw_text):
 
 def _extract_json_array(raw_text):
     """テキストからJSON配列を抽出"""
-    # パターン1: ```json ... ``` ブロック
-    json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
-    matches = json_block_pattern.findall(raw_text)
-
-    for match in matches:
-        try:
-            data = json.loads(match)
-            if isinstance(data, list) and len(data) > 0:
-                return data
-        except json.JSONDecodeError:
-            continue
-
-    # パターン2: 最外側の [ ... ] を探す
-    bracket_depth = 0
-    start = None
-    for i, ch in enumerate(raw_text):
-        if ch == '[':
-            if bracket_depth == 0:
-                start = i
-            bracket_depth += 1
-        elif ch == ']':
-            bracket_depth -= 1
-            if bracket_depth == 0 and start is not None:
-                candidate = raw_text[start:i + 1]
-                try:
-                    data = json.loads(candidate)
-                    if isinstance(data, list) and len(data) > 0:
-                        return data
-                except json.JSONDecodeError:
-                    start = None
-                    continue
-
-    return None
+    from modules.json_utils import extract_json_array
+    return extract_json_array(raw_text)
 
 
 def _validate_candidate(item, index):
@@ -339,7 +310,7 @@ def _validate_candidate(item, index):
     if not item.get("patent_id"):
         errors.append(f"候補{index+1}: patent_id がありません")
 
-    valid_relevance = {"主引例候補", "副引例候補", "技術常識"}
+    valid_relevance = {r.value for r in Relevance}
     rel = item.get("relevance", "")
     if rel and rel not in valid_relevance:
         errors.append(f"候補{index+1} ({item.get('patent_id', '?')}): relevance '{rel}' は無効です")
@@ -763,36 +734,8 @@ def parse_presearch_response(raw_text):
 
 def _extract_json_object(raw_text):
     """テキストからJSONオブジェクト（{...}）を抽出"""
-    # パターン1: ```json ... ``` ブロック
-    json_block = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
-    for match in json_block.findall(raw_text):
-        try:
-            data = json.loads(match)
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            continue
-
-    # パターン2: 最外側の { ... } を探す
-    depth = 0
-    start = None
-    for i, ch in enumerate(raw_text):
-        if ch == '{':
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == '}':
-            depth -= 1
-            if depth == 0 and start is not None:
-                candidate = raw_text[start:i + 1]
-                try:
-                    data = json.loads(candidate)
-                    if isinstance(data, dict):
-                        return data
-                except json.JSONDecodeError:
-                    start = None
-                    continue
-    return None
+    from modules.json_utils import extract_json_object
+    return extract_json_object(raw_text)
 
 
 # ---- Stage 2: 分類特定 ----

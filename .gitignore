@@ -16,6 +16,9 @@ cases/
 Thumbs.db
 .DS_Store
 
+# Environment
+.env
+
 # Temp files
 *.tmp
 *.log

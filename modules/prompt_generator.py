@@ -12,12 +12,32 @@
 """
 
 import json
+import yaml
+from pathlib import Path
+
+_PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+def _load_prompt_config():
+    """config.yaml からプロンプト生成設定を読み込む"""
+    config_path = _PROJECT_ROOT / "config.yaml"
+    if config_path.exists():
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f) or {}
+            prompt_cfg = cfg.get("prompt", {})
+            return prompt_cfg
+        except Exception:
+            pass
+    return {}
+
+_prompt_cfg = _load_prompt_config()
 
 # テキスト量上限（全文献合計）
-MAX_TOTAL_CHARS = 80000
+MAX_TOTAL_CHARS = _prompt_cfg.get("max_total_chars", 80000)
 
 # セクション優先順位（テキスト量超過時のトリミング用）
-SECTION_PRIORITY = ["実施例", "比較例", "請求項", "手段", "効果", "実施形態", "課題", "背景技術", "技術分野"]
+SECTION_PRIORITY = _prompt_cfg.get("section_priority",
+    ["実施例", "比較例", "請求項", "手段", "効果", "実施形態", "課題", "背景技術", "技術分野"])
 
 
 def _build_task_definition(num_citations):

@@ -29,6 +29,13 @@ from modules.fterm_dict import (
     expand_term, all_tree_keys, get_synonyms, get_inci, codes_for_term,
     get_nodes, build_digest,
 )
+from modules.text_preprocessing import preprocess_text as _preprocess_text_impl
+from modules.term_extractor import (
+    STOP_WORDS, pick_terms_from_text as _pick_terms_impl,
+    strip_prefix as _strip_prefix_impl,
+    RE_KATAKANA, RE_KANJI, RE_NUMERIC, RE_NUMERIC_SINGLE, RE_PAREN_LABEL,
+)
+from modules.models import AIResult
 
 logger = logging.getLogger(__name__)
 
@@ -70,130 +77,13 @@ def _load_dict(field, dict_name):
 
 
 # ============================================================
-# ストップワード
+# テキスト前処理・語句抽出（modules/text_preprocessing.py, term_extractor.py に委譲）
 # ============================================================
 
-STOP_WORDS = {
-    # 助詞・助動詞的
-    "前記", "含有", "含有する", "からなる", "有する", "備える",
-    "において", "であって", "であり", "おける", "よる", "する",
-    "された", "される", "および", "ならびに", "または", "もしくは",
-    "以上", "以下", "未満", "超える", "含む", "特徴", "記載",
-    "少なくとも", "それぞれ", "前記した", "さらに", "また",
-    "これら", "それら", "当該", "所定", "各種", "種々",
-    # 汎用カテゴリ語（分野を問わず）
-    "化粧料", "組成物", "製剤",
-    "配合", "処方", "調製", "混合", "工程", "方法", "手段", "構成", "形態",
-    # 追加: 請求項構造語
-    "ことを", "特徴とする", "請求項", "発明", "前項",
-    "該", "上記", "下記", "場合", "範囲", "条件", "用途", "目的",
-    "一つ", "一種", "複数", "少なくとも一つ",
-    "第一", "第二", "第三", "第四", "第五",
-    "前述", "後述", "同様", "対応", "関連",
-    # 追加: 請求項断片ゴミ語
-    "用化粧料", "以上含有", "種類含有", "項記載", "分以上", "吐出後",
-    "前記原液", "原液組成物", "記原液", "ール組成物", "成物原液",
-    "質量部", "体積比", "種以上",
-}
-
-# ============================================================
-# 正規表現パターン
-# ============================================================
-
-RE_KATAKANA = re.compile(r'[ァ-ヴー]{3,}')
-RE_KANJI = re.compile(
-    r'[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料|性|化|類|素|塩|基)?'
-)
-RE_NUMERIC = re.compile(
-    r'(\d+\.?\d*)\s*(?:～|~|−|-|から)\s*(\d+\.?\d*)\s*'
-    r'(質量%|重量%|mass%|wt%|vol%|体積%|%|ppm|mm|μm|nm|℃)'
-)
-RE_NUMERIC_SINGLE = re.compile(
-    r'(\d+\.?\d*)\s*(質量%|重量%|mass%|wt%|ppm|mm|μm|nm|℃)\s*'
-    r'(以上|以下|未満|超|を超える|より多い|より少ない)?'
-)
-RE_PAREN_LABEL = re.compile(r'[\(（]([A-Za-zＡ-Ｚ])[\)）]\s*([^、。\)）\(（]{2,15})')
-
-# CJK文字範囲（前処理用）
-_CJK_CHAR = re.compile(r'[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F]')
-
-
-def _preprocess_text(text: str) -> str:
-    """PDF改行由来のスペースでCJK文字が分断される問題を修正。
-
-    例:
-      "ポリアルキ レングリコールエーテル" → "ポリアルキレングリコールエーテル"
-      "油状泡沫 性エアゾール用 化粧料" → "油状泡沫性エアゾール用化粧料"
-    """
-    if not text:
-        return text
-    # CJK文字の間にある半角スペースを除去
-    result = re.sub(
-        r'(?<=[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F])\s+(?=[\u3040-\u30FF\u4E00-\u9FFF\uFF66-\uFF9F])',
-        '', text
-    )
-    return result
-
-
-# ============================================================
-# Step 1: 正規表現による語句ピックアップ（共通部品）
-# ============================================================
-
-def _strip_prefix(term: str) -> str:
-    """「前記」「該」「上記」等の接頭辞を除去"""
-    for prefix in ("前記", "上記", "該", "当該", "前記した", "本"):
-        if term.startswith(prefix) and len(term) > len(prefix):
-            return term[len(prefix):]
-    return term
-
-
-def _pick_terms_from_text(text):
-    """テキストから語句を機械的にピックアップ
-
-    全パターン（カタカナ・漢字・数値条件・括弧ラベル）を適用し、
-    STOP_WORDS 除外・重複除去済みのリストを返す。
-    テキストは前処理済み（CJKスペース除去済み）を想定。
-
-    Returns:
-        list of dict: [{"term": str, "source": "claim", "type": str}, ...]
-    """
-    terms = []
-    seen = set()
-
-    def _add(term, kw_type):
-        # 接頭辞除去
-        term = _strip_prefix(term)
-        if term and term not in seen and term not in STOP_WORDS and len(term) >= 2:
-            seen.add(term)
-            terms.append({"term": term, "source": "claim", "type": kw_type})
-
-    # カタカナ語（3文字以上）
-    for m in RE_KATAKANA.finditer(text):
-        t = m.group()
-        if len(t) >= 3:
-            _add(t, "カタカナ抽出")
-
-    # 漢字語（2文字以上）
-    for m in RE_KANJI.finditer(text):
-        t = m.group()
-        if len(t) >= 2:
-            _add(t, "漢字抽出")
-
-    # 数値条件（範囲）
-    for m in RE_NUMERIC.finditer(text):
-        _add(m.group(), "数値条件")
-
-    # 数値条件（単独、範囲と重複しないもの）
-    for m in RE_NUMERIC_SINGLE.finditer(text):
-        _add(m.group(), "数値条件")
-
-    # 括弧ラベル
-    for m in RE_PAREN_LABEL.finditer(text):
-        label = m.group(1)
-        content = m.group(2).strip()
-        _add(f"({label}){content}", "括弧ラベル")
-
-    return terms
+# 後方互換ラッパー: 内部関数名で参照している箇所向け
+_preprocess_text = _preprocess_text_impl
+_strip_prefix = _strip_prefix_impl
+_pick_terms_from_text = _pick_terms_impl
 
 
 # ============================================================
@@ -482,37 +372,8 @@ def _merge_step3_results(results, ai_dict, field):
 
 def _extract_json_array(raw_text):
     """テキストからJSON配列を抽出"""
-    # パターン1: ```json ... ``` ブロック
-    json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
-    matches = json_block_pattern.findall(raw_text)
-    for match in matches:
-        try:
-            data = json.loads(match)
-            if isinstance(data, list) and len(data) > 0:
-                return data
-        except json.JSONDecodeError:
-            continue
-
-    # パターン2: 最外側の [ ... ] を探す
-    bracket_depth = 0
-    start = None
-    for i, ch in enumerate(raw_text):
-        if ch == '[':
-            if bracket_depth == 0:
-                start = i
-            bracket_depth += 1
-        elif ch == ']':
-            bracket_depth -= 1
-            if bracket_depth == 0 and start is not None:
-                candidate = raw_text[start:i + 1]
-                try:
-                    data = json.loads(candidate)
-                    if isinstance(data, list) and len(data) > 0:
-                        return data
-                except json.JSONDecodeError:
-                    start = None
-                    continue
-    return None
+    from modules.json_utils import extract_json_array
+    return extract_json_array(raw_text)
 
 
 # ============================================================
@@ -932,47 +793,9 @@ def _build_tech_analysis_prompt(segments, hongan, field):
 
 
 def _extract_json_object(raw_text):
-    """テキストからJSON objectを抽出"""
-    # パターン1: ```json ... ``` ブロック
-    json_block_pattern = re.compile(r'```(?:json)?\s*\n?(.*?)\n?\s*```', re.DOTALL)
-    matches = json_block_pattern.findall(raw_text)
-    for match in matches:
-        try:
-            data = json.loads(match)
-            if isinstance(data, dict) and "elements" in data:
-                return data
-        except json.JSONDecodeError:
-            continue
-
-    # パターン2: 最外側の { ... } を探す
-    brace_depth = 0
-    start = None
-    for i, ch in enumerate(raw_text):
-        if ch == '{':
-            if brace_depth == 0:
-                start = i
-            brace_depth += 1
-        elif ch == '}':
-            brace_depth -= 1
-            if brace_depth == 0 and start is not None:
-                candidate = raw_text[start:i + 1]
-                try:
-                    data = json.loads(candidate)
-                    if isinstance(data, dict) and "elements" in data:
-                        return data
-                except json.JSONDecodeError:
-                    start = None
-                    continue
-
-    # パターン3: 途中切れJSON修復
-    from modules.response_parser import _try_repair_json
-    first_brace = raw_text.find('{')
-    if first_brace >= 0:
-        repaired = _try_repair_json(raw_text[first_brace:])
-        if isinstance(repaired, dict) and "elements" in repaired:
-            return repaired
-
-    return None
+    """テキストからJSON objectを抽出（"elements"キー必須）"""
+    from modules.json_utils import extract_json_object
+    return extract_json_object(raw_text, required_key="elements")
 
 
 def _call_ai_tech_analysis(prompt, field):
@@ -980,10 +803,10 @@ def _call_ai_tech_analysis(prompt, field):
 
     API key → anthropic SDK (claude-opus-4-6)
     API keyなし → Claude CLI (call_claude)
-    どちらも失敗 → None
+    どちらも失敗 → AIResult(success=False)
 
     Returns:
-        dict or None: tech_analysis JSON
+        AIResult: success=True の場合 data に tech_analysis dict を格納
     """
     # 方法1: Anthropic API (API key あり)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1001,8 +824,9 @@ def _call_ai_tech_analysis(prompt, field):
             if result:
                 logger.info("tech_analysis: Anthropic API で取得 (%d 要素)",
                             len(result.get("elements", {})))
-                return result
+                return AIResult(success=True, data=result)
             logger.warning("tech_analysis: API応答からJSONを抽出できませんでした")
+            return AIResult(success=False, error="API応答からJSONを抽出できませんでした")
         except ImportError:
             logger.info("anthropic パッケージ未インストール — CLI フォールバック")
         except Exception as e:
@@ -1013,19 +837,19 @@ def _call_ai_tech_analysis(prompt, field):
         from modules.claude_client import call_claude, is_claude_available, ClaudeClientError
         if not is_claude_available():
             logger.warning("Claude CLI 利用不可")
-            return None
+            return AIResult(success=False, error="Claude CLI 利用不可")
         logger.info("tech_analysis: Claude CLI で実行 (prompt=%d 文字)", len(prompt))
         raw = call_claude(prompt, timeout=300)
         result = _extract_json_object(raw)
         if result:
             logger.info("tech_analysis: CLI で取得 (%d 要素)",
                         len(result.get("elements", {})))
-            return result
+            return AIResult(success=True, data=result)
         logger.warning("tech_analysis: CLI応答からJSONを抽出できませんでした")
+        return AIResult(success=False, error="CLI応答からJSONを抽出できませんでした")
     except Exception as e:
         logger.warning("tech_analysis CLI エラー: %s", e)
-
-    return None
+        return AIResult(success=False, error=str(e))
 
 
 def _tech_analysis_to_pipeline_result(tech_analysis, segments):
@@ -1221,9 +1045,10 @@ def recommend_by_tech_analysis(segments, hongan, field):
     prompt = _build_tech_analysis_prompt(segments, hongan, field)
     logger.info("tech_analysis プロンプト生成: %d 文字", len(prompt))
 
-    tech_analysis = _call_ai_tech_analysis(prompt, field)
+    ai_result = _call_ai_tech_analysis(prompt, field)
 
-    if tech_analysis and tech_analysis.get("elements"):
+    if ai_result.success and ai_result.data and ai_result.data.get("elements"):
+        tech_analysis = ai_result.data
         # Step 2: tech_analysis → pipeline_result 変換
         results = _tech_analysis_to_pipeline_result(tech_analysis, segments)
         logger.info("tech_analysis 変換完了: %d 分節", len(results))
@@ -1247,7 +1072,10 @@ def recommend_by_tech_analysis(segments, hongan, field):
         return tech_analysis, results
     else:
         # フォールバック: 正規表現ベース
-        logger.warning("tech_analysis 取得失敗 — フォールバックで実行")
+        if ai_result.error:
+            logger.warning("tech_analysis 取得失敗 (%s) — フォールバックで実行", ai_result.error)
+        else:
+            logger.warning("tech_analysis 取得失敗 — フォールバックで実行")
         results = _fallback_regex_anchors(segments, hongan, field)
         return None, results
 
