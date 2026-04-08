@@ -5,6 +5,7 @@
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,6 +15,34 @@ from services.case_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# リトライ付き Claude CLI 呼び出し
+# ------------------------------------------------------------------
+
+def _call_claude_with_retry(prompt_text, timeout=600, use_search=False,
+                            max_retries=3, base_delay=30):
+    """Claude CLI をリトライ付きで呼び出す。
+
+    エラーコード1（レートリミット等）の場合、指数バックオフで再試行する。
+    """
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            return call_claude(prompt_text, timeout=timeout, use_search=use_search)
+        except ClaudeClientError as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)  # 30s, 60s, 120s
+                logger.warning("Claude CLI エラー (試行%d/%d): %s — %d秒後にリトライ",
+                               attempt + 1, max_retries, str(e)[:100], delay)
+                time.sleep(delay)
+            else:
+                logger.error("Claude CLI エラー (最終試行): %s", str(e)[:200])
+    raise last_error
 
 
 # ------------------------------------------------------------------
@@ -57,7 +86,6 @@ def _auto_presearch(case_dir, segs, hongan, field, meta):
     """予備検索: プロンプト生成 → リアル検索注入 → Claude CLI → パース → 検証 → 保存"""
     from modules.search_prompt_generator import generate_presearch_prompt, parse_presearch_response
     from modules.search_injector import inject_search_results
-    from modules.claude_client import call_claude
 
     keywords = None
     kw_path = case_dir / "keywords.json"
@@ -78,8 +106,8 @@ def _auto_presearch(case_dir, segs, hongan, field, meta):
     with open(prompts_dir / "presearch_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt)
 
-    # MCP検索サーバーも有効化
-    raw_response = call_claude(prompt, timeout=600, use_search=True)
+    # MCP検索サーバーも有効化（リトライ付き）
+    raw_response = _call_claude_with_retry(prompt, timeout=600, use_search=True)
 
     tech_analysis, candidates, search_formulas, errors = parse_presearch_response(raw_response)
 
@@ -286,7 +314,6 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
     """
     from modules.prompt_generator import generate_prompt as _gen
     from modules.response_parser import parse_response, split_multi_response
-    from modules.claude_client import call_claude
 
     # metaを最新のファイルから再読込（DLステップでmeta更新済み）
     meta = load_case_meta(case_id) or meta
@@ -333,7 +360,7 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
         with open(prompts_dir / f"compare_prompt_{doc_id}.txt", "w", encoding="utf-8") as f:
             f.write(prompt_text)
 
-        raw_response = call_claude(prompt_text, timeout=600)
+        raw_response = _call_claude_with_retry(prompt_text, timeout=600)
 
         with open(responses_dir / f"_raw_{doc_id}.txt", "w", encoding="utf-8") as f:
             f.write(raw_response)
