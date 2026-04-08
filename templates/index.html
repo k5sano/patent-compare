@@ -179,6 +179,8 @@
           {% if c._has_excel %}<span class="badge badge-green">Excel出力済</span>{% endif %}
           <span>引用文献: {{ c._num_citations }}件</span>
           <span>回答: {{ c._num_responses }}件</span>
+          {% if c._num_x %}<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X: {{ c._num_x }}</span>{% endif %}
+          {% if c._num_y %}<span class="badge" style="background:#422006; color:#fbbf24;">Y: {{ c._num_y }}</span>{% endif %}
         </div>
         <div class="progress-dots" title="本願 / 分節 / KW / 文献 / 回答 / Excel">
           <div class="dot {{ 'done' if c._has_hongan else '' }}"></div>

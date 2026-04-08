@@ -68,7 +68,25 @@ def list_all_cases():
                     has_segments = (d / "segments.json").exists()
                     has_keywords = (d / "keywords.json").exists()
                     num_citations = len(list((d / "citations").glob("*.json"))) if (d / "citations").exists() else 0
-                    num_responses = len(list((d / "responses").glob("*.json"))) if (d / "responses").exists() else 0
+                    responses_dir = d / "responses"
+                    num_responses = 0
+                    num_x = 0
+                    num_y = 0
+                    if responses_dir.exists():
+                        for rfile in responses_dir.glob("*.json"):
+                            if rfile.stem.startswith("_"):
+                                continue
+                            num_responses += 1
+                            try:
+                                with open(rfile, "r", encoding="utf-8") as f:
+                                    rdata = json.loads(f.read().replace('\x00', ''), strict=False)
+                                cat = rdata.get("category_suggestion", "")
+                                if cat.upper().startswith("X"):
+                                    num_x += 1
+                                elif cat.upper().startswith("Y"):
+                                    num_y += 1
+                            except Exception:
+                                pass
                     has_excel = any((d / "output").glob("*.xlsx")) if (d / "output").exists() else False
 
                     meta["_has_hongan"] = has_hongan
@@ -76,6 +94,8 @@ def list_all_cases():
                     meta["_has_keywords"] = has_keywords
                     meta["_num_citations"] = num_citations
                     meta["_num_responses"] = num_responses
+                    meta["_num_x"] = num_x
+                    meta["_num_y"] = num_y
                     meta["_has_excel"] = has_excel
                     cases.append(meta)
     return cases
