@@ -288,14 +288,25 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
     from modules.response_parser import parse_response, split_multi_response
     from modules.claude_client import call_claude
 
+    # metaを最新のファイルから再読込（DLステップでmeta更新済み）
+    meta = load_case_meta(case_id) or meta
+
     citations_map = {}  # doc_id -> citation_data
+    responses_dir = case_dir / "responses"
     for cit in meta.get("citations", []):
         cit_path = case_dir / "citations" / f"{cit['id']}.json"
-        if cit_path.exists():
+        resp_path = responses_dir / f"{cit['id']}.json"
+        # 既にresponseが存在する引用文献はスキップ
+        if cit_path.exists() and not resp_path.exists():
             with open(cit_path, "r", encoding="utf-8") as f:
                 citations_map[cit["id"]] = json.load(f)
 
     if not citations_map:
+        # 全件回答済みか、引用文献なし
+        existing = len([c for c in meta.get("citations", [])
+                       if (responses_dir / f"{c['id']}.json").exists()]) if responses_dir.exists() else 0
+        if existing > 0:
+            return {"num_docs": existing, "errors": [], "skipped": True}
         raise Exception("引用文献がありません")
 
     keywords = None
@@ -334,7 +345,7 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
     all_errors = []
     logger.info("対比実行開始: %d件を並列処理", len(citations_map))
 
-    with ThreadPoolExecutor(max_workers=min(len(citations_map), 6)) as executor:
+    with ThreadPoolExecutor(max_workers=min(len(citations_map), 3)) as executor:
         futures = {
             executor.submit(_compare_one, doc_id, cit_data): doc_id
             for doc_id, cit_data in citations_map.items()
