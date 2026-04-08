@@ -289,8 +289,18 @@ def annotate_all_citations(case_id):
         pdf_path = find_citation_pdf(case_dir / "input", cit_id)
 
         if not resp_path.exists() or not cit_path.exists() or not pdf_path:
+            missing = []
+            if not resp_path.exists():
+                missing.append("回答")
+            if not cit_path.exists():
+                missing.append("引用文献データ")
+            if not pdf_path:
+                missing.append("元PDF")
+            from modules.patent_downloader import build_jplatpat_url
+            jp_url = build_jplatpat_url(cit_id)
             results.append({"citation_id": cit_id, "success": False,
-                            "error": "必要なファイルがありません"})
+                            "error": f"{'/'.join(missing)}がありません",
+                            "jplatpat_url": jp_url})
             continue
 
         with open(resp_path, "r", encoding="utf-8") as f:

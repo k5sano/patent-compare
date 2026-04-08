@@ -697,6 +697,7 @@ def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, 
                     break
 
     if candidates:
+        from modules.patent_downloader import build_jplatpat_url, build_google_patents_url
         # 既存候補とマージして保存
         existing = load_search_data(case_dir, "presearch_candidates.json") or []
         existing_ids = {c.get("patent_id", "") for c in existing}
@@ -705,6 +706,13 @@ def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, 
             pid = c.get("patent_id", "")
             if pid and pid not in existing_ids:
                 c["source"] = "additional_search"
+                # J-PlatPat / Google Patents URL を付与
+                jp_url = build_jplatpat_url(pid)
+                if jp_url:
+                    c["jplatpat_url"] = jp_url
+                gp_url = build_google_patents_url(pid)
+                if gp_url:
+                    c["google_patents_url"] = gp_url
                 existing.append(c)
                 added.append(c)
                 existing_ids.add(pid)
