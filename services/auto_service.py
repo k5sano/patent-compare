@@ -184,7 +184,7 @@ def _verify_candidates(candidates):
 
 def _auto_download_citations(case_id, case_dir, meta):
     """候補文献のPDFダウンロード + テキスト抽出（並列）"""
-    from modules.patent_downloader import download_patent_pdf
+    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
     from modules.pdf_extractor import extract_patent_pdf
 
     candidates = load_search_data(case_dir, "presearch_candidates.json")
@@ -303,15 +303,19 @@ def _auto_download_citations(case_id, case_dir, meta):
                 failed_pids.add(pid)
                 logger.warning("引例DLエラー: %s — %s", pid, e)
 
-    # DL失敗した候補に confidence: "low" を付与して presearch_candidates.json を更新
+    # DL失敗した候補に confidence:"low" と J-PlatPat URL を付与
     if failed_pids:
         cand_data = load_search_data(case_dir, "presearch_candidates.json")
         if cand_data and isinstance(cand_data, list):
             updated = False
             for c in cand_data:
-                if c.get("patent_id", "") in failed_pids:
+                pid = c.get("patent_id", "")
+                if pid in failed_pids:
                     c["confidence"] = "low"
                     c["dl_failed"] = True
+                    jplatpat = build_jplatpat_url(pid)
+                    if jplatpat:
+                        c["jplatpat_url"] = jplatpat
                     updated = True
             if updated:
                 save_search_data(case_dir, "presearch_candidates.json", cand_data)

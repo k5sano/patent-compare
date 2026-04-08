@@ -936,6 +936,38 @@
 
 <script>
 const CASE_ID = "{{ case_id }}";
+
+function buildJplatpatUrl(pid) {
+  if (!pid) return '';
+  const B = 'https://www.j-platpat.inpit.go.jp/c1801/PU';
+  let m;
+  // 特開yyyy-nnnnnn
+  if ((m = pid.match(/特開\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
+  // 特願yyyy-nnnnnn
+  if ((m = pid.match(/特願\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/10/ja`;
+  // 特表yyyy-nnnnnn
+  if ((m = pid.match(/特表\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
+  // 再表yyyy-nnnnnn
+  if ((m = pid.match(/再(?:公)?表\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/19/ja`;
+  // 特許nnnnnnn
+  if ((m = pid.match(/特許(?:第)?\s*(\d+)/))) return `${B}/JP-${m[1]}/15/ja`;
+  // JP2023-123456A / JP2023123456A
+  if ((m = pid.match(/JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A/i))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
+  // JPnnnnnnnB
+  if ((m = pid.match(/JP\s*(\d{5,8})\s*B\d?/i))) return `${B}/JP-${m[1]}/15/ja`;
+  // WO2022/030405
+  if ((m = pid.match(/WO\s*(\d{4})\s*[/]?\s*(\d+)/i))) return `${B}/WO-A-${m[1]}-${m[2].padStart(6,'0')}/50/ja`;
+  // US公開
+  if ((m = pid.match(/US\s*(\d{4})\s*[/]?\s*(\d+)\s*A\d?/i))) return `${B}/US-${m[1]}${m[2]}/50/ja`;
+  // US登録
+  if ((m = pid.match(/US\s*([\d,]+)\s*B\d?/i))) return `${B}/US-${m[1].replace(/,/g,'')}/50/ja`;
+  // EP
+  if ((m = pid.match(/EP\s*(\d+)/i))) return `${B}/EP-${m[1]}/50/ja`;
+  // CN
+  if ((m = pid.match(/CN\s*(\d+)/i))) return `${B}/CN-${m[1]}/50/ja`;
+  return '';
+}
+
 const panels = document.querySelectorAll('.panel');
 const steps = document.querySelectorAll('.step');
 let currentPanel = 0;
@@ -1231,8 +1263,9 @@ function renderCandidatesList(candidates) {
     if (c.google_patents_url) {
       linksHtml += `<a href="${c.google_patents_url}" target="_blank" rel="noopener">Google Patents</a>`;
     }
-    if (c.jplatpat_url) {
-      linksHtml += `<a href="${c.jplatpat_url}" target="_blank" rel="noopener">J-PlatPat</a>`;
+    const jpUrl = c.jplatpat_url || buildJplatpatUrl(c.patent_id);
+    if (jpUrl) {
+      linksHtml += ` <a href="${jpUrl}" target="_blank" rel="noopener" style="color:#60a5fa;">J-PlatPat</a>`;
     }
 
     const checked = c.status !== 'downloaded' ? 'checked' : '';
