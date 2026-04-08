@@ -720,6 +720,9 @@
             <h4>{{ cit.label }} ({{ cit.id }})</h4>
             <p>{{ cit.role }}
               {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
+              {% if cit._category == 'X' %}<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>
+              {% elif cit._category == 'Y' %}<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>
+              {% elif cit._category == 'A' %}<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>{% endif %}
             </p>
           </div>
           <div style="display:flex; gap:4px; align-items:center;">
@@ -757,6 +760,9 @@
                    style="width:18px; height:18px; accent-color:var(--accent);">
             <span>{{ cit.label }} ({{ cit.id }}) - {{ cit.role }}</span>
             {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
+            {% if cit._category == 'X' %}<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>
+            {% elif cit._category == 'Y' %}<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>
+            {% elif cit._category == 'A' %}<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>{% endif %}
           </label>
           {% endfor %}
         </div>

@@ -84,6 +84,15 @@ def case_detail(case_id):
         resp_path = case_dir / "responses" / f"{cit['id']}.json"
         cit["_has_data"] = cit_path.exists()
         cit["_has_response"] = resp_path.exists()
+        cit["_category"] = ""
+        if resp_path.exists():
+            try:
+                import json as _json
+                with open(resp_path, "r", encoding="utf-8") as f:
+                    rdata = _json.loads(f.read().replace('\x00', ''), strict=False)
+                cit["_category"] = (rdata.get("category_suggestion", "") or "").upper()[:1]
+            except Exception:
+                pass
         citations.append(cit)
 
     excel_files = list((case_dir / "output").glob("*.xlsx")) if (case_dir / "output").exists() else []
