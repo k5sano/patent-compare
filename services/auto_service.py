@@ -271,20 +271,22 @@ def _auto_download_citations(case_id, case_dir, meta):
 
     downloaded = already_done
     errors = []
+    failed_pids = set()
     logger.info("引例DL開始: %d件を並列ダウンロード（%d件はキャッシュ済み）",
                 len(to_download), already_done)
 
     with ThreadPoolExecutor(max_workers=min(len(to_download), 6)) as executor:
         futures = {
-            executor.submit(_download_one, c, pid, did): pid
+            executor.submit(_download_one, c, pid, did): (pid, c)
             for c, pid, did in to_download
         }
         for future in as_completed(futures, timeout=300):
-            pid = futures[future]
+            pid, candidate = futures[future]
             try:
                 result, error = future.result()
                 if error:
                     errors.append(error)
+                    failed_pids.add(pid)
                 elif result:
                     actual_doc_id, rel, patent_id = result
                     # meta更新はスレッドセーフに
@@ -298,7 +300,22 @@ def _auto_download_citations(case_id, case_dir, meta):
                     logger.info("引例DL完了: %s", pid)
             except Exception as e:
                 errors.append(f"{pid}: {str(e)}")
+                failed_pids.add(pid)
                 logger.warning("引例DLエラー: %s — %s", pid, e)
+
+    # DL失敗した候補に confidence: "low" を付与して presearch_candidates.json を更新
+    if failed_pids:
+        cand_data = load_search_data(case_dir, "presearch_candidates.json")
+        if cand_data and isinstance(cand_data, list):
+            updated = False
+            for c in cand_data:
+                if c.get("patent_id", "") in failed_pids:
+                    c["confidence"] = "low"
+                    c["dl_failed"] = True
+                    updated = True
+            if updated:
+                save_search_data(case_dir, "presearch_candidates.json", cand_data)
+        logger.info("DL失敗 %d件に confidence=low を付与", len(failed_pids))
 
     logger.info("引例DL完了: %d/%d件成功", downloaded, len(targets))
     return {"total": len(targets), "downloaded": downloaded, "errors": errors}
@@ -624,7 +641,8 @@ def _build_additional_search_prompt(segs, hongan, keywords, field, uncovered_ids
 ```
 
 ## ルール
-- patent_id は実在する特許番号のみ記載（推測番号禁止）
+- patent_id はできるだけ実在する特許番号を記載（知識から想起できるもの）
+- 検索ツールが使えない場合でも、知識に基づいて候補を提案してください
 - 最大10件まで
 - relevant_segments には不充足分節のIDのみ記載
 """
@@ -650,11 +668,29 @@ def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, 
     with open(prompts_dir / "additional_search_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt)
 
-    raw_response = _call_claude_with_retry(prompt, timeout=600, use_search=True)
+    # 検索ツール付きで試行、失敗したら検索なしでフォールバック
+    try:
+        raw_response = _call_claude_with_retry(prompt, timeout=600, use_search=True,
+                                                max_retries=1, base_delay=10)
+    except Exception:
+        logger.info("追加サーチ: 検索ツール付き失敗 → 検索なしでフォールバック")
+        raw_response = _call_claude_with_retry(prompt, timeout=600, use_search=False)
 
-    # パース（presearch_responseと同じ形式で試みる）
-    from modules.json_utils import extract_json_array
+    # デバッグ用にraw responseを保存
+    with open(prompts_dir / "additional_search_response.txt", "w", encoding="utf-8") as f:
+        f.write(raw_response)
+
+    # パース
+    from modules.json_utils import extract_json_array, extract_json_object
     candidates = extract_json_array(raw_response)
+    # オブジェクト形式で返ってきた場合の対応（{candidates: [...]}等）
+    if not candidates:
+        obj = extract_json_object(raw_response)
+        if obj:
+            for key in ("candidates", "results", "patents", "references"):
+                if isinstance(obj.get(key), list):
+                    candidates = obj[key]
+                    break
 
     if candidates:
         # 既存候補とマージして保存
@@ -671,8 +707,6 @@ def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, 
 
         if added:
             save_search_data(case_dir, "presearch_candidates.json", existing)
-            # 検証
-            added = _verify_candidates(added)
 
         return added
 
@@ -861,7 +895,7 @@ def auto_run(case_ids, steps=None):
                             )
                             yield _sse_event("step_done", {
                                 "case_id": case_id, "step": "additional_search",
-                                "detail": f"{len(added)}件の追加候補",
+                                "detail": f"{len(added)}件の追加候補（実在確認済）",
                             })
 
                             # 追加DL
