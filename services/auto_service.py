@@ -440,6 +440,246 @@ def _auto_export_excel(case_dir, segs, meta):
 
 
 # ------------------------------------------------------------------
+# 請求項1充足チェック・追加サーチ
+# ------------------------------------------------------------------
+
+def _check_claim1_coverage(case_dir, segs):
+    """請求項1の全分節がX文献で○になっているかチェック。
+
+    Returns:
+        dict: {
+            "covered": bool,         # 全分節が充足されているか
+            "claim1_ids": [str],     # 請求項1の分節IDリスト
+            "uncovered_ids": [str],  # 充足されていない分節IDリスト
+            "x_count": int,          # X文献数
+            "y_count": int,          # Y文献数
+            "best_x_coverage": {},   # 最もカバー率の高いX文献の分析
+        }
+    """
+    # 請求項1の分節IDを取得
+    claim1_ids = []
+    for claim in segs:
+        if claim.get("claim_number") == 1 or claim.get("is_independent", False):
+            claim1_ids = [s["id"] for s in claim.get("segments", [])]
+            break
+
+    if not claim1_ids:
+        return {"covered": True, "claim1_ids": [], "uncovered_ids": [],
+                "x_count": 0, "y_count": 0, "best_x_coverage": {}}
+
+    responses_dir = case_dir / "responses"
+    if not responses_dir.exists():
+        return {"covered": False, "claim1_ids": claim1_ids,
+                "uncovered_ids": claim1_ids, "x_count": 0, "y_count": 0,
+                "best_x_coverage": {}}
+
+    # 全responseを読み込んでX/Y分類とカバレッジを分析
+    x_docs = {}  # doc_id -> {seg_id: judgment}
+    y_count = 0
+    for rfile in responses_dir.glob("*.json"):
+        if rfile.stem.startswith("_"):
+            continue
+        try:
+            with open(rfile, "r", encoding="utf-8") as f:
+                rdata = json.loads(f.read().replace('\x00', ''), strict=False)
+            cat = (rdata.get("category_suggestion", "") or "").upper()
+            if cat.startswith("Y"):
+                y_count += 1
+            elif cat.startswith("X"):
+                coverage = {}
+                for comp in rdata.get("comparisons", []):
+                    rid = comp.get("requirement_id", "")
+                    if rid in claim1_ids:
+                        coverage[rid] = comp.get("judgment", "")
+                x_docs[rfile.stem] = coverage
+        except Exception:
+            pass
+
+    # X文献のいずれかで全分節が○かチェック
+    for doc_id, coverage in x_docs.items():
+        if all(coverage.get(sid, "") == "\u25cb" for sid in claim1_ids):
+            return {"covered": True, "claim1_ids": claim1_ids,
+                    "uncovered_ids": [], "x_count": len(x_docs),
+                    "y_count": y_count, "best_x_coverage": {}}
+
+    # 全X文献を合算して、どの分節が充足されていないか
+    covered_by_any_x = set()
+    best_x = {}
+    best_x_count = 0
+    for doc_id, coverage in x_docs.items():
+        matched = sum(1 for sid in claim1_ids if coverage.get(sid, "") == "\u25cb")
+        if matched > best_x_count:
+            best_x_count = matched
+            best_x = {"doc_id": doc_id, "matched": matched,
+                      "total": len(claim1_ids), "coverage": coverage}
+        for sid in claim1_ids:
+            if coverage.get(sid, "") == "\u25cb":
+                covered_by_any_x.add(sid)
+
+    uncovered = [sid for sid in claim1_ids if sid not in covered_by_any_x]
+
+    return {
+        "covered": False,
+        "claim1_ids": claim1_ids,
+        "uncovered_ids": uncovered,
+        "x_count": len(x_docs),
+        "y_count": y_count,
+        "best_x_coverage": best_x,
+    }
+
+
+def _build_additional_search_prompt(segs, hongan, keywords, field, uncovered_ids, coverage_info, meta):
+    """不充足分節に焦点を当てた追加サーチプロンプトを生成"""
+    # 不充足分節のテキストを収集
+    uncovered_segments = []
+    for claim in segs:
+        for seg in claim.get("segments", []):
+            if seg["id"] in uncovered_ids:
+                uncovered_segments.append(seg)
+
+    seg_text = "\n".join(f'[{s["id"]}] {s["text"]}' for s in uncovered_segments)
+
+    # 既存引用文献リスト
+    existing_docs = []
+    best = coverage_info.get("best_x_coverage", {})
+    if best:
+        existing_docs.append(f'最良X文献: {best.get("doc_id", "?")} '
+                            f'({best.get("matched", 0)}/{best.get("total", 0)}分節充足)')
+
+    field_label = {"cosmetics": "化粧品", "laminate": "積層体"}.get(field, field)
+
+    # 明細書から不充足分節の関連記述を抽出
+    spec_hints = []
+    if hongan:
+        for seg in uncovered_segments:
+            seg_text_clean = seg["text"][:50]
+            for para in hongan.get("paragraphs", [])[:200]:
+                ptext = para.get("text", "")
+                # 分節テキストのキーワードが明細書に含まれるか簡易チェック
+                keywords_in_seg = [w for w in seg_text_clean.split() if len(w) >= 3]
+                if any(kw in ptext for kw in keywords_in_seg[:3]):
+                    spec_hints.append(f'【{para["id"]}】{ptext[:100]}')
+                    if len(spec_hints) >= 10:
+                        break
+            if len(spec_hints) >= 10:
+                break
+
+    prompt = f"""あなたは{field_label}分野の特許調査の専門家です。
+
+## 追加サーチ依頼
+
+以下の特許請求項の構成要件のうち、先行技術調査で**充足するX引例が見つかっていない分節**があります。
+これらの分節を充足しうる先行技術文献を追加で探してください。
+
+## 不充足分節（これらを開示する文献を探す）
+{seg_text}
+
+## 既存の調査状況
+- X文献: {coverage_info.get('x_count', 0)}件、Y文献: {coverage_info.get('y_count', 0)}件
+{chr(10).join('- ' + d for d in existing_docs)}
+- 上記の文献では以下の分節が充足されていません: {', '.join(uncovered_ids)}
+
+"""
+
+    if spec_hints:
+        prompt += f"""## 明細書の関連記述（参考）
+{chr(10).join(spec_hints[:8])}
+
+"""
+
+    # キーワードがあれば不充足分節のキーワードを追加
+    if keywords:
+        kw_lines = []
+        for group in keywords:
+            seg_ids = group.get("segment_ids", [])
+            if any(sid in uncovered_ids for sid in seg_ids):
+                terms = [kw["term"] for kw in group.get("keywords", [])[:10]]
+                if terms:
+                    kw_lines.append(f'  {group.get("label", "")}: {", ".join(terms)}')
+        if kw_lines:
+            prompt += f"""## 関連キーワード
+{chr(10).join(kw_lines)}
+
+"""
+
+    prompt += """## 指示
+1. 上記の不充足分節を**直接的に開示している**先行技術文献を探してください
+2. 特に実施例・具体的な記載で充足できるX引例候補を優先
+3. 既に見つかっている文献とは**異なる文献**を提案すること
+
+## 出力形式（JSONのみ、説明文不要）
+```json
+[
+  {
+    "patent_id": "JP2020-123456A",
+    "title": "発明の名称",
+    "applicant": "出願人",
+    "relevance": "主引例候補",
+    "relevant_segments": ["1E", "1F"],
+    "reason": "この文献が不充足分節をどのように充足するかの説明",
+    "confidence": "high/medium/low",
+    "relevance_score": 5
+  }
+]
+```
+
+## ルール
+- patent_id は実在する特許番号のみ記載（推測番号禁止）
+- 最大10件まで
+- relevant_segments には不充足分節のIDのみ記載
+"""
+    return prompt
+
+
+def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, coverage_info):
+    """不充足分節に焦点を当てた追加サーチを実行"""
+    from modules.search_prompt_generator import parse_presearch_response
+
+    keywords = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        with open(kw_path, "r", encoding="utf-8") as f:
+            keywords = json.load(f)
+
+    prompt = _build_additional_search_prompt(
+        segs, hongan, keywords, field, uncovered_ids, coverage_info, meta
+    )
+
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    with open(prompts_dir / "additional_search_prompt.txt", "w", encoding="utf-8") as f:
+        f.write(prompt)
+
+    raw_response = _call_claude_with_retry(prompt, timeout=600, use_search=True)
+
+    # パース（presearch_responseと同じ形式で試みる）
+    from modules.json_utils import extract_json_array
+    candidates = extract_json_array(raw_response)
+
+    if candidates:
+        # 既存候補とマージして保存
+        existing = load_search_data(case_dir, "presearch_candidates.json") or []
+        existing_ids = {c.get("patent_id", "") for c in existing}
+        added = []
+        for c in candidates:
+            pid = c.get("patent_id", "")
+            if pid and pid not in existing_ids:
+                c["source"] = "additional_search"
+                existing.append(c)
+                added.append(c)
+                existing_ids.add(pid)
+
+        if added:
+            save_search_data(case_dir, "presearch_candidates.json", existing)
+            # 検証
+            added = _verify_candidates(added)
+
+        return added
+
+    return []
+
+
+# ------------------------------------------------------------------
 # メインエントリポイント（SSEジェネレータ）
 # ------------------------------------------------------------------
 
@@ -599,12 +839,79 @@ def auto_run(case_ids, steps=None):
                         "error": str(e),
                     })
 
+            # --- Step: 請求項1充足チェック → 追加サーチ ---
+            if "compare" in steps:
+                try:
+                    cov = _check_claim1_coverage(case_dir, segs)
+                    if not cov["covered"] and cov["uncovered_ids"]:
+                        uncov_str = ", ".join(cov["uncovered_ids"])
+                        yield _sse_event("step_warning", {
+                            "case_id": case_id, "step": "coverage_check",
+                            "detail": f"請求項1の分節 {uncov_str} がX文献で未充足（X:{cov['x_count']}件, Y:{cov['y_count']}件）",
+                        })
+
+                        # 追加サーチ実行
+                        yield _sse_event("step_start", {
+                            "case_id": case_id, "step": "additional_search",
+                        })
+                        try:
+                            added = _auto_additional_search(
+                                case_dir, segs, hongan, field, meta,
+                                cov["uncovered_ids"], cov,
+                            )
+                            yield _sse_event("step_done", {
+                                "case_id": case_id, "step": "additional_search",
+                                "detail": f"{len(added)}件の追加候補",
+                            })
+
+                            # 追加DL
+                            if added:
+                                yield _sse_event("step_start", {
+                                    "case_id": case_id, "step": "additional_dl",
+                                })
+                                try:
+                                    dl2 = _auto_download_citations(case_id, case_dir, meta)
+                                    yield _sse_event("step_done", {
+                                        "case_id": case_id, "step": "additional_dl",
+                                        "detail": f"{dl2['downloaded']}/{dl2['total']}件DL",
+                                    })
+                                except Exception as e:
+                                    yield _sse_event("step_error", {
+                                        "case_id": case_id, "step": "additional_dl",
+                                        "error": str(e),
+                                    })
+
+                                # 追加対比（新しい文献のみ、既存responseはスキップ済み）
+                                yield _sse_event("step_start", {
+                                    "case_id": case_id, "step": "additional_compare",
+                                })
+                                try:
+                                    cmp2 = _auto_compare(case_id, case_dir, segs, meta, field)
+                                    yield _sse_event("step_done", {
+                                        "case_id": case_id, "step": "additional_compare",
+                                        "detail": f"{cmp2['num_docs']}件追加対比完了",
+                                    })
+                                except Exception as e:
+                                    yield _sse_event("step_error", {
+                                        "case_id": case_id, "step": "additional_compare",
+                                        "error": str(e),
+                                    })
+                        except Exception as e:
+                            yield _sse_event("step_error", {
+                                "case_id": case_id, "step": "additional_search",
+                                "error": str(e),
+                            })
+                except Exception as e:
+                    logger.warning("充足チェックエラー: %s — %s", case_id, e)
+
             # --- Step: Excel出力 ---
             if "excel" in steps:
                 yield _sse_event("step_start", {
                     "case_id": case_id, "step": "excel",
                 })
                 try:
+                    # meta再読込（追加サーチで更新されている可能性）
+                    meta = load_case_meta(case_id) or meta
                     excel_path = _auto_export_excel(case_dir, segs, meta)
                     yield _sse_event("step_done", {
                         "case_id": case_id, "step": "excel",

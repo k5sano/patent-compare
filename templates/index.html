@@ -617,6 +617,10 @@ const STEP_LABELS = {
   download_citations: '文献DL',
   compare: '対比',
   excel: 'Excel出力',
+  coverage_check: '充足チェック',
+  additional_search: '追加サーチ',
+  additional_dl: '追加文献DL',
+  additional_compare: '追加対比',
 };
 
 let _autoTotal = 1;
@@ -640,6 +644,10 @@ function handleAutoEvent(type, data) {
 
     case 'step_done':
       appendAutoLog('done', `  ✓ ${STEP_LABELS[data.step] || data.step} — ${data.detail || ''}`);
+      break;
+
+    case 'step_warning':
+      appendAutoLog('warn', `  ⚠ ${STEP_LABELS[data.step] || data.step}: ${data.detail || ''}`);
       break;
 
     case 'step_error':
@@ -669,7 +677,7 @@ function handleAutoEvent(type, data) {
 function appendAutoLog(type, message) {
   const log = document.getElementById('auto-log');
   const div = document.createElement('div');
-  const colors = { info: '#94a3b8', step: '#60a5fa', done: '#4ade80', error: '#f87171' };
+  const colors = { info: '#94a3b8', step: '#60a5fa', done: '#4ade80', error: '#f87171', warn: '#fbbf24' };
   div.style.color = colors[type] || '#e2e8f0';
   div.style.whiteSpace = 'pre-wrap';
   div.textContent = message;
