@@ -16,7 +16,7 @@ from flask import (
 
 from services.case_service import (
     get_case_dir, load_case_meta, list_all_cases,
-    load_json_file,
+    load_json_file, find_citation_pdf,
 )
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -84,6 +84,7 @@ def case_detail(case_id):
         resp_path = case_dir / "responses" / f"{cit['id']}.json"
         cit["_has_data"] = cit_path.exists()
         cit["_has_response"] = resp_path.exists()
+        cit["_has_pdf"] = bool(find_citation_pdf(case_dir / "input", cit['id']))
         cit["_category"] = ""
         if resp_path.exists():
             try:

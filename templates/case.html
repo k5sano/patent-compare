@@ -725,10 +725,14 @@
               {% elif cit._category == 'A' %}<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>{% endif %}
             </p>
           </div>
-          <div style="display:flex; gap:4px; align-items:center;">
-            {% if cit._has_response %}
+          <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
+            {% if cit._has_response and cit._has_pdf %}
             <button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
                     onclick="annotateCitation('{{ cit.id }}', this)">注釈PDF</button>
+            {% endif %}
+            {% if not cit._has_pdf %}
+            <a href="javascript:void(0)" onclick="window.open(buildJplatpatUrl('{{ cit.id }}'),'_blank')"
+               class="btn btn-outline" style="padding:0.3rem 0.6rem; font-size:0.75rem; color:#60a5fa; border-color:#60a5fa;">J-PlatPat</a>
             {% endif %}
             <button class="btn btn-danger" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
                     onclick="deleteCitation('{{ cit.id }}')">削除</button>
@@ -2502,7 +2506,10 @@ async function annotateCitation(citId, btn) {
     } else {
       btn.textContent = origText;
       btn.disabled = false;
-      alert('注釈PDF生成エラー: ' + (data.error || ''));
+      const jpUrl = data.jplatpat_url || buildJplatpatUrl(citId);
+      let msg = '注釈PDF生成エラー: ' + (data.error || '');
+      if (jpUrl) msg += '\n\nJ-PlatPatで確認: ' + jpUrl;
+      alert(msg);
     }
   } catch(e) {
     btn.textContent = origText;
@@ -2700,8 +2707,16 @@ async function annotateAll() {
     }
     const failures = data.results.filter(r => !r.success);
     if (failures.length > 0) {
+      const failLines = failures.map(f => {
+        let line = `${f.citation_id}: ${f.error}`;
+        const jpUrl = f.jplatpat_url || buildJplatpatUrl(f.citation_id);
+        if (jpUrl) {
+          line += ` <a href="${jpUrl}" target="_blank" style="color:#60a5fa;">J-PlatPat</a>`;
+        }
+        return line;
+      }).join('<br>');
       html += `<div style="padding:0.8rem; background:#422006; border-radius:8px; margin-top:0.5rem; color:#fbbf24; font-size:0.85rem;">
-        ${failures.length}件失敗: ${failures.map(f => f.citation_id + ': ' + f.error).join('<br>')}
+        ${failures.length}件失敗:<br>${failLines}
       </div>`;
     }
     resultDiv.innerHTML = html;
