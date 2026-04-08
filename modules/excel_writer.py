@@ -23,8 +23,8 @@ from openpyxl.utils import get_column_letter
 # --- スタイル定義 ---
 FONT_TITLE = Font(name="游ゴシック", size=14, bold=True)
 FONT_HEADER = Font(name="游ゴシック", size=10, bold=True)
-FONT_NORMAL = Font(name="游ゴシック", size=9)
-FONT_SMALL = Font(name="游ゴシック", size=8)
+FONT_NORMAL = Font(name="游ゴシック", size=10)
+FONT_SMALL = Font(name="游ゴシック", size=10)
 FONT_JUDGMENT = Font(name="游ゴシック", size=12, bold=True)
 
 FILL_GREEN = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")   # ○
