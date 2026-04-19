@@ -7,6 +7,8 @@ PatentCompare Web GUI
 """
 
 import json
+import os
+import subprocess
 import yaml
 from pathlib import Path
 from flask import (
@@ -77,6 +79,7 @@ def case_detail(case_id):
     hongan = load_json_file(case_id, "hongan.json")
     segments = load_json_file(case_id, "segments.json")
     keywords = load_json_file(case_id, "keywords.json")
+    related_paragraphs = load_json_file(case_id, "related_paragraphs.json") or {}
 
     citations = []
     for cit in meta.get("citations", []):
@@ -101,6 +104,7 @@ def case_detail(case_id):
     return render_template("case.html",
                            meta=meta, hongan=hongan, segments=segments,
                            keywords=keywords, citations=citations,
+                           related_paragraphs=related_paragraphs,
                            excel_files=excel_files, case_id=case_id)
 
 
@@ -348,16 +352,141 @@ def download_file(case_id, filename):
     return send_file(str(file_path), as_attachment=True)
 
 
+def _resolve_hongan_pdf_path(case_id):
+    """本願PDFの実ファイルパスを解決。見つからなければ None。"""
+    case_dir = get_case_dir(case_id)
+    hongan_path = case_dir / "hongan.json"
+
+    if hongan_path.exists():
+        try:
+            with open(hongan_path, "r", encoding="utf-8") as f:
+                hongan = json.load(f)
+            src = hongan.get("source_pdf")
+            if src:
+                candidate = case_dir / "input" / src
+                if candidate.exists():
+                    return candidate
+        except Exception:
+            pass
+
+    # フォールバック: input/ の中で引用文献 ID を含まない PDF を探す
+    input_dir = case_dir / "input"
+    if input_dir.exists():
+        meta = load_case_meta(case_id) or {}
+        cit_ids = [c["id"] for c in meta.get("citations", [])]
+        for p in input_dir.glob("*.pdf"):
+            if not any(cid and cid in p.stem for cid in cit_ids):
+                return p
+    return None
+
+
+PDFXCHANGE_CANDIDATES = [
+    r"C:\Program Files\Tracker Software\PDF Editor\PDFXEdit.exe",
+    r"C:\Program Files (x86)\Tracker Software\PDF Editor\PDFXEdit.exe",
+]
+
+
+@app.route("/case/<case_id>/hongan/pdf")
+def view_hongan_pdf(case_id):
+    """本願PDFをブラウザでインライン表示（フォールバック用）"""
+    pdf_path = _resolve_hongan_pdf_path(case_id)
+    if pdf_path is None:
+        return jsonify({"error": "本願PDFが見つかりません"}), 404
+    return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
+
+
+@app.route("/case/<case_id>/hongan/open", methods=["POST"])
+def open_hongan_pdf(case_id):
+    """本願PDFをPDF-XChange Editorで開く（サーバーホスト上で起動）"""
+    pdf_path = _resolve_hongan_pdf_path(case_id)
+    if pdf_path is None:
+        return jsonify({"error": "本願PDFが見つかりません"}), 404
+    return _launch_pdf_xchange(pdf_path)
+
+
+def _launch_pdf_xchange(pdf_path):
+    if _open_with_pdf_xchange(pdf_path):
+        exe = next((p for p in PDFXCHANGE_CANDIDATES if Path(p).exists()), None)
+        return jsonify({"success": True,
+                        "opened_with": "PDF-XChange Editor" if exe else "OS default"})
+    return jsonify({"error": "起動失敗"}), 500
+
+
+@app.route("/case/<case_id>/segments/related", methods=["GET"])
+def get_related_paragraphs(case_id):
+    """キャッシュ済みの関連段落マッピングを返す"""
+    data = load_json_file(case_id, "related_paragraphs.json") or {}
+    return jsonify({"related": data})
+
+
+@app.route("/case/<case_id>/segments/related", methods=["POST"])
+def compute_related_paragraphs_route(case_id):
+    """分節に対して関連段落を検出・保存"""
+    from services.case_service import compute_related_paragraphs
+    return _svc_response(compute_related_paragraphs(case_id))
+
+
+@app.route("/case/<case_id>/hongan/bookmark", methods=["POST"])
+def bookmark_hongan(case_id):
+    """本願PDFにブックマークを付与した新PDFを作成し、PDF-XChangeで開く"""
+    from services.case_service import create_bookmarked_hongan
+    result, code = create_bookmarked_hongan(case_id)
+    if code == 200 and result.get("success"):
+        pdf_path = Path(result.get("path", ""))
+        opened = False
+        if pdf_path.exists():
+            exe = next((p for p in PDFXCHANGE_CANDIDATES if Path(p).exists()), None)
+            try:
+                if exe:
+                    subprocess.Popen([exe, str(pdf_path)], close_fds=True)
+                else:
+                    os.startfile(str(pdf_path))
+                opened = True
+            except Exception:
+                opened = False
+        result["opened"] = opened
+    return jsonify(result), code
+
+
 @app.route("/case/<case_id>/annotate/<citation_id>", methods=["POST"])
 def annotate_citation(case_id, citation_id):
     from services.comparison_service import annotate_citation
-    return _svc_response(annotate_citation(case_id, citation_id))
+    result, code = annotate_citation(case_id, citation_id)
+    if code == 200 and result.get("success"):
+        pdf_path = get_case_dir(case_id) / "output" / result["filename"]
+        result["opened"] = _open_with_pdf_xchange(pdf_path)
+    return jsonify(result), code
 
 
 @app.route("/case/<case_id>/annotate/all", methods=["POST"])
 def annotate_all_citations(case_id):
     from services.comparison_service import annotate_all_citations
-    return _svc_response(annotate_all_citations(case_id))
+    result, code = annotate_all_citations(case_id)
+    if code == 200:
+        opened_count = 0
+        case_out = get_case_dir(case_id) / "output"
+        for r in result.get("results", []):
+            if r.get("success") and r.get("filename"):
+                if _open_with_pdf_xchange(case_out / r["filename"]):
+                    opened_count += 1
+        result["opened_count"] = opened_count
+    return jsonify(result), code
+
+
+def _open_with_pdf_xchange(pdf_path):
+    """PDFをPDF-XChange Editorで開く。成功ならTrue。"""
+    p = Path(pdf_path)
+    if not p.exists():
+        return False
+    exe = next((c for c in PDFXCHANGE_CANDIDATES if Path(c).exists()), None)
+    try:
+        if exe:
+            subprocess.Popen([exe, str(p)], close_fds=True)
+        else:
+            os.startfile(str(p))
+        return True
+    except Exception:
+        return False
 
 
 @app.route("/case/<case_id>/execute", methods=["POST"])

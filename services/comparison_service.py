@@ -2,13 +2,57 @@
 # -*- coding: utf-8 -*-
 """対比分析・Excel出力・PDF注釈サービス"""
 
+import os
 import re
 import json
 from pathlib import Path
+from datetime import datetime
 
 from services.case_service import (
     get_case_dir, load_case_meta, save_case_meta, find_citation_pdf,
 )
+
+
+def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citation_data, keywords):
+    """注釈PDFを書き出す。出力先がロック中なら別名にフォールバック。
+
+    Returns: (result_dict, actual_path)
+    """
+    from modules.pdf_annotator import annotate_citation_pdf
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / f"{safe_name}_annotated.pdf"
+    try:
+        result = annotate_citation_pdf(
+            pdf_path, target, response_data, citation_data, keywords)
+        return result, target
+    except Exception as e:
+        msg = str(e).lower()
+        if "permission denied" in msg or "cannot remove" in msg or "in use" in msg:
+            ts = datetime.now().strftime("%H%M%S%f")
+            alt = output_dir / f"{safe_name}_annotated_{ts}.pdf"
+            result = annotate_citation_pdf(
+                pdf_path, alt, response_data, citation_data, keywords)
+            result["alt_filename"] = True
+            return result, alt
+        raise
+
+
+def _annotate_worker(job):
+    """プロセスプールのワーカー。ピックル可能にするためモジュールトップレベルに置く。
+
+    job: (cit_id, pdf_path, output_dir, response_data, citation_data, keywords)
+    """
+    cit_id, pdf_path, output_dir, response_data, citation_data, keywords = job
+    safe_name = re.sub(r'[<>:"/\\|?*]', '_', cit_id)
+    try:
+        result, actual_path = _write_annotated_pdf(
+            Path(pdf_path), Path(output_dir), safe_name,
+            response_data, citation_data, keywords)
+        return {"citation_id": cit_id, "success": True,
+                "filename": actual_path.name, **result}
+    except Exception as e:
+        return {"citation_id": cit_id, "success": False, "error": str(e)}
 
 
 def generate_prompt_multi(case_id, citation_ids):
@@ -217,8 +261,6 @@ def export_excel(case_id):
 
 def annotate_citation(case_id, citation_id):
     """引用文献PDFに注釈を追加"""
-    from modules.pdf_annotator import annotate_citation_pdf
-
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
     if not meta:
@@ -249,26 +291,30 @@ def annotate_citation(case_id, citation_id):
             keywords = json.load(f)
 
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
-    output_path = case_dir / "output" / f"{safe_name}_annotated.pdf"
-    (case_dir / "output").mkdir(parents=True, exist_ok=True)
 
     try:
-        result = annotate_citation_pdf(
-            pdf_path, output_path, response_data, citation_data, keywords)
+        result, actual_path = _write_annotated_pdf(
+            pdf_path, case_dir / "output", safe_name,
+            response_data, citation_data, keywords)
         return {
             "success": True,
-            "filename": output_path.name,
+            "filename": actual_path.name,
             "labels": result["labels"],
             "highlights": result["highlights"],
             "bookmarks": result["bookmarks"],
+            "alt_filename": result.get("alt_filename", False),
         }, 200
     except Exception as e:
         return {"error": f"注釈生成エラー: {str(e)}"}, 500
 
 
-def annotate_all_citations(case_id):
-    """��引用文献の注釈PDFを一括生成"""
-    from modules.pdf_annotator import annotate_citation_pdf
+def annotate_all_citations(case_id, max_workers=None):
+    """全引用文献の注釈PDFを並列生成。
+
+    max_workers=None の場合は CPU 論理コア数（最大でジョブ数まで）を使用。
+    Ryzen 9 等の多コアCPUで実質フル稼働。GIL回避のため ProcessPool を使用。
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
@@ -281,7 +327,9 @@ def annotate_all_citations(case_id):
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
 
-    results = []
+    output_dir = case_dir / "output"
+    jobs = []
+    pre_results = []
     for cit in meta.get("citations", []):
         cit_id = cit["id"]
         resp_path = case_dir / "responses" / f"{cit_id}.json"
@@ -297,33 +345,33 @@ def annotate_all_citations(case_id):
             if not pdf_path:
                 missing.append("元PDF")
             from modules.patent_downloader import build_jplatpat_url
-            jp_url = build_jplatpat_url(cit_id)
-            results.append({"citation_id": cit_id, "success": False,
-                            "error": f"{'/'.join(missing)}がありません",
-                            "jplatpat_url": jp_url})
+            pre_results.append({
+                "citation_id": cit_id, "success": False,
+                "error": f"{'/'.join(missing)}がありません",
+                "jplatpat_url": build_jplatpat_url(cit_id),
+            })
             continue
 
         with open(resp_path, "r", encoding="utf-8") as f:
             response_data = json.load(f)
         with open(cit_path, "r", encoding="utf-8") as f:
             citation_data = json.load(f)
+        # ProcessPool にピックルして渡すため Path は str 化
+        jobs.append((cit_id, str(pdf_path), str(output_dir),
+                     response_data, citation_data, keywords))
 
-        safe_name = re.sub(r'[<>:"/\\|?*]', '_', cit_id)
-        output_path = case_dir / "output" / f"{safe_name}_annotated.pdf"
-
-        try:
-            result = annotate_citation_pdf(
-                pdf_path, output_path, response_data, citation_data, keywords)
-            results.append({
-                "citation_id": cit_id, "success": True,
-                "filename": output_path.name, **result,
-            })
-        except Exception as e:
-            results.append({"citation_id": cit_id, "success": False,
-                            "error": str(e)})
+    results = list(pre_results)
+    if jobs:
+        workers = max_workers or (os.cpu_count() or 4)
+        workers = max(1, min(workers, len(jobs)))
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = [ex.submit(_annotate_worker, j) for j in jobs]
+            for fut in as_completed(futures):
+                results.append(fut.result())
 
     success_count = sum(1 for r in results if r["success"])
-    return {"results": results, "success_count": success_count}, 200
+    return {"results": results, "success_count": success_count,
+            "workers_used": workers if jobs else 0}, 200
 
 
 def compare_execute(case_id, citation_ids):

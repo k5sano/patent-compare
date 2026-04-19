@@ -109,6 +109,11 @@
   .seg-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.1); }
   .seg-btn-del:hover { border-color: var(--red); color: var(--red); background: rgba(239,68,68,0.1); }
   .seg-btn-add:hover { border-color: var(--green); color: var(--green); background: rgba(34,197,94,0.1); }
+  .seg-related { display: inline-flex; gap: 3px; flex-wrap: wrap; align-items: center; margin-right: 6px; flex-shrink: 0; max-width: 340px; }
+  .seg-related .para-chip { background: #1e3a5f; color: #60a5fa; padding: 1px 6px; border-radius: 4px;
+                            font-size: 0.72rem; white-space: nowrap; }
+  .seg-related .para-chip.primary { background: #164e63; color: #67e8f9; font-weight: 600; }
+  .seg-related .para-none { color: var(--text2); font-size: 0.72rem; opacity: 0.6; }
 
   /* キーワードグループ */
   .kw-group { margin-bottom: 1rem; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); }
@@ -398,6 +403,13 @@
         <strong>抽出済み:</strong> {{ hongan.patent_number }}
         {% if hongan.patent_title %} &mdash; {{ hongan.patent_title }}{% endif %}<br>
         請求項: {{ hongan.claims|length }}件 / 段落: {{ hongan.paragraphs|length }}件 / {{ hongan.total_pages }}ページ
+        <div style="margin-top:0.6rem;">
+          <button type="button" class="btn btn-outline"
+                  style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                  onclick="openHonganPdf()">
+            &#128196; 本願PDFを開く
+          </button>
+        </div>
       </div>
       <p style="color:var(--text2); font-size:0.85rem;">再度アップロードすると上書きされます。</p>
       {% endif %}
@@ -437,6 +449,7 @@
             <div class="seg-row" data-seg-id="{{ seg.id }}">
               <span class="seg-id">{{ seg.id }}</span>
               <div class="seg-text-edit" contenteditable="true" spellcheck="false">{{ seg.text }}</div>
+              <span class="seg-related" data-seg-id="{{ seg.id }}"></span>
               <div class="seg-actions">
                 <button class="seg-btn" title="この行の下で分割" onclick="splitSeg(this)">&#9986;</button>
                 <button class="seg-btn" title="下の行と結合" onclick="mergeSeg(this)">&#8645;</button>
@@ -455,6 +468,21 @@
         <button class="btn btn-primary" onclick="saveSegmentsFromEditor().then(()=>showPanel(2))">保存して次へ &rarr;</button>
       </div>
       <div id="seg-save-msg" style="display:none; margin-top:0.5rem; padding:0.6rem 1rem; background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;"></div>
+
+      <div style="margin-top:1.2rem; padding-top:1rem; border-top:1px dashed var(--border);">
+        <p style="color:var(--text2); font-size:0.8rem; margin-bottom:0.6rem;">
+          分節の確認・修正が済んだら、本願明細書の関連段落を検出し、PDFにブックマークを付与できます。
+        </p>
+        <div class="btn-row">
+          <button class="btn btn-outline" onclick="detectRelatedParagraphs()" title="各分節に関連する段落番号を検出して表示します">
+            &#128269; 関連段落を検出
+          </button>
+          <button class="btn btn-execute" onclick="bookmarkHongan()" title="関連段落の先頭に飛ぶブックマーク付き本願PDFを作成し、PDF-XChangeで開きます">
+            &#128278; 本願PDFにブックマークを付けて開く
+          </button>
+        </div>
+        <div id="related-msg" style="display:none; margin-top:0.5rem; padding:0.6rem 1rem; border-radius:8px; font-size:0.85rem;"></div>
+      </div>
       {% else %}
       <p style="color:var(--text2);">本願PDFを先にアップロードしてください。分節は自動生成されます。</p>
       {% endif %}
@@ -845,7 +873,7 @@
 
       <div class="btn-row">
         <button class="btn btn-success" onclick="exportExcel()">Excel出力</button>
-        <button class="btn btn-primary" onclick="annotateAll()">全文献の注釈PDF生成</button>
+        <button class="btn btn-primary" onclick="annotateAll()">&#128196; 全文献の注釈PDFを開く</button>
       </div>
       <div class="loading-msg" id="loading-export">
         <div class="spinner"></div>
@@ -1071,6 +1099,19 @@ document.querySelectorAll('.dropzone').forEach(dz => {
   dz.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
   dz.addEventListener('dragleave', e => { e.stopPropagation(); dz.classList.remove('dragover'); });
 });
+
+// ===== 本願PDFをPDF-XChange Editorで開く =====
+async function openHonganPdf() {
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/open`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || '起動に失敗しました');
+    }
+  } catch(e) {
+    alert('本願PDFを開けませんでした: ' + e.message);
+  }
+}
 
 // ===== 本願アップロード =====
 async function uploadHongan(file) {
@@ -1504,6 +1545,83 @@ async function saveSegmentsFromEditor() {
 }
 
 // ================================================================
+// 関連段落の検出・表示 / 本願PDFブックマーク
+// ================================================================
+const INITIAL_RELATED = {{ related_paragraphs | tojson if related_paragraphs else '{}' }};
+
+function renderRelatedParagraphs(related) {
+  document.querySelectorAll('.seg-related').forEach(el => {
+    const sid = el.dataset.segId;
+    const paras = (related && related[sid]) || [];
+    if (!paras.length) {
+      el.innerHTML = '';
+      return;
+    }
+    el.innerHTML = paras.map((p, i) => {
+      const cls = i === 0 ? 'para-chip primary' : 'para-chip';
+      const title = `ページ ${p.page}` + (p.matched && p.matched.length ? ` / 一致: ${p.matched.join(', ')}` : '');
+      const typeLabel = p.type ? `${p.type}` : '';
+      return `<span class="${cls}" title="${title.replace(/"/g,'&quot;')}">${typeLabel}【${p.id}】</span>`;
+    }).join('');
+  });
+}
+
+function showRelatedMsg(text, type) {
+  const box = document.getElementById('related-msg');
+  if (!box) return;
+  box.textContent = text;
+  if (type === 'error') {
+    box.style.background = '#450a0a'; box.style.color = '#fca5a5'; box.style.border = '1px solid #7f1d1d';
+  } else {
+    box.style.background = '#14532d'; box.style.color = '#4ade80'; box.style.border = '1px solid #166534';
+  }
+  box.style.display = 'block';
+  setTimeout(() => box.style.display = 'none', 4000);
+}
+
+async function detectRelatedParagraphs() {
+  showRelatedMsg('検出中...', 'info');
+  try {
+    // 現在の編集内容を先に保存
+    await saveSegmentsFromEditor();
+    const resp = await fetch(`/case/${CASE_ID}/segments/related`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || '検出失敗');
+    renderRelatedParagraphs(data.related);
+    const n = Object.values(data.related).filter(v => v && v.length).length;
+    showRelatedMsg(`関連段落を検出しました（${n}分節）`, 'info');
+  } catch(e) {
+    showRelatedMsg('関連段落の検出に失敗: ' + e.message, 'error');
+  }
+}
+
+async function bookmarkHongan() {
+  if (!confirm('分節の編集内容を保存し、本願PDFにブックマーク付きコピーを作成して PDF-XChange で開きます。よろしいですか？')) return;
+  showRelatedMsg('ブックマーク生成中...', 'info');
+  try {
+    await saveSegmentsFromEditor();
+    const resp = await fetch(`/case/${CASE_ID}/hongan/bookmark`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || 'ブックマーク作成失敗');
+    const openedMsg = data.opened ? ' / PDF-XChangeで開きました' : ' （開くのは失敗）';
+    showRelatedMsg(`ブックマーク付きPDF作成: ${data.filename}（${data.num_bookmarks}件）${openedMsg}`, 'info');
+    // 関連段落UIも更新（最新計算値を取得）
+    try {
+      const rr = await fetch(`/case/${CASE_ID}/segments/related`);
+      const rd = await rr.json();
+      if (rd.related) renderRelatedParagraphs(rd.related);
+    } catch(_) {}
+  } catch(e) {
+    showRelatedMsg('ブックマーク作成に失敗: ' + e.message, 'error');
+  }
+}
+
+// 初期描画: サーバーから引き渡された関連段落データがあれば表示
+if (INITIAL_RELATED && Object.keys(INITIAL_RELATED).length > 0) {
+  document.addEventListener('DOMContentLoaded', () => renderRelatedParagraphs(INITIAL_RELATED));
+}
+
+// ================================================================
 // キーワードグループ State
 // ================================================================
 let kwGroups = {{ keywords | tojson if keywords else '[]' }};
@@ -1573,8 +1691,10 @@ function renderGroup(g) {
     <div style="display:flex; gap:4px; margin-left:auto; flex-shrink:0;">
       <button class="kw-group-btn" title="このグループのキーワードを他のグループにコピー"
               onclick="openCopyModal(${g.group_id})">コピー</button>
-      <button class="kw-group-btn kw-group-btn-del" title="選択したキーワード・Ftermを削除"
-              onclick="deleteSelected(${g.group_id})">選択削除</button>
+      <button class="kw-group-btn" title="このグループ内のチェックをすべて外す"
+              onclick="clearSelection(${g.group_id})">選択解除</button>
+      <button class="kw-group-btn kw-group-btn-del" title="チェックが入っていないキーワード・Ftermを削除。チェック中のものは残ります。"
+              onclick="deleteUnselected(${g.group_id})">未選択を削除</button>
       <button class="kw-group-btn kw-group-btn-del" title="グループ削除"
               onclick="deleteGroup(${g.group_id})">グループ削除</button>
     </div>
@@ -1609,7 +1729,7 @@ function renderKwTag(gid, kw) {
   return `<span class="kw-tag" style="background:var(--surface2); display:inline-flex; align-items:center;
     gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}" data-gid="${gid}">
     <input type="checkbox" class="kw-sel" data-gid="${gid}" data-term="${escAttr(kw.term)}"
-      style="margin:0; cursor:pointer; accent-color:#ef4444;">
+      style="margin:0; cursor:pointer; accent-color:#22c55e;">
     <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
     <span class="kw-term-text" title="ダブルクリックで編集"
       style="cursor:text;">${escHtml(kw.term)}</span>
@@ -1622,7 +1742,7 @@ function renderFterms(g) {
     `<span style="font-size:0.75rem; padding:1px 6px; background:#1e3a5f; color:#60a5fa;
       border-radius:4px; margin:1px; display:inline-flex; align-items:center; gap:3px;">
       <input type="checkbox" class="fterm-sel" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
-        style="margin:0; cursor:pointer; accent-color:#ef4444; width:12px; height:12px;">
+        style="margin:0; cursor:pointer; accent-color:#22c55e; width:12px; height:12px;">
       ${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span>
     </span>`
   ).join('');
@@ -1726,29 +1846,34 @@ async function deleteGroup(gid) {
   } catch(e) { alert(e.message); }
 }
 
-async function deleteSelected(gid) {
+function clearSelection(gid) {
+  const groupEl = document.getElementById('kw-group-' + gid);
+  if (!groupEl) return;
+  groupEl.querySelectorAll('.kw-sel, .fterm-sel').forEach(cb => { cb.checked = false; });
+}
+
+async function deleteUnselected(gid) {
   const groupEl = document.getElementById('kw-group-' + gid);
   if (!groupEl) return;
   const g = kwGroups.find(g => g.group_id === gid);
   if (!g) return;
 
-  // 選択されたキーワード
-  const selKws = Array.from(groupEl.querySelectorAll('.kw-sel:checked')).map(cb => cb.dataset.term);
-  // 選択されたFterm
-  const selFts = Array.from(groupEl.querySelectorAll('.fterm-sel:checked')).map(cb => cb.dataset.code);
+  // チェックされていない = 削除対象（チェック = 残す）
+  const delKws = Array.from(groupEl.querySelectorAll('.kw-sel:not(:checked)')).map(cb => cb.dataset.term);
+  const delFts = Array.from(groupEl.querySelectorAll('.fterm-sel:not(:checked)')).map(cb => cb.dataset.code);
 
-  if (selKws.length === 0 && selFts.length === 0) {
-    alert('削除する項目をチェックしてください');
+  if (delKws.length === 0 && delFts.length === 0) {
+    alert('チェックを外した項目がありません（すべて選択中のため削除対象なし）');
     return;
   }
 
   const msg = [];
-  if (selKws.length > 0) msg.push(`キーワード ${selKws.length}件`);
-  if (selFts.length > 0) msg.push(`Fterm ${selFts.length}件`);
-  if (!confirm(`${msg.join('、')}を削除しますか？`)) return;
+  if (delKws.length > 0) msg.push(`キーワード ${delKws.length}件`);
+  if (delFts.length > 0) msg.push(`Fterm ${delFts.length}件`);
+  if (!confirm(`${msg.join('、')}を削除しますか？（チェックが入っている項目は残ります）`)) return;
 
   // キーワード削除
-  for (const term of selKws) {
+  for (const term of delKws) {
     try {
       await fetch(`/case/${CASE_ID}/keywords/delete`, {
         method: 'POST',
@@ -1757,10 +1882,10 @@ async function deleteSelected(gid) {
       });
     } catch(e) { console.warn('kw delete failed', term, e); }
   }
-  g.keywords = (g.keywords || []).filter(kw => !selKws.includes(kw.term));
+  g.keywords = (g.keywords || []).filter(kw => !delKws.includes(kw.term));
 
   // Fterm削除
-  for (const code of selFts) {
+  for (const code of delFts) {
     try {
       await fetch(`/case/${CASE_ID}/keywords/fterm/delete`, {
         method: 'POST',
@@ -1770,7 +1895,7 @@ async function deleteSelected(gid) {
     } catch(e) { console.warn('fterm delete failed', code, e); }
   }
   if (g.search_codes && g.search_codes.fterm) {
-    g.search_codes.fterm = g.search_codes.fterm.filter(ft => !selFts.includes(ft.code));
+    g.search_codes.fterm = g.search_codes.fterm.filter(ft => !delFts.includes(ft.code));
   }
 
   renderGroups();
@@ -2496,13 +2621,13 @@ async function annotateCitation(citId, btn) {
     const data = await resp.json();
 
     if (data.success) {
-      btn.textContent = 'DL';
+      btn.textContent = data.opened ? '開いた' : '生成済';
       btn.classList.remove('btn-outline');
       btn.classList.add('btn-success');
       btn.disabled = false;
-      btn.onclick = function() {
-        window.open(`/case/${CASE_ID}/download/${encodeURIComponent(data.filename)}`, '_blank');
-      };
+      // 再クリックで同じPDFを再オープン（再生成）
+      btn.onclick = () => annotateCitation(citId, btn);
+      setTimeout(() => { btn.textContent = '注釈PDF再表示'; }, 1500);
     } else {
       btn.textContent = origText;
       btn.disabled = false;
@@ -2694,18 +2819,11 @@ async function annotateAll() {
 
     let html = '';
     if (data.success_count > 0) {
+      const opened = data.opened_count || 0;
       html += `<div style="padding:0.8rem; background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;">
-        ${data.success_count}件の注釈PDFを生成しました。</div>`;
-      const dlLinks = document.getElementById('download-links');
-      for (const r of data.results) {
-        if (r.success) {
-          dlLinks.innerHTML += `<a href="/case/${CASE_ID}/download/${encodeURIComponent(r.filename)}"
-            class="btn btn-outline" style="margin-top:0.5rem; display:inline-block;">
-            &#128209; ${r.filename}</a> `;
-        }
-      }
+        ${data.success_count}件の注釈PDFを生成し、${opened}件をPDF-XChange Editorで開きました。</div>`;
     }
-    const failures = data.results.filter(r => !r.success);
+    const failures = (data.results || []).filter(r => !r.success);
     if (failures.length > 0) {
       const failLines = failures.map(f => {
         let line = `${f.citation_id}: ${f.error}`;

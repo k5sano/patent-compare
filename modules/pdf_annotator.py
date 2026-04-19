@@ -216,53 +216,74 @@ def _resolve_paragraph_location(doc, para_id, cited_loc, para_page_map, claims_p
 
 
 def _draw_keyword_highlights(doc, keywords):
-    """キーワードを40%透過でハイライト"""
+    """キーワードを半透明の蛍光ペン風ハイライト注釈で塗る。
+
+    PDFネイティブの highlight annotation を使うので、どのビューワでも
+    文字がきちんと透けて見える（draw_rect+fill_opacity はビューワ依存で
+    完全に塗りつぶされてしまう問題の回避）。
+
+    実装メモ: ページごとにまとめて処理し、同じページに対する annot の
+    更新中にページ参照が無効化されないようにする。
+    """
     count = 0
+    # page → list[(rect, color)] に先に集約
+    per_page = {i: [] for i in range(doc.page_count)}
     for g in keywords:
         gid = g["group_id"]
         color = _GROUP_COLORS[(gid - 1) % len(_GROUP_COLORS)]
-
         for kw in g.get("keywords", []):
             term = kw["term"]
             if len(term) < 2:
                 continue
-            for page_num in range(doc.page_count):
-                rects = doc[page_num].search_for(term)
-                for rect in rects:
-                    shape = doc[page_num].new_shape()
-                    shape.draw_rect(rect)
-                    shape.finish(fill=color, color=None, fill_opacity=0.4)
-                    shape.commit()
-                    count += 1
+            for pn in range(doc.page_count):
+                page = doc[pn]
+                for rect in page.search_for(term):
+                    per_page[pn].append((rect, color))
+
+    # ページ単位で注釈付与
+    for pn, items in per_page.items():
+        if not items:
+            continue
+        page = doc[pn]
+        for rect, color in items:
+            annot = page.add_highlight_annot(rect)
+            annot.set_colors(stroke=color)
+            annot.set_opacity(0.4)
+            annot.update()
+            count += 1
     return count
 
 
 def _build_toc(response, para_page_map, claims_page):
-    """ブックマーク（目次）を構築"""
+    """ブックマーク（目次）を構築。
+
+    引用段落ごとに個別エントリを作り、該当ページに直接ジャンプ。
+    例: 1A が 【0012】【0015】を引用 → 2つのブックマーク
+        「1A ○ 【0012】」「1A ○ 【0015】」をそれぞれのページに。
+    """
     doc_id = response.get("document_id", "引用文献")
     toc = [[1, f"対比結果: {doc_id}", 1]]
 
-    for comp in response.get("comparisons", []):
-        req_id = comp["requirement_id"]
-        judgment = comp["judgment"]
-        cited_loc = comp.get("cited_location", "")
+    def _emit(label_prefix, judgment, cited_loc):
         paras = _parse_cited_paragraphs(cited_loc)
+        emitted = False
+        for para_id in paras:
+            if para_id == "__claims__":
+                label = f"{label_prefix} {judgment} 請求項"
+                toc.append([2, label, claims_page])
+            else:
+                page = para_page_map.get(para_id, 1)
+                label = f"{label_prefix} {judgment} 【{para_id}】"
+                toc.append([2, label, page])
+            emitted = True
+        if not emitted:
+            # 引用箇所が特定できなかった場合のフォールバック
+            toc.append([2, f"{label_prefix} {judgment} {cited_loc or '(不明)'}", 1])
 
-        if paras and paras[0] != "__claims__":
-            page = para_page_map.get(paras[0], 1)
-        elif "請求項" in cited_loc:
-            page = claims_page
-        else:
-            page = 1
-        toc.append([2, f"{req_id} {judgment} {cited_loc}", page])
+    for comp in response.get("comparisons", []):
+        _emit(comp["requirement_id"], comp["judgment"], comp.get("cited_location", ""))
 
     for sub in response.get("sub_claims", []):
-        claim_num = sub["claim_number"]
-        judgment = sub["judgment"]
-        cited_loc = sub.get("cited_location", "")
-        paras = _parse_cited_paragraphs(cited_loc)
-        page = (para_page_map.get(paras[0], 1)
-                if paras and paras[0] != "__claims__" else claims_page)
-        toc.append([2, f"請求項{claim_num} {judgment} {cited_loc}", page])
+        _emit(f"請求項{sub['claim_number']}", sub["judgment"], sub.get("cited_location", ""))
 
     return toc

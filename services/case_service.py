@@ -206,6 +206,8 @@ def upload_hongan(case_id, save_path):
     if not result.get("claims") and not result.get("paragraphs"):
         result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
 
+    result["source_pdf"] = Path(save_path).name
+
     with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -371,3 +373,122 @@ def find_citation_pdf(input_dir, citation_id):
             return pdf_file
 
     return None
+
+
+def _resolve_hongan_pdf(case_id):
+    """本願PDFの実ファイルパスを返す。見つからなければ None。"""
+    case_dir = get_case_dir(case_id)
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        try:
+            with open(hongan_path, "r", encoding="utf-8") as f:
+                hongan = json.load(f)
+            src = hongan.get("source_pdf")
+            if src:
+                candidate = case_dir / "input" / src
+                if candidate.exists():
+                    return candidate
+        except Exception:
+            pass
+
+    input_dir = case_dir / "input"
+    if input_dir.exists():
+        meta = load_case_meta(case_id) or {}
+        cit_ids = [c["id"] for c in meta.get("citations", [])]
+        for p in input_dir.glob("*.pdf"):
+            if not any(cid and cid in p.stem for cid in cit_ids):
+                return p
+    return None
+
+
+def compute_related_paragraphs(case_id):
+    """分節と本願段落のマッピングを計算・保存する"""
+    from modules.paragraph_matcher import find_related_paragraphs
+
+    case_dir = get_case_dir(case_id)
+    segments = load_json_file(case_id, "segments.json")
+    hongan = load_json_file(case_id, "hongan.json")
+
+    if segments is None:
+        return {"error": "分節データがありません"}, 400
+    if hongan is None:
+        return {"error": "本願データがありません"}, 400
+
+    paragraphs = hongan.get("paragraphs", [])
+    if not paragraphs:
+        return {"error": "本願の段落データがありません"}, 400
+
+    related = find_related_paragraphs(segments, paragraphs)
+    save_json_file(case_id, "related_paragraphs.json", related)
+
+    return {"success": True, "related": related}, 200
+
+
+def create_bookmarked_hongan(case_id):
+    """本願PDFに分節IDラベル + ブックマークを付与した新PDFを作成"""
+    import fitz
+    from modules.pdf_bookmark import apply_toc
+    from modules.hongan_annotator import apply_hongan_annotations
+
+    case_dir = get_case_dir(case_id)
+
+    src_pdf = _resolve_hongan_pdf(case_id)
+    if src_pdf is None:
+        return {"error": "本願PDFが見つかりません。再アップロードしてください。"}, 404
+
+    # 常に最新の分節に基づいて再計算
+    res, code = compute_related_paragraphs(case_id)
+    if code != 200:
+        return res, code
+    related = res["related"]
+
+    segments = load_json_file(case_id, "segments.json") or []
+
+    bookmarks = []
+    claim_items = []
+    para_items = []
+
+    for claim in segments:
+        for seg in claim.get("segments", []):
+            sid = seg.get("id")
+            stext = seg.get("text", "")
+            if not sid:
+                continue
+            # 請求項側のアノテーション対象（関連段落があってもなくても追加）
+            if stext:
+                claim_items.append({"seg_id": sid, "seg_text": stext})
+
+            paras = related.get(sid, [])
+            for p in paras:
+                ptype = p.get("type") or ""
+                prefix = f" {ptype}" if ptype else ""
+                title = f"{sid}{prefix}【{p['id']}】 (p.{p['page']})"
+                bookmarks.append({"title": title, "page": p["page"]})
+                para_items.append({
+                    "seg_id": sid,
+                    "para_id": p["id"],
+                    "page": p["page"],
+                })
+
+    if not bookmarks:
+        return {"error": "ブックマーク対象の関連段落が検出できませんでした"}, 400
+
+    output_dir = case_dir / "output"
+    output_dir.mkdir(exist_ok=True)
+    out_pdf = output_dir / f"{case_id}_本願_bookmarked.pdf"
+
+    doc = fitz.open(str(src_pdf))
+    try:
+        n_ann = apply_hongan_annotations(doc, claim_items, para_items)
+        n_bm = apply_toc(doc, bookmarks)
+        doc.save(str(out_pdf), garbage=3, deflate=True)
+    finally:
+        doc.close()
+
+    return {
+        "success": True,
+        "filename": out_pdf.name,
+        "path": str(out_pdf),
+        "num_bookmarks": n_bm,
+        "num_annotations": n_ann,
+    }, 200
