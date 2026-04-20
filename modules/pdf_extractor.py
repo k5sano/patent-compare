@@ -92,47 +92,97 @@ def detect_format(text):
     return "JP"  # デフォルト
 
 
-def extract_text_from_pdf(pdf_path, ocr_threshold=200, ocr_lang='jpn'):
+def extract_text_from_pdf(pdf_path, ocr_threshold=200, ocr_lang='jpn', max_workers=None):
     """PDFからページごとのテキストを抽出（画像ページはOCRフォールバック）
+
+    OCRが必要なページは ThreadPoolExecutor で並列実行する。
+    Tesseract 自体は `OMP_THREAD_LIMIT=1` を与えてシングルスレッド化し、
+    プロセス数の制御をPython側に集約する。
 
     Parameters:
         pdf_path: PDFファイルパス
         ocr_threshold: このバイト数以下のページはOCR対象とする
-        ocr_lang: OCR言語 ('jpn' or 'eng')
+        ocr_lang: OCR言語 ('jpn' or 'eng' / 'jpn+eng')
+        max_workers: OCR並列度。None ならOCR対象ページ数と cpu_count の小さい方
     """
-    import subprocess
-    import tempfile
     import os
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     doc = fitz.open(pdf_path)
     pages = []
-    ocr_pages = []  # OCRが必要なページ番号リスト
+    ocr_targets = []  # [(page_num, png_bytes), ...]
 
-    # 1st pass: 通常テキスト抽出 + OCR必要性の判定
+    # 1st pass: 通常テキスト抽出 + OCR必要性の判定。
+    # OCR対象ページはここで pixmap→PNG bytes 化してメインスレッドで確定させる
+    # （doc を別スレッドで触らないため）。
     for page_num in range(len(doc)):
         page = doc[page_num]
         text = page.get_text("text")
         pages.append({"page": page_num + 1, "text": text})
 
-        # OCR必要性判定:
-        # - テキストが少ないページ（画像がメインの可能性）
-        # - 【表X】ラベルがあるページ（表が画像化されている可能性が高い）
-        content_text = re.sub(r'\s+', '', text)  # 空白除去後の文字数
+        content_text = re.sub(r'\s+', '', text)
         has_table_label = bool(re.search(r'【表\d+】', text))
         if len(content_text) < ocr_threshold or has_table_label:
-            ocr_pages.append(page_num)
-
-    # 2nd pass: 必要なページだけOCR
-    if ocr_pages:
-        for page_num in ocr_pages:
-            ocr_text = _ocr_page(doc[page_num], page_num, lang=ocr_lang)
-            if ocr_text and len(ocr_text.strip()) > len(pages[page_num]["text"].strip()):
-                # OCR結果のほうが情報量が多ければ置換
-                pages[page_num]["text"] = ocr_text
-                pages[page_num]["ocr"] = True
+            pix = page.get_pixmap(matrix=fitz.Matrix(2.5, 2.5))
+            ocr_targets.append((page_num, pix.tobytes("png")))
 
     doc.close()
+
+    if ocr_targets:
+        if max_workers is None:
+            max_workers = min(len(ocr_targets), os.cpu_count() or 4)
+        max_workers = max(1, int(max_workers))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(_ocr_pixmap, pn, png, ocr_lang): pn
+                for pn, png in ocr_targets
+            }
+            for fut in as_completed(futures):
+                page_num = futures[fut]
+                try:
+                    ocr_text = fut.result(timeout=180)
+                except Exception:
+                    ocr_text = None
+                if ocr_text and len(ocr_text.strip()) > len(pages[page_num]["text"].strip()):
+                    pages[page_num]["text"] = ocr_text
+                    pages[page_num]["ocr"] = True
+
     return pages
+
+
+def _ocr_pixmap(page_num, png_bytes, lang='jpn'):
+    """PNG バイト列を Tesseract に通してOCR（スレッドセーフ版）"""
+    import subprocess
+    import tempfile
+    import os
+    import uuid
+
+    uid = uuid.uuid4().hex[:8]
+    img_path = os.path.join(tempfile.gettempdir(), f'patent_ocr_p{page_num}_{uid}.png')
+    out_base = os.path.join(tempfile.gettempdir(), f'patent_ocr_out_p{page_num}_{uid}')
+    out_file = out_base + '.txt'
+    try:
+        with open(img_path, 'wb') as f:
+            f.write(png_bytes)
+        env = os.environ.copy()
+        env.setdefault('OMP_THREAD_LIMIT', '1')
+        subprocess.run(
+            ['tesseract', img_path, out_base, '-l', lang, '--psm', '6'],
+            capture_output=True, timeout=120, env=env,
+        )
+        if os.path.exists(out_file):
+            with open(out_file, 'r', encoding='utf-8') as f:
+                return f.read()
+        return ""
+    except Exception:
+        return None
+    finally:
+        for p in (img_path, out_file):
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+            except OSError:
+                pass
 
 
 def _ocr_page(page, page_num, lang='jpn'):

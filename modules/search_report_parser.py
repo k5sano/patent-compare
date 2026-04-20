@@ -435,88 +435,114 @@ def extract_box_v(text):
 
 # ===== Box C カテゴリ列のbbox抽出（画像PDF用） =====
 
-def _extract_categories_by_bbox(pdf_path):
-    """画像PDFのBox CページからカテゴリX/Y/Aをy昇順で抽出。
-
-    Tesseractはテーブル構造を崩すが、bbox付きOCR (image_to_data) で
-    「DOCUMENTS CONSIDERED 行より下、左端 x<Category列右端」にある
-    単一文字トークン (X/Y/A/E/O/P/T/I/&) を拾うことでカテゴリを復元できる。
-    """
+def _bbox_categories_one_page(png_bytes):
+    """1ページ分のPNGバイト列から、Box Cのカテゴリ列トークン（X/Y/A等）を抽出"""
     try:
         import pytesseract
         from pytesseract import Output
         from PIL import Image
+        import io
     except ImportError:
         return []
 
-    categories = []
+    try:
+        img = Image.open(io.BytesIO(png_bytes))
+    except Exception:
+        return []
+
+    try:
+        df = pytesseract.image_to_data(
+            img, lang='eng', config='--psm 6',
+            output_type=Output.DATAFRAME,
+        )
+    except Exception:
+        return []
+    df = df[df['text'].notna()].copy()
+    if df.empty:
+        return []
+    df['text_s'] = df['text'].astype(str).str.strip()
+    df = df[df['text_s'] != '']
+
+    hdr = df[df['text_s'].str.contains(
+        r'DOCUMENT|CONSIDERED', case=False, na=False, regex=True
+    )]
+    if hdr.empty:
+        return []
+    hdr_top = int(hdr.iloc[0]['top'])
+    hdr_bottom = hdr_top + int(hdr.iloc[0]['height'])
+
+    cat_hdr = df[df['text_s'].str.contains('Category', case=False, na=False)]
+    if not cat_hdr.empty:
+        cl = int(cat_hdr.iloc[0]['left'])
+        cw = int(cat_hdr.iloc[0]['width'])
+        cat_left = max(0, cl - 30)
+        cat_right = cl + cw + 30
+        crop_top = int(cat_hdr.iloc[0]['top']) + int(cat_hdr.iloc[0]['height']) + 10
+    else:
+        cat_left, cat_right = 140, 320
+        crop_top = hdr_bottom + 40
+
+    crop = img.crop((cat_left, crop_top, cat_right, img.size[1] - 40))
+    try:
+        df_cat = pytesseract.image_to_data(
+            crop, lang='eng',
+            config='--psm 6 -c tessedit_char_whitelist=XYAEOPTI&xyaeopti',
+            output_type=Output.DATAFRAME,
+        )
+    except Exception:
+        return []
+    df_cat = df_cat[df_cat['text'].notna()].copy()
+    if df_cat.empty:
+        return []
+    df_cat['text_s'] = df_cat['text'].astype(str).str.strip()
+    df_cat = df_cat[df_cat['text_s'] != '']
+    cat_tokens = df_cat[
+        df_cat['text_s'].str.fullmatch(r'[XYAEOPTIxyaeopti&]', na=False) &
+        (df_cat['conf'].astype(float) > 30)
+    ]
+    result = []
+    for _, t in cat_tokens.sort_values('top').iterrows():
+        ch = unicodedata.normalize('NFKC', t['text_s']).upper()
+        result.append({
+            'category': ch,
+            'top': int(t['top']) + crop_top,
+            'conf': float(t['conf']),
+        })
+    return result
+
+
+def _extract_categories_by_bbox(pdf_path, max_workers=None):
+    """画像PDFのBox CページからカテゴリX/Y/Aをy昇順で抽出（ページ並列）"""
+    try:
+        import pytesseract  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        return []
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    # 各ページを PNG bytes 化（fitz の doc は閉じてから並列OCR）
+    page_images = []
     doc = fitz.open(str(pdf_path))
     try:
         for page in doc:
             pix = page.get_pixmap(matrix=fitz.Matrix(3.0, 3.0))
-            img = Image.frombytes('RGB', (pix.width, pix.height), pix.samples)
-            try:
-                df = pytesseract.image_to_data(
-                    img, lang='eng', config='--psm 6',
-                    output_type=Output.DATAFRAME,
-                )
-            except Exception:
-                continue
-            df = df[df['text'].notna()].copy()
-            if df.empty:
-                continue
-            df['text_s'] = df['text'].astype(str).str.strip()
-            df = df[df['text_s'] != '']
-
-            # DOCUMENTS CONSIDERED ヘッダ位置
-            hdr = df[df['text_s'].str.contains(
-                r'DOCUMENT|CONSIDERED', case=False, na=False, regex=True
-            )]
-            if hdr.empty:
-                continue
-            hdr_top = int(hdr.iloc[0]['top'])
-            hdr_bottom = hdr_top + int(hdr.iloc[0]['height'])
-
-            # Category ヘッダで列x範囲を決定
-            cat_hdr = df[df['text_s'].str.contains('Category', case=False, na=False)]
-            if not cat_hdr.empty:
-                cl = int(cat_hdr.iloc[0]['left'])
-                cw = int(cat_hdr.iloc[0]['width'])
-                cat_left = max(0, cl - 30)
-                cat_right = cl + cw + 30
-                crop_top = int(cat_hdr.iloc[0]['top']) + int(cat_hdr.iloc[0]['height']) + 10
-            else:
-                cat_left, cat_right = 140, 320
-                crop_top = hdr_bottom + 40
-
-            # Category 列だけクロップしてOCR（ホワイトリストでカテゴリ文字に限定）
-            crop = img.crop((cat_left, crop_top, cat_right, img.size[1] - 40))
-            try:
-                df_cat = pytesseract.image_to_data(
-                    crop, lang='eng',
-                    config='--psm 6 -c tessedit_char_whitelist=XYAEOPTI&xyaeopti',
-                    output_type=Output.DATAFRAME,
-                )
-            except Exception:
-                continue
-            df_cat = df_cat[df_cat['text'].notna()].copy()
-            if df_cat.empty:
-                continue
-            df_cat['text_s'] = df_cat['text'].astype(str).str.strip()
-            df_cat = df_cat[df_cat['text_s'] != '']
-            cat_tokens = df_cat[
-                df_cat['text_s'].str.fullmatch(r'[XYAEOPTIxyaeopti&]', na=False) &
-                (df_cat['conf'].astype(float) > 30)
-            ]
-            for _, t in cat_tokens.sort_values('top').iterrows():
-                ch = unicodedata.normalize('NFKC', t['text_s']).upper()
-                categories.append({
-                    'category': ch,
-                    'top': int(t['top']) + crop_top,  # 絶対座標
-                    'conf': float(t['conf']),
-                })
+            page_images.append(pix.tobytes("png"))
     finally:
         doc.close()
+
+    if not page_images:
+        return []
+
+    if max_workers is None:
+        max_workers = min(len(page_images), os.cpu_count() or 4)
+    max_workers = max(1, int(max_workers))
+
+    categories = []
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        # 順序を保ちたいので map を使う（ページ順でtop座標は意味を持つ）
+        for per_page in ex.map(_bbox_categories_one_page, page_images):
+            categories.extend(per_page)
     return categories
 
 
