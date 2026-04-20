@@ -640,6 +640,61 @@ def stage_execute_stream(case_id):
     return Response(result, mimetype="application/x-ndjson")
 
 
+# ===== ISR / 書面意見 取り込み =====
+
+@app.route("/case/<case_id>/search-report/list", methods=["GET"])
+def search_report_list(case_id):
+    from services.search_report_service import list_reports
+    return _svc_response(list_reports(case_id))
+
+
+@app.route("/case/<case_id>/search-report/upload", methods=["POST"])
+def search_report_upload(case_id):
+    from services.search_report_service import upload_report
+
+    if "file" not in request.files:
+        return jsonify({"error": "ファイルがありません"}), 400
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "ファイルが選択されていません"}), 400
+
+    case_dir = get_case_dir(case_id)
+    tmp_dir = case_dir / "search_reports"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    save_path = tmp_dir / file.filename
+    file.save(str(save_path))
+
+    return _svc_response(upload_report(case_id, save_path, file.filename))
+
+
+@app.route("/case/<case_id>/search-report/<path:filename>", methods=["DELETE"])
+def search_report_delete(case_id, filename):
+    from services.search_report_service import delete_report
+    return _svc_response(delete_report(case_id, filename))
+
+
+@app.route("/case/<case_id>/search-report/<path:filename>/summarize", methods=["POST"])
+def search_report_summarize(case_id, filename):
+    from services.search_report_service import summarize_box_v
+    return _svc_response(summarize_box_v(case_id, filename))
+
+
+@app.route("/case/<case_id>/search-report/<path:filename>/fetch", methods=["POST"])
+def search_report_fetch(case_id, filename):
+    from services.search_report_service import fetch_cited_documents
+    data = request.get_json() or {}
+    nums = data.get("nums", [])
+    return _svc_response(fetch_cited_documents(case_id, filename, nums))
+
+
+@app.route("/case/<case_id>/search-report/<path:filename>/pdf")
+def search_report_pdf(case_id, filename):
+    pdf_path = get_case_dir(case_id) / "search_reports" / filename
+    if not pdf_path.exists():
+        return jsonify({"error": "PDFが見つかりません"}), 404
+    return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
+
+
 # ===== オートモード =====
 
 @app.route("/auto/run", methods=["POST"])

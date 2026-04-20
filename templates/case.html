@@ -719,6 +719,22 @@
 
       <hr class="search-divider">
 
+      <!-- ISR/書面意見から取り込み (PCT) -->
+      <h3 style="font-size:1rem; margin-bottom:0.8rem;">ISR/書面意見から取り込み (PCT)</h3>
+      <div class="dropzone" id="dropzone-search-report" style="padding:1rem;">
+        <div class="icon">&#128196;</div>
+        <p><strong>ISR / 書面意見 (PCT/ISA/210, 237) PDFをドロップ</strong></p>
+        <p style="font-size:0.8rem; color:var(--text2);">複数ファイル可。Box C を解析して引用一覧を抽出します。</p>
+        <input type="file" accept=".pdf" multiple onchange="uploadSearchReports(this.files)">
+      </div>
+      <div class="loading-msg" id="loading-search-report">
+        <div class="spinner"></div>
+        <span>ISR/書面意見をパース中...</span>
+      </div>
+      <div id="search-reports-list" style="margin-top:1rem;"></div>
+
+      <hr class="search-divider">
+
       <!-- 手動アップロード -->
       <h3 style="font-size:1rem; margin-bottom:0.8rem;">手動アップロード</h3>
       <div style="display:flex; gap:0.8rem; margin-bottom:1rem; flex-wrap:wrap; align-items:center;">
@@ -870,6 +886,14 @@
 
       <!-- 引例テキスト全文表示（テキスト選択→KW追加可能） -->
       <div id="citation-fulltext-area" style="margin-top:1rem;"></div>
+
+      <!-- X/Y/A文献リストコピー（カテゴリ別） -->
+      <div style="margin-top:1rem; padding:0.8rem; background:var(--surface2); border-radius:8px;">
+        <label style="font-size:0.85rem; font-weight:600; display:block; margin-bottom:0.4rem;">
+          文献リスト（Google Patents用ID、半角カンマ区切り）
+        </label>
+        <div id="cat-id-groups" style="display:flex; flex-direction:column; gap:0.5rem;"></div>
+      </div>
 
       <div class="btn-row">
         <button class="btn btn-success" onclick="exportExcel()">Excel出力</button>
@@ -1082,22 +1106,53 @@ document.addEventListener('drop', function(e) {
     return;
   }
 
-  // 本願がまだない or Step1にいる → 本願としてアップロード
   const hasHongan = {{ 'true' if hongan else 'false' }};
-  if (!hasHongan || currentPanel === 0) {
+
+  // ファイル名にISR/IPERのヒントがあれば ISR/書面意見ルートへ
+  const looksLikeSearchReport = pdfFiles.every(f => {
+    const name = f.name.toLowerCase();
+    return /(^|[^a-z])(isr|iper)([^a-z]|$)|isa[\- _]?210|isa[\- _]?237|ipea[\- _]?409|国際調査報告|書面意見|国際予備審査/i.test(name);
+  });
+  if (hasHongan && looksLikeSearchReport) {
+    showPanel(3);
+    uploadSearchReports(pdfFiles);
+    return;
+  }
+
+  // 本願未登録 → 本願扱い（初回投入のみ）
+  if (!hasHongan) {
     showPanel(0);
     uploadHongan(pdfFiles[0]);
-  } else {
-    // それ以外 → 引用文献としてアップロード
-    showPanel(3);
-    uploadCitations(pdfFiles);
+    return;
   }
+
+  // 本願登録済み → 既定は引用文献扱い。本願差し替えは Step 1 のdropzoneを使ってもらう
+  showPanel(3);
+  uploadCitations(pdfFiles);
 }, false);
 
-// 個別ドロップゾーン内のイベント（視覚フィードバック用）
+// 個別ドロップゾーン: 自前のdropハンドラでdocument側より先に処理
+// idごとに対応するアップロード先を決める（誤振り分け防止）
+const DZ_HANDLERS = {
+  'dropzone-hongan':        (pdfs) => { showPanel(0); uploadHongan(pdfs[0]); },
+  'dropzone-citation':      (pdfs) => { showPanel(3); uploadCitations(pdfs); },
+  'dropzone-search-report': (pdfs) => { showPanel(3); uploadSearchReports(pdfs); },
+};
 document.querySelectorAll('.dropzone').forEach(dz => {
-  dz.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
+  dz.addEventListener('dragover',  e => { e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); });
   dz.addEventListener('dragleave', e => { e.stopPropagation(); dz.classList.remove('dragover'); });
+  dz.addEventListener('drop', e => {
+    const handler = DZ_HANDLERS[dz.id];
+    if (!handler) return;  // 未登録はdocument側にフォールバック
+    e.preventDefault();
+    e.stopPropagation();
+    dz.classList.remove('dragover');
+    dragCounter = 0;
+    overlay.classList.remove('show');
+    const pdfs = Array.from(e.dataTransfer.files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+    if (pdfs.length === 0) { alert('PDFファイルをドロップしてください。'); return; }
+    handler(pdfs);
+  });
 });
 
 // ===== 本願PDFをPDF-XChange Editorで開く =====
@@ -1209,6 +1264,326 @@ async function clearAllCitations() {
     alert('エラー: ' + e.message);
   }
 }
+
+// ===== ISR/書面意見 (PCT) 取り込み =====
+
+function _catBadge(cat) {
+  cat = (cat || '').toUpperCase();
+  if (cat === 'X') return '<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>';
+  if (cat === 'Y') return '<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>';
+  if (cat === 'A') return '<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>';
+  if (cat) return `<span class="badge" style="background:var(--surface2); color:var(--text2);">${cat}</span>`;
+  return '';
+}
+
+function _fetchStatusBadge(status) {
+  if (status === 'ok') return '<span class="badge badge-green">取得済</span>';
+  if (status === 'failed') return '<span class="badge" style="background:#7f1d1d; color:#fca5a5;">取得失敗</span>';
+  if (status === 'no_id') return '<span class="badge" style="background:var(--surface2); color:var(--text2);">番号未抽出</span>';
+  if (status === 'extract_failed') return '<span class="badge" style="background:#7f1d1d; color:#fca5a5;">抽出失敗</span>';
+  return '';
+}
+
+function _escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, ch => ({
+    '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+  }[ch]));
+}
+
+function renderSearchReport(report) {
+  const fname = report.filename;
+  const safeFname = _escapeHtml(fname);
+  const formLabel = ({
+    ISR: 'ISR (PCT/ISA/210)',
+    WOSA: '書面意見 (PCT/ISA/237)',
+    IPER: 'IPER (PCT/IPEA/409)'
+  })[report.form] || (report.form || '不明');
+
+  const cits = report.citations || [];
+  const rows = cits.map(c => {
+    const id = c.fetched_doc_id || c.doc_id || '';
+    const labelHtml = _escapeHtml(c.doc_label || '');
+    const passages = _escapeHtml(c.passages || '');
+    const fetchBadge = _fetchStatusBadge(c.fetch_status);
+    const gpUrl = c.google_patents_url
+      ? ` <a href="${_escapeHtml(c.google_patents_url)}" target="_blank" style="color:#60a5fa; font-size:0.75rem;">Google Patents</a>`
+      : '';
+    const checkbox = id
+      ? `<input type="checkbox" class="sr-cit-check" data-num="${c.num}" ${c.fetch_status==='ok'?'disabled':''}>`
+      : `<span style="color:var(--text2);">—</span>`;
+    return `<tr>
+      <td>${checkbox}</td>
+      <td>${c.num}</td>
+      <td>${_catBadge(c.category)}</td>
+      <td>${labelHtml}<br><span style="font-size:0.75rem; color:var(--text2);">${_escapeHtml(id)}</span></td>
+      <td>${_escapeHtml(c.claims || '')}</td>
+      <td style="font-size:0.8rem;">${passages}</td>
+      <td>${fetchBadge}${gpUrl}</td>
+    </tr>`;
+  }).join('');
+
+  const summaryHtml = report.box_v_summary
+    ? `<div style="background:var(--surface2); padding:0.8rem; border-radius:6px; margin-top:0.5rem; white-space:pre-wrap; font-size:0.85rem;">${_escapeHtml(report.box_v_summary)}</div>`
+    : '';
+
+  const hasBoxV = report.box_v && report.box_v.trim().length > 0;
+  const hasCits = cits.length > 0;
+
+  return `<div class="cit-card sr-card" data-filename="${safeFname}" style="display:block; padding:0.8rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+      <div>
+        <h4 style="margin:0;">${safeFname}</h4>
+        <p style="margin:0.2rem 0 0; font-size:0.8rem; color:var(--text2);">
+          ${formLabel} / ${_escapeHtml(report.intl_app_no || '番号不明')} / 引例 ${cits.length}件
+        </p>
+      </div>
+      <div style="display:flex; gap:4px; flex-wrap:wrap;">
+        <a href="/case/${CASE_ID}/search-report/${encodeURIComponent(fname)}/pdf" target="_blank"
+           class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;">PDF表示</a>
+        ${hasBoxV ? `<button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+                onclick="summarizeBoxV('${safeFname}', this)">Box V要約</button>` : ''}
+        <button class="btn btn-danger" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+                onclick="deleteSearchReport('${safeFname}')">削除</button>
+      </div>
+    </div>
+    ${hasCits ? `
+      <div style="margin-top:0.6rem;">
+        <div style="font-size:0.8rem; margin-bottom:0.3rem;">
+          <a href="#" onclick="toggleSrCheckboxes('${safeFname}', true); return false;">全選択</a> /
+          <a href="#" onclick="toggleSrCheckboxes('${safeFname}', false); return false;">全解除</a>
+        </div>
+        <table style="width:100%; font-size:0.85rem; border-collapse:collapse;">
+          <thead><tr style="border-bottom:1px solid var(--border);">
+            <th></th><th>#</th><th>Cat</th><th>文献</th><th>クレーム</th><th>引用箇所</th><th>状態</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="btn-row">
+          <button class="btn btn-success" style="padding:0.3rem 0.8rem; font-size:0.85rem;"
+                  onclick="fetchCitedDocs('${safeFname}', this)">選択した文献をDL & 引用文献に追加</button>
+          <span class="loading-msg sr-fetch-loading" style="display:none;">
+            <span class="spinner"></span><span>取得中...</span>
+          </span>
+        </div>
+        <div class="sr-fetch-result" style="margin-top:0.4rem;"></div>
+      </div>
+    ` : '<p style="color:var(--text2); font-size:0.85rem;">引用文献を抽出できませんでした。</p>'}
+    ${summaryHtml}
+  </div>`;
+}
+
+function toggleSrCheckboxes(filename, on) {
+  const card = document.querySelector(`.sr-card[data-filename="${CSS.escape(filename)}"]`);
+  if (!card) return;
+  card.querySelectorAll('.sr-cit-check').forEach(cb => {
+    if (!cb.disabled) cb.checked = on;
+  });
+}
+
+async function loadSearchReports() {
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search-report/list`);
+    const data = await resp.json();
+    const list = document.getElementById('search-reports-list');
+    if (!data.reports || data.reports.length === 0) {
+      list.innerHTML = '';
+      return;
+    }
+    list.innerHTML = data.reports.map(renderSearchReport).join('');
+  } catch(e) {
+    console.error('loadSearchReports', e);
+  }
+}
+
+async function uploadSearchReports(files) {
+  const loading = document.getElementById('loading-search-report');
+  loading.classList.add('show');
+  let errors = [];
+  for (const file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const resp = await fetch(`/case/${CASE_ID}/search-report/upload`, {
+        method: 'POST', body: fd,
+      });
+      const data = await resp.json();
+      if (!data.success) errors.push(`${file.name}: ${data.error || 'unknown'}`);
+    } catch(e) {
+      errors.push(`${file.name}: ${e.message}`);
+    }
+  }
+  loading.classList.remove('show');
+  if (errors.length) alert('一部失敗:\n' + errors.join('\n'));
+  await loadSearchReports();
+}
+
+async function deleteSearchReport(filename) {
+  if (!confirm(`"${filename}" を削除しますか？`)) return;
+  try {
+    const resp = await fetch(
+      `/case/${CASE_ID}/search-report/${encodeURIComponent(filename)}`,
+      { method: 'DELETE' }
+    );
+    const data = await resp.json();
+    if (data.success) await loadSearchReports();
+    else alert('削除失敗: ' + (data.error || ''));
+  } catch(e) { alert('エラー: ' + e.message); }
+}
+
+async function summarizeBoxV(filename, btn) {
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '要約中...';
+  try {
+    const resp = await fetch(
+      `/case/${CASE_ID}/search-report/${encodeURIComponent(filename)}/summarize`,
+      { method: 'POST' }
+    );
+    const data = await resp.json();
+    if (data.success) await loadSearchReports();
+    else alert('要約失敗: ' + (data.error || ''));
+  } catch(e) { alert('エラー: ' + e.message); }
+  finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+async function fetchCitedDocs(filename, btn) {
+  const card = btn.closest('.sr-card');
+  const checked = Array.from(card.querySelectorAll('.sr-cit-check:checked'));
+  if (checked.length === 0) {
+    alert('取得する文献を選択してください');
+    return;
+  }
+  const nums = checked.map(cb => parseInt(cb.dataset.num, 10));
+  const loading = card.querySelector('.sr-fetch-loading');
+  const resultBox = card.querySelector('.sr-fetch-result');
+  btn.disabled = true;
+  loading.style.display = 'inline-flex';
+  resultBox.innerHTML = '';
+  try {
+    const resp = await fetch(
+      `/case/${CASE_ID}/search-report/${encodeURIComponent(filename)}/fetch`,
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ nums }),
+      }
+    );
+    const data = await resp.json();
+    if (data.success) {
+      const ok = data.results.filter(r => r.success).length;
+      const ng = data.results.length - ok;
+      resultBox.innerHTML =
+        `<div style="font-size:0.85rem;">取得結果: 成功 ${ok} / 失敗 ${ng}</div>` +
+        data.results.map(r => r.success
+          ? `<div style="font-size:0.8rem; color:#4ade80;">&#10003; ${_escapeHtml(r.label)} (${_escapeHtml(r.role||'')})</div>`
+          : `<div style="font-size:0.8rem; color:#fca5a5;">&#10007; ${_escapeHtml(r.label)} — ${_escapeHtml(r.error||'')}
+              ${r.google_patents_url ? `<a href="${_escapeHtml(r.google_patents_url)}" target="_blank" style="color:#60a5fa;">[GP]</a>` : ''}</div>`
+        ).join('');
+      await loadSearchReports();
+      // 引用文献カードを更新するため少し待ってから case 全体をリロード
+      if (ok > 0) setTimeout(() => location.reload(), 1500);
+    } else {
+      alert('取得失敗: ' + (data.error || ''));
+    }
+  } catch(e) { alert('エラー: ' + e.message); }
+  finally {
+    btn.disabled = false;
+    loading.style.display = 'none';
+  }
+}
+
+// 起動時に読み込み
+document.addEventListener('DOMContentLoaded', loadSearchReports);
+
+// ===== 文献リストをカテゴリ別（X/Y/A）にGoogle Patents形式でコピー =====
+
+// citation.id（日本語表記含む）を Google Patents 用の英字IDに変換
+function _toGooglePatentsId(id) {
+  if (!id) return '';
+  let m = id.match(/^特(?:開|表)\s*(\d{4})[\-－ー]?(\d+)/);
+  if (m) return `JP${m[1]}${m[2].padStart(6,'0')}A`;
+  m = id.match(/^再(?:公)?表\s*(\d{4})[\-－ー]?(\d+)/);
+  if (m) return `JP${m[1]}${m[2].padStart(6,'0')}A`;
+  m = id.match(/^特許(?:第)?\s*(\d+)/);
+  if (m) return `JP${m[1]}B`;
+  return id.replace(/[\s\-\/]/g, '');
+}
+
+// 引用カード1枚のカテゴリを判定: X/Y/A/空文字
+// バッジ（対比結果）優先、無ければ役割にフォールバック
+function _getCitationCategory(card) {
+  const badges = Array.from(card.querySelectorAll('.badge'))
+    .map(b => (b.textContent || '').trim());
+  if (badges.includes('X')) return 'X';
+  if (badges.includes('Y')) return 'Y';
+  if (badges.includes('A')) return 'A';
+  const roleText = (card.querySelector('.cit-info p')?.textContent || '');
+  if (roleText.includes('主引例')) return 'X';
+  if (roleText.includes('副引例')) return 'Y';
+  if (roleText.includes('参考'))   return 'A';
+  return '';
+}
+
+function _collectCategoryGroups() {
+  const groups = { X: [], Y: [], A: [] };
+  document.querySelectorAll('.cit-card[id^="cit-card-"]').forEach(card => {
+    const cat = _getCitationCategory(card);
+    if (!groups[cat]) return;
+    const citId = card.id.replace('cit-card-', '');
+    const gp = _toGooglePatentsId(citId);
+    if (gp) groups[cat].push(gp);
+  });
+  for (const k of Object.keys(groups)) {
+    groups[k] = Array.from(new Set(groups[k]));
+  }
+  return groups;
+}
+
+function _refreshCategoryGroups() {
+  const container = document.getElementById('cat-id-groups');
+  if (!container) return;
+  const groups = _collectCategoryGroups();
+  const catStyle = {
+    X: 'background:#7f1d1d; color:#fca5a5;',
+    Y: 'background:#422006; color:#fbbf24;',
+    A: 'background:var(--surface2); color:var(--text2);',
+  };
+  container.innerHTML = ['X','Y','A'].map(cat => {
+    const ids = groups[cat];
+    const idText = ids.length ? ids.join(',') : '(該当なし)';
+    return `<div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+      <span class="badge" style="${catStyle[cat]} min-width:1.5em; text-align:center; padding:0.1rem 0.5rem;">${cat}</span>
+      <code style="flex:1 1 300px; font-family: ui-monospace, 'Consolas', monospace; font-size:0.85rem; color:var(--text2); word-break:break-all;">${idText}</code>
+      <button class="btn btn-outline"
+              style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+              onclick="copyCategoryIds('${cat}', this)"
+              ${ids.length === 0 ? 'disabled' : ''}>
+        ${cat}のみコピー (${ids.length})
+      </button>
+    </div>`;
+  }).join('');
+}
+
+async function copyCategoryIds(cat, btn) {
+  const ids = _collectCategoryGroups()[cat] || [];
+  if (ids.length === 0) {
+    alert(`${cat} 文献が見つかりません`);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(ids.join(','));
+    const orig = btn.textContent;
+    btn.textContent = `コピー済 (${ids.length})`;
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+  } catch (e) {
+    alert('クリップボードコピー失敗: ' + e);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', _refreshCategoryGroups);
 
 // ===== 先行技術検索 =====
 let searchCandidates = [];

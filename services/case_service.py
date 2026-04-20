@@ -203,8 +203,18 @@ def upload_hongan(case_id, save_path):
     except Exception as e:
         return {"error": f"PDF抽出失敗: {e}"}, 400
 
+    # 請求項・段落がどちらも0件 → 公報ではない（経過情報PDF・ISR等の誤取込）と判定し拒否
     if not result.get("claims") and not result.get("paragraphs"):
-        result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
+        try:
+            Path(save_path).unlink()
+        except OSError:
+            pass
+        return {
+            "error": ("請求項・段落をどちらも抽出できなかったため、本願として拒否しました。"
+                      "（経過情報PDFやISR/IPERを誤ってドロップしていませんか？ "
+                      "ISR/IPERは Step 4 内『ISR/書面意見から取り込み』に投入してください）"),
+            "filename": Path(save_path).name,
+        }, 400
 
     result["source_pdf"] = Path(save_path).name
 
