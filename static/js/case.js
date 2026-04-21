@@ -1045,9 +1045,13 @@ function renderGroups() {
       <div style="text-align:center; padding:2rem; color:var(--text2);">
         キーワードグループがありません。「AI自動提案」または「+ グループ追加」で作成してください。
       </div>`;
-    return;
+  } else {
+    container.innerHTML = kwGroups.map(g => renderGroup(g)).join('');
   }
-  container.innerHTML = kwGroups.map(g => renderGroup(g)).join('');
+  // Fターム候補カタログ側も追加先グループの状態に合わせて同期（存在する場合のみ）
+  if (typeof renderFtermCatalog === 'function') {
+    try { renderFtermCatalog(); } catch(_) { /* no-op */ }
+  }
 }
 
 function renderGroup(g) {
@@ -1660,6 +1664,186 @@ async function deleteFterm(gid, code) {
 }
 
 // ================================================================
+// Fターム候補カタログ (Step 3)
+// ================================================================
+const FTERM_SOURCE_KEYS = {
+  '本願分類': 'classification',
+  '既存グループ': 'group',
+  '辞書': 'dict',
+};
+const FTERM_SOURCE_ORDER = ['本願分類', '既存グループ', '辞書'];
+const FTERM_DICT_SECTION_LIMIT = 60;
+
+let _ftermCatalogCollapsed = false;
+
+function toggleFtermCatalog() {
+  _ftermCatalogCollapsed = !_ftermCatalogCollapsed;
+  const body = document.getElementById('fterm-catalog-body');
+  const ind = document.getElementById('fterm-collapse-ind');
+  if (!body || !ind) return;
+  body.classList.toggle('collapsed', _ftermCatalogCollapsed);
+  ind.classList.toggle('open', !_ftermCatalogCollapsed);
+}
+
+async function refreshFtermCatalog(ev) {
+  if (ev) ev.stopPropagation();
+  _ftermCandidates = null;
+  await renderFtermCatalog();
+  showKwToast('Fターム候補を再読み込みしました');
+}
+
+function _ftermGroupsByCode() {
+  const map = new Map();
+  (kwGroups || []).forEach(g => {
+    const fts = (g.search_codes && g.search_codes.fterm) ? g.search_codes.fterm : [];
+    fts.forEach(ft => {
+      if (!ft.code) return;
+      if (!map.has(ft.code)) map.set(ft.code, new Set());
+      map.get(ft.code).add(g.group_id);
+    });
+  });
+  return map;
+}
+
+function _renderFtermCatalogItem(c, usedGroupsByCode) {
+  const usedSet = usedGroupsByCode.get(c.code) || new Set();
+  const chips = (kwGroups || []).map(g => {
+    const color = groupColor(g.group_id);
+    const used = usedSet.has(g.group_id);
+    const title = used
+      ? `グループ${g.group_id} (${g.label}) に追加済み`
+      : `グループ${g.group_id} (${g.label}) に追加`;
+    const handler = used
+      ? ''
+      : `onclick="addFtermFromCatalog('${escAttr(c.code)}', ${JSON.stringify(c.label || '').replace(/"/g, '&quot;')}, ${g.group_id})"`;
+    return `<span class="fterm-add-chip ${used ? 'already' : ''}"
+      style="background:${color};" ${handler} title="${escAttr(title)}">${g.group_id}</span>`;
+  }).join('');
+
+  const examples = (c.examples || []).join(', ');
+  const typeTag = c.type
+    ? `<span class="type-tag type-${escAttr(String(c.type).toLowerCase())}">${escHtml(c.type)}</span>`
+    : '';
+  const note = c.note
+    ? `<span class="note" title="${escAttr(c.note)}">${escHtml(c.note.length > 120 ? c.note.substring(0, 117) + '…' : c.note)}</span>`
+    : '';
+  const examplesHtml = examples
+    ? `<span class="examples">例: ${escHtml(examples)}</span>` : '';
+
+  const haystack = [c.code, c.label || '', c.note || '', examples].join(' ').toLowerCase();
+
+  return `<div class="fterm-cat-item" data-code="${escAttr(c.code)}" data-haystack="${escAttr(haystack)}">
+    <div class="fterm-cat-code">${escHtml(c.code)}${typeTag}</div>
+    <div class="fterm-cat-desc">
+      <span class="label">${escHtml(c.label || '(説明なし)')}</span>
+      ${examplesHtml}
+      ${note}
+    </div>
+    <div class="fterm-cat-actions">
+      ${chips || '<span style="font-size:0.7rem; color:var(--text2);">グループ未作成</span>'}
+    </div>
+  </div>`;
+}
+
+async function renderFtermCatalog() {
+  const panel = document.getElementById('fterm-catalog');
+  const body = document.getElementById('fterm-catalog-body');
+  const countEl = document.getElementById('fterm-catalog-count');
+  const hintEl = document.getElementById('fterm-catalog-hint');
+  if (!panel || !body) return;
+
+  const candidates = await _loadFtermCandidates();
+  if (!candidates || candidates.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+
+  const bySource = {};
+  candidates.forEach(c => {
+    const src = c.source || '辞書';
+    if (!bySource[src]) bySource[src] = [];
+    bySource[src].push(c);
+  });
+
+  if (countEl) countEl.textContent = `（全${candidates.length}件）`;
+
+  if (hintEl) {
+    const srcSummary = FTERM_SOURCE_ORDER
+      .filter(s => bySource[s] && bySource[s].length)
+      .map(s => `${s} ${bySource[s].length}件`).join(' / ');
+    hintEl.textContent = srcSummary;
+  }
+
+  const usedByCode = _ftermGroupsByCode();
+
+  let html = '';
+  for (const src of FTERM_SOURCE_ORDER) {
+    const list = bySource[src];
+    if (!list || !list.length) continue;
+    const srcKey = FTERM_SOURCE_KEYS[src] || 'dict';
+    const limit = src === '辞書' ? FTERM_DICT_SECTION_LIMIT : list.length;
+    const shown = list.slice(0, limit);
+
+    html += `<div class="fterm-cat-section">
+      <div class="fterm-cat-section-head">
+        <span class="src-badge src-${srcKey}">${escHtml(src)}</span>
+        <span>${list.length}件${list.length > limit ? `（${limit}件を表示・検索で絞り込み）` : ''}</span>
+      </div>`;
+    html += shown.map(c => _renderFtermCatalogItem(c, usedByCode)).join('');
+    html += `</div>`;
+  }
+
+  body.innerHTML = html || '<div class="fterm-cat-empty">Fターム候補がありません</div>';
+
+  const ind = document.getElementById('fterm-collapse-ind');
+  if (ind) ind.classList.toggle('open', !_ftermCatalogCollapsed);
+  body.classList.toggle('collapsed', _ftermCatalogCollapsed);
+
+  const searchInput = document.getElementById('fterm-catalog-search');
+  if (searchInput && searchInput.value) filterFtermCatalog();
+}
+
+function filterFtermCatalog() {
+  const input = document.getElementById('fterm-catalog-search');
+  const body = document.getElementById('fterm-catalog-body');
+  if (!input || !body) return;
+  const q = input.value.trim().toLowerCase();
+  const items = body.querySelectorAll('.fterm-cat-item');
+  let matched = 0;
+  items.forEach(el => {
+    const hs = el.dataset.haystack || '';
+    const hit = !q || hs.includes(q);
+    el.classList.toggle('hidden', !hit);
+    if (hit) matched++;
+  });
+  body.querySelectorAll('.fterm-cat-section').forEach(sec => {
+    const visible = sec.querySelectorAll('.fterm-cat-item:not(.hidden)').length;
+    sec.style.display = visible > 0 ? '' : 'none';
+  });
+}
+
+async function addFtermFromCatalog(code, label, gid) {
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fterm/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code, desc: label || '' })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '追加失敗');
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      if (!g.search_codes) g.search_codes = {};
+      if (!g.search_codes.fterm) g.search_codes.fterm = [];
+      g.search_codes.fterm.push({ code: data.code, desc: data.desc || '' });
+    }
+    renderGroups();
+    showKwToast(`Fterm「${data.code}」をグループ${gid}に追加しました`);
+  } catch(e) { alert(e.message); }
+}
+
+// ================================================================
 // コピー機能
 // ================================================================
 let _copySrcGid = null;
@@ -1738,7 +1922,7 @@ function showKwToast(msg) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  renderGroups();
+  renderGroups();  // renderGroups() 内で renderFtermCatalog() も呼ばれる
 
   // イベントデリゲーション: キーワードタグの編集・削除
   const kwContainer = document.getElementById('kw-groups-container');

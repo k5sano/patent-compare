@@ -1,4 +1,4 @@
-"""case_service の新規サービス (create_minimal_case / compute_segments) のテスト"""
+"""case_service / keyword_service のサービス層テスト"""
 
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from services import case_service
+from services.keyword_service import _fterm_short_code
 
 
 @pytest.fixture
@@ -92,3 +93,28 @@ class TestComputeSegments:
         result, code = case_service.compute_segments("2030-test05")
         assert code == 400
         assert "請求項" in result["error"]
+
+
+class TestFtermShortCode:
+    """Fターム フルコード → サフィックス短縮コードへの抽出"""
+
+    def test_cosmetics_full_code(self):
+        assert _fterm_short_code("4C083AB13") == "AB13"
+
+    def test_plastic_full_code(self):
+        assert _fterm_short_code("4F100AK01B") == "4F100AK01B"  # 末尾Bあり=未マッチ
+
+    def test_three_digit_suffix(self):
+        assert _fterm_short_code("4C083AB100") == "AB100"
+
+    def test_already_short(self):
+        assert _fterm_short_code("AB13") == "AB13"
+
+    def test_empty(self):
+        assert _fterm_short_code("") == ""
+
+    def test_none_safe(self):
+        assert _fterm_short_code(None) == ""
+
+    def test_garbage(self):
+        assert _fterm_short_code("not-a-code") == "not-a-code"

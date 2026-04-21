@@ -157,13 +157,44 @@ def update_keyword_group(case_id, group_id, data):
     return {"success": True}, 200
 
 
+def _fterm_short_code(code: str) -> str:
+    """フル F-term コード（例: 4C083AB13）から末尾のサフィックス（AB13）を取り出す。
+
+    テーマ ID 直後の英字から末尾までを返す。マッチしない場合は元のコードを返す。
+    """
+    import re
+    m = re.match(r"^\d{1,2}[A-Z]\d{3}([A-Z]{2}\d{2,3})$", code or "")
+    return m.group(1) if m else (code or "")
+
+
 def fterm_candidates(case_id):
-    """本願のFterm候補一覧を返す"""
+    """本願のFterm候補一覧を返す。
+
+    各候補は以下を含む:
+        code     : Ftermコード
+        label    : 日本語説明
+        source   : "本願分類" | "既存グループ" | "辞書"
+        type     : 本願分類のみ (core/related/main/sub 等)
+        note     : 本願分類のみ (補足コメント)
+        examples : 辞書にある場合の例示語 (最大3件)
+    """
     from modules.fterm_dict import get_nodes
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
     field = meta.get("field", "cosmetics") if meta else "cosmetics"
+
+    try:
+        dict_nodes = get_nodes(field)
+    except Exception:
+        dict_nodes = {}
+
+    def dict_examples(code: str) -> list:
+        """フルコード or 短縮コードから辞書の examples を最大3件取得"""
+        node = dict_nodes.get(code) or dict_nodes.get(_fterm_short_code(code))
+        if not node:
+            return []
+        return (node.get("examples") or [])[:3]
 
     candidates = []
     seen = set()
@@ -182,6 +213,7 @@ def fterm_candidates(case_id):
                     "source": "本願分類",
                     "type": ft.get("type", ""),
                     "note": ft.get("note", ""),
+                    "examples": dict_examples(code),
                 })
 
     kw_path = case_dir / "keywords.json"
@@ -197,21 +229,18 @@ def fterm_candidates(case_id):
                         "code": code,
                         "label": ft.get("desc", ""),
                         "source": "既存グループ",
+                        "examples": dict_examples(code),
                     })
 
-    try:
-        nodes = get_nodes(field)
-        for code, node in nodes.items():
-            if node.get("depth", 0) >= 2 and code not in seen:
-                seen.add(code)
-                candidates.append({
-                    "code": code,
-                    "label": node.get("label", ""),
-                    "source": "辞書",
-                    "examples": (node.get("examples") or [])[:3],
-                })
-    except Exception:
-        pass
+    for code, node in dict_nodes.items():
+        if node.get("depth", 0) >= 2 and code not in seen:
+            seen.add(code)
+            candidates.append({
+                "code": code,
+                "label": node.get("label", ""),
+                "source": "辞書",
+                "examples": (node.get("examples") or [])[:3],
+            })
 
     return candidates, 200
 

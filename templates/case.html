@@ -188,6 +188,25 @@
         </div>
       </div>
 
+      <!-- Fターム候補一覧（JS で描画） -->
+      <div class="fterm-catalog" id="fterm-catalog" style="display:none;">
+        <div class="fterm-catalog-header">
+          <div class="fterm-catalog-title" onclick="toggleFtermCatalog()">
+            <span class="fterm-collapse-ind" id="fterm-collapse-ind">&#9654;</span>
+            <h3>Fターム候補<span class="fterm-count" id="fterm-catalog-count"></span></h3>
+            <span class="fterm-catalog-hint" id="fterm-catalog-hint"></span>
+          </div>
+          <div class="fterm-catalog-controls">
+            <input type="text" id="fterm-catalog-search" class="fterm-catalog-search"
+                   placeholder="コード/説明/例示で絞り込み..."
+                   oninput="filterFtermCatalog()"
+                   onclick="event.stopPropagation();">
+            <button class="btn-tiny" onclick="refreshFtermCatalog(event)" title="再読み込み">&#x21bb;</button>
+          </div>
+        </div>
+        <div class="fterm-catalog-body" id="fterm-catalog-body"></div>
+      </div>
+
       <!-- グループ一覧（JS で描画） -->
       <div id="kw-groups-container"></div>
 
