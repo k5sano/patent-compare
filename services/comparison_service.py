@@ -256,7 +256,11 @@ def export_excel(case_id):
         citations_meta=citations_meta,
     )
 
-    return {"success": True, "filename": output_path.name}, 200
+    return {
+        "success": True,
+        "filename": output_path.name,
+        "path": str(output_path),
+    }, 200
 
 
 def annotate_citation(case_id, citation_id):

@@ -101,6 +101,62 @@ def list_all_cases():
     return cases
 
 
+def create_minimal_case(case_id, title="", field="cosmetics"):
+    """CLI 用: PDF自動DLを伴わない最小限の案件ディレクトリを作成する。
+
+    Returns:
+        (dict, status_code)
+    """
+    case_dir = get_case_dir(case_id)
+    if case_dir.exists():
+        return {"error": f"案件 '{case_id}' は既に存在します"}, 409
+
+    for sub in ["input", "citations", "prompts", "responses", "output"]:
+        (case_dir / sub).mkdir(parents=True, exist_ok=True)
+
+    meta = {
+        "case_id": case_id,
+        "title": title,
+        "field": field,
+        "citations": [],
+    }
+    save_case_meta(case_id, meta)
+    return {"success": True, "case_id": case_id, "path": str(case_dir)}, 200
+
+
+def compute_segments(case_id):
+    """hongan.json から請求項を分節し segments.json を保存する。
+
+    Returns:
+        (dict, status_code): dict.segments は分節結果のリスト
+    """
+    from modules.claim_segmenter import segment_claims
+
+    case_dir = get_case_dir(case_id)
+    hongan_path = case_dir / "hongan.json"
+    if not hongan_path.exists():
+        return {"error": "本願テキストがありません"}, 400
+
+    with open(hongan_path, "r", encoding="utf-8") as f:
+        hongan = json.load(f)
+
+    if not hongan.get("claims"):
+        return {"error": "請求項が抽出されていません"}, 400
+
+    segs = segment_claims(hongan["claims"])
+    segments_path = case_dir / "segments.json"
+    with open(segments_path, "w", encoding="utf-8") as f:
+        json.dump(segs, f, ensure_ascii=False, indent=2)
+
+    return {
+        "success": True,
+        "segments": segs,
+        "path": str(segments_path),
+        "num_claims": len(segs),
+        "num_segments": sum(len(c.get("segments", [])) for c in segs),
+    }, 200
+
+
 def create_case(case_number, year="", month="", field="cosmetics"):
     """新規案件を作成。PDF自動DL・抽出を含む。
 
