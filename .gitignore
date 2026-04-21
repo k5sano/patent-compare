@@ -4,6 +4,9 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Cases data (contains PDFs and user data)
 cases/
@@ -18,7 +21,14 @@ Thumbs.db
 
 # Environment
 .env
+.secret_key
 
-# Temp files
+# Temp / debug artifacts
 *.tmp
 *.log
+scratch/
+_test_*/
+_debug_*
+_cat_col.*
+_test_page.*
+_jpo_*
