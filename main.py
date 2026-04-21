@@ -159,22 +159,25 @@ def extract(doc_type, pdf_path, role, label, case_id):
         console.print(f"  段落数: {len(result.get('paragraphs', []))}")
     else:
         # 引用文献
-        doc_id = result.get("patent_number", Path(pdf_path).stem)
+        from modules.citation_id import normalize_citation_id
+        raw_doc_id = result.get("patent_number", Path(pdf_path).stem)
+        doc_id = normalize_citation_id(raw_doc_id)
         output_path = case_dir / "citations" / f"{doc_id}.json"
         result["role"] = role
         result["label"] = label or doc_id
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
-        # case.yamlにも追加
+        # case.yamlにも追加（重複チェック）
         case_yaml = case_dir / "case.yaml"
         with open(case_yaml, "r", encoding="utf-8") as f:
             meta = yaml.safe_load(f)
         citations = meta.get("citations", [])
-        citations.append({"id": doc_id, "role": role, "label": label or doc_id})
-        meta["citations"] = citations
-        with open(case_yaml, "w", encoding="utf-8") as f:
-            yaml.dump(meta, f, allow_unicode=True, default_flow_style=False)
+        if not any(normalize_citation_id(c.get("id", "")) == doc_id for c in citations):
+            citations.append({"id": doc_id, "role": role, "label": label or doc_id})
+            meta["citations"] = citations
+            with open(case_yaml, "w", encoding="utf-8") as f:
+                yaml.dump(meta, f, allow_unicode=True, default_flow_style=False)
 
         console.print(f"[bold green]引用文献テキスト抽出完了[/bold green] → {output_path}")
         console.print(f"  文献番号: {doc_id}")

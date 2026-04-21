@@ -246,6 +246,7 @@ def upload_hongan(case_id, save_path):
 def upload_citation(case_id, save_path, role="主引例", label=""):
     """引用文献PDFをテキスト抽出して登録"""
     from modules.pdf_extractor import extract_patent_pdf
+    from modules.citation_id import normalize_citation_id
 
     meta = load_case_meta(case_id)
     if not meta:
@@ -261,9 +262,10 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
     if not result.get("claims") and not result.get("paragraphs"):
         result["_warning"] = "テキスト抽出できませんでした（スキャン画像PDFの可能性）"
 
-    doc_id = result.get("patent_number", Path(save_path).stem)
+    raw_doc_id = result.get("patent_number", Path(save_path).stem)
     for ch in '/\\:*?"<>|':
-        doc_id = doc_id.replace(ch, '')
+        raw_doc_id = raw_doc_id.replace(ch, '')
+    doc_id = normalize_citation_id(raw_doc_id)
     result["role"] = role
     result["label"] = label or doc_id
 
@@ -271,7 +273,7 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
         json.dump(result, f, ensure_ascii=False, indent=2)
 
     citations = meta.get("citations", [])
-    if not any(c["id"] == doc_id for c in citations):
+    if not any(normalize_citation_id(c.get("id", "")) == doc_id for c in citations):
         citations.append({"id": doc_id, "role": role, "label": label or doc_id})
         meta["citations"] = citations
         save_case_meta(case_id, meta)
