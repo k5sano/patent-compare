@@ -16,6 +16,7 @@ from flask import (
     flash, jsonify, send_file, Response
 )
 
+from modules.app_config import load_env, get_app_config
 from services.case_service import (
     get_case_dir, load_case_meta, list_all_cases,
     load_json_file, find_citation_pdf,
@@ -23,8 +24,12 @@ from services.case_service import (
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
+# .env を読み込み (Flask 初期化より前)
+load_env()
+_app_cfg = get_app_config()
+
 app = Flask(__name__, template_folder=str(PROJECT_ROOT / "templates"))
-app.secret_key = "patent-compare-dev-key"
+app.secret_key = _app_cfg.secret_key
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
 app.json.ensure_ascii = False
 
@@ -723,5 +728,8 @@ def auto_run():
 if __name__ == "__main__":
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
     print("PatentCompare Web GUI")
-    print("http://localhost:5000")
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    print(f"http://{_app_cfg.host}:{_app_cfg.port}  (debug={_app_cfg.debug})")
+    if _app_cfg.debug and _app_cfg.host == "0.0.0.0":
+        print("!!! WARNING: debug=True + host=0.0.0.0 はLANからコード実行可能です。")
+        print("!!!          PATENT_COMPARE_HOST=127.0.0.1 もしくは PATENT_COMPARE_DEBUG=0 推奨。")
+    app.run(debug=_app_cfg.debug, host=_app_cfg.host, port=_app_cfg.port)
