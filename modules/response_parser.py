@@ -39,42 +39,47 @@ def _extract_json_from_text(raw_text):
         dict: 単一文献の場合は {"comparisons": ...} 形式
               複数文献の場合は {"results": [...]} 形式
     """
-    def _is_valid(data):
-        if not isinstance(data, dict):
-            return False
-        if "results" in data and isinstance(data["results"], list):
-            return True
-        if "comparisons" in data:
-            return True
-        return False
-
     def _is_single_doc(data):
         return isinstance(data, dict) and "comparisons" in data
 
-    # まず results または comparisons キーを持つオブジェクトを抽出
+    def _is_multi_doc(data):
+        return (isinstance(data, dict)
+                and isinstance(data.get("results"), list))
+
+    def _parse_block(match):
+        """```json``` ブロックの中身をパース（修復も試みる）"""
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            return try_repair_json(match)
+
+    # パターンA: ```json ブロックを全列挙
+    matches = _JSON_BLOCK_RE.findall(raw_text)
+    parsed_blocks = [d for d in (_parse_block(m) for m in matches) if d is not None]
+
+    # パターンA-1: 複数の単一文献ブロック → results配列に統合
+    single_docs = [d for d in parsed_blocks if _is_single_doc(d)]
+    multi_docs = [d for d in parsed_blocks if _is_multi_doc(d)]
+
+    if len(parsed_blocks) >= 2 and len(single_docs) >= 2 and not multi_docs:
+        logger.info("複数JSONブロックを結合: %d文献", len(single_docs))
+        return {"results": single_docs}
+
+    # パターンA-2: results 形式が含まれていればそれを優先
+    if multi_docs:
+        return multi_docs[0]
+
+    # パターンA-3: 単一文献ブロックが1個のみ
+    if len(single_docs) == 1:
+        return single_docs[0]
+
+    # パターンB: フェンス無し — 生テキストから抽出
     result = extract_json_object(raw_text, required_key="results")
-    if result and _is_valid(result):
+    if _is_multi_doc(result):
         return result
     result = extract_json_object(raw_text, required_key="comparisons")
-    if result and _is_valid(result):
+    if _is_single_doc(result):
         return result
-
-    # 複数の```jsonブロック → 各ブロックが単一文献 → results配列に結合
-    matches = _JSON_BLOCK_RE.findall(raw_text)
-    if len(matches) > 1:
-        single_docs = []
-        for match in matches:
-            try:
-                data = json.loads(match)
-                if _is_single_doc(data):
-                    single_docs.append(data)
-            except json.JSONDecodeError:
-                repaired = try_repair_json(match)
-                if repaired and _is_single_doc(repaired):
-                    single_docs.append(repaired)
-        if single_docs:
-            logger.info("複数JSONブロックを結合: %d文献", len(single_docs))
-            return {"results": single_docs}
 
     return None
 
