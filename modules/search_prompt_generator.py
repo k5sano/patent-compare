@@ -998,7 +998,7 @@ def generate_keyword_prompt(segments, hongan, field, tech_analysis, classificati
   "search_formulas": {{
     "narrow": {{
       "description": "高適合：全要素ANDで強く結ぶ",
-      "formula_jplatpat": "J-PlatPat式（500字以内、AND=*, OR=+, NOT=-）",
+      "formula_jplatpat": "J-PlatPat 論理式入力タブ用 (500字以内) ※下記 _note_jplatpat_syntax の構文に厳密に従うこと",
       "formula_google_patents": "Google Patents英語式"
     }},
     "medium": {{
@@ -1011,6 +1011,39 @@ def generate_keyword_prompt(segments, hongan, field, tech_analysis, classificati
       "formula_jplatpat": "...",
       "formula_google_patents": "..."
     }}
+  }},
+  "_note_jplatpat_syntax": {{
+    "operators": {{
+      "AND": "* (半角アスタリスク) 優先度2",
+      "OR": "+ (半角プラス) 優先度3",
+      "NOT": "- (半角ハイフン) 優先度3  ※'/' ではないので注意",
+      "group": "[ ] (大括弧) 優先度変更・三重まで",
+      "share_tag": "( ) (丸括弧) 同種キーワード群の構造タグ省略"
+    }},
+    "structural_tags_required": "キーワード末尾に必ず /XX タグを付ける。共有したい場合は (a+b+c)/TX のように丸括弧でまとめる。",
+    "tags": {{
+      "/TX": "全文", "/TI": "発明の名称", "/AB": "要約", "/CL": "請求の範囲",
+      "/AB+CL": "要約+請求の範囲 (実務推奨)",
+      "/SP": "明細書", "/AL": "審査官フリーワード+全文",
+      "/FI": "FI分類", "/FT": "Fターム", "/FC": "ファセット",
+      "/IP": "IPC", "/CP": "CPC",
+      "/AP": "出願人/権利者", "/IN": "発明者"
+    }},
+    "examples": [
+      "(ポリエチレン+PE+ポリプロピレン)/AB+CL*(積層+ラミネート+多層)/AB+CL",
+      "[(ポリエチレン+PE)/AB+CL*(包装+袋)/TX]*B32B27/00/FI",
+      "[クラウド/AB+システム/AB]*[製造方法/CL+装飾部品/CL]",
+      "(バリア性+ガスバリア)/CL*4F100AK01/FT",
+      "(ポリエチレン+PE)/TX-(金属+メタリック)/TX",
+      "B22F1/00@A/FI+C22F1/00,601/FI"
+    ],
+    "pitfalls": [
+      "NOT は '-' (ハイフン) であり '/' ではない",
+      "キーワード群 (a+b) の後にタグ無しは無効",
+      "FI の展開記号前はカンマ (,)、分冊識別記号前は @",
+      "1キーワード 半角40文字/全角20文字以内",
+      "キーワード内の *+ - などは全角で入力 (例: ｙ＋ｚ)"
+    ]
   }},
   "quality_check": {{
     "pub_terms_covered": true,

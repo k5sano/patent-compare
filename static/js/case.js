@@ -3119,6 +3119,9 @@ showPanel = function(idx) {
 let _srCurrentRun = null;        // 現在表示中の run データ
 let _srFormulas = {};            // Stage 3 由来の検索式
 let _srRuns = [];                // 検索ラン一覧
+let _srParentRunId = null;       // 「複製して編集」で参照している親ラン ID
+let _srKwSnippets = null;        // キーワード辞書スニペット
+let _srValidateTimer = null;     // 式バリデーションのデバウンス用
 
 const SR_SCREEN_LABELS = {
   star: '★', triangle: '△', reject: '×', hold: '…', pending: '—',
@@ -3153,23 +3156,274 @@ function renderSrFormulaCandidates() {
     el.innerHTML = '<em>Stage 3 のキーワード辞書が未生成です。下の textarea に手動で検索式を書いてください。</em>';
     return;
   }
-  const chips = keys.map(k => {
+  let needsFix = false;
+  const cards = keys.map(k => {
     const f = _srFormulas[k] || {};
-    const jp = (f.formula_jplatpat || '').trim();
+    const raw = (f.formula_jplatpat || '').trim();
+    const fixed = srAutoFixFormulaText(raw);
+    if (fixed !== raw) needsFix = true;
     const desc = f.description || '';
-    const short = jp.length > 40 ? jp.slice(0, 40) + '…' : jp;
-    const safe = String(jp).replace(/"/g, '&quot;');
-    return `<button class="sr-chip" data-level="${k}" data-formula="${safe}" title="${desc}"
-             onclick="srSelectFormula('${k}')">${k}: ${short}</button>`;
-  }).join(' ');
-  el.innerHTML = chips;
+    const safeDesc = desc.replace(/</g, '&lt;');
+    const mark = fixed !== raw
+      ? `<span class="sr-cand-fixed" title="自動修正済み (NOT=-, /TX 付与など)">🔧 AUTO-FIX 済</span>`
+      : '';
+    return `<div class="sr-cand-card" data-level="${k}">
+      <div class="sr-cand-head">
+        <strong class="sr-cand-level">${k}</strong>
+        <span class="sr-cand-desc">${safeDesc}</span>
+        ${mark}
+        <button class="sr-tool-btn" style="margin-left:auto;"
+          onclick="srLoadCandidateToEditor('${k}')"
+          title="この式を下のエディタに読み込む">⬇ エディタへ</button>
+        <button class="sr-tool-btn" onclick="srCopyCandidate('${k}')" title="クリップボードにコピー">📋</button>
+      </div>
+      <textarea class="sr-cand-edit" id="sr-cand-ta-${k}" rows="1"
+        oninput="srOnCandidateEdit('${k}')"
+        spellcheck="false" wrap="soft">${fixed.replace(/</g, '&lt;')}</textarea>
+      <div class="sr-cand-meta">
+        <span id="sr-cand-valid-${k}" class="sr-formula-valid"></span>
+      </div>
+    </div>`;
+  }).join('');
+  const hint = needsFix
+    ? `<div class="sr-preset-hint">🔧 マーク: 古い構文を自動修正したものを表示しています。恒久的には Stage 3 を再生成してください。</div>`
+    : '';
+  el.innerHTML = cards + hint;
+  // 各候補の初期バリデーション + 高さを内容に合わせる
+  keys.forEach(k => {
+    srValidateCandidate(k);
+    srAutoResizeTextarea(document.getElementById(`sr-cand-ta-${k}`));
+  });
+}
+
+// テキストエリアの高さを内容に合わせて自動調整 (スクロール不要に)
+function srAutoResizeTextarea(ta) {
+  if (!ta) return;
+  // 非表示要素は scrollHeight が 0 のため遅延
+  if (ta.offsetParent === null) {
+    setTimeout(() => srAutoResizeTextarea(ta), 120);
+    return;
+  }
+  ta.style.height = 'auto';
+  const h = Math.max(40, ta.scrollHeight + 2);
+  ta.style.height = h + 'px';
+}
+
+// 画面幅変更時に全候補 textarea を再計算
+window.addEventListener('resize', () => {
+  document.querySelectorAll('.sr-cand-edit').forEach(ta => srAutoResizeTextarea(ta));
+  const main = document.getElementById('sr-formula');
+  if (main) srAutoResizeTextarea(main);
+});
+
+// 候補エディタ → 下のメインエディタへロード
+function srLoadCandidateToEditor(level) {
+  const ta = document.getElementById(`sr-cand-ta-${level}`);
+  if (!ta) return;
+  const main = document.getElementById('sr-formula');
+  const levelSel = document.getElementById('sr-level');
+  if (!main) return;
+  main.value = ta.value;
+  if (levelSel) levelSel.value = level;
+  srOnFormulaChange();
+  _srShowToast(`${level} の式をエディタに読み込みました`);
+  main.scrollIntoView({behavior: 'smooth', block: 'center'});
+  main.focus();
+}
+
+// 候補テキストエリアの編集 → ローカル `_srFormulas` も更新し、検証
+function srOnCandidateEdit(level) {
+  const ta = document.getElementById(`sr-cand-ta-${level}`);
+  if (!ta) return;
+  _srFormulas[level] = _srFormulas[level] || {};
+  _srFormulas[level].formula_jplatpat = ta.value;
+  srValidateCandidate(level);
+  srAutoResizeTextarea(ta);
+}
+
+function srValidateCandidate(level) {
+  const ta = document.getElementById(`sr-cand-ta-${level}`);
+  const el = document.getElementById(`sr-cand-valid-${level}`);
+  if (!ta || !el) return;
+  const v = (ta.value || '').trim();
+  if (!v) { el.textContent = ''; el.className = 'sr-formula-valid'; return; }
+  fetch(`/case/${CASE_ID}/search-run/validate-formula`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({formula: v}),
+  }).then(r => r.json()).then(d => {
+    if (d.ok && !(d.warnings || []).length) {
+      el.textContent = '✓ OK'; el.className = 'sr-formula-valid ok';
+    } else if (d.ok) {
+      el.textContent = `⚠ ${(d.warnings || []).join(' / ')}`;
+      el.className = 'sr-formula-valid warn';
+    } else {
+      el.textContent = `✗ ${(d.errors || []).join(' / ')}`;
+      el.className = 'sr-formula-valid err';
+    }
+  }).catch(() => {});
+}
+
+function srCopyCandidate(level) {
+  const ta = document.getElementById(`sr-cand-ta-${level}`);
+  if (!ta) return;
+  navigator.clipboard.writeText(ta.value || '').then(() => {
+    _srShowToast('クリップボードにコピーしました');
+  }).catch(() => {
+    _srShowToast('コピーに失敗しました');
+  });
 }
 
 function srSelectFormula(level) {
   const f = _srFormulas[level];
   if (!f) return;
   document.getElementById('sr-level').value = level;
-  document.getElementById('sr-formula').value = f.formula_jplatpat || '';
+  const raw = f.formula_jplatpat || '';
+  const fixed = srAutoFixFormulaText(raw);
+  document.getElementById('sr-formula').value = fixed;
+  if (fixed !== raw) {
+    _srShowToast('提示式を J-PlatPat 構文に自動修正しました (NOT=−, 構造タグ /TX 付与 など)');
+  }
+  srOnFormulaChange();
+}
+
+// J-PlatPat 論理式構文への自動修正ロジック。
+//   - 全角演算子 (＊＋－) → 半角 (* + -) ※演算子として使う位置のみ
+//   - 全角括弧 （） → ( )
+//   - NOT 演算子: " / " → " - "
+//   - キーワード内の半角 '-' を全角 '－' に変換
+//     (例: "フィルム-電池" や "SUS-304" は J-PlatPat では '-' が NOT 扱い → キーワードとして
+//      扱わせるには全角 '－' が必須)
+//   - キーワード丸括弧 (...) の直後にタグが無ければ /TX を付与
+function srAutoFixFormulaText(src) {
+  if (!src) return '';
+  let s = String(src);
+
+  // 全角 → 半角 (演算子)
+  s = s.replace(/＊/g, '*')
+       .replace(/＋/g, '+')
+       .replace(/（/g, '(')
+       .replace(/）/g, ')');
+  // 全角ハイフン類 → 半角 (キーワード内ハイフン以外) は後で再判定
+
+  // NOT 演算子の誤用: "キーワード / キーワード" または ") / (" を "-" に変換
+  //   構造タグの /TX /CL /FI /FT ... は維持 (大文字 2-4 文字で始まる)
+  //   スペース区切りで "/非大文字" が来たら NOT と判定
+  s = s.replace(/\s\/\s+(?![A-Z]{2,4}\b)/g, ' - ');
+
+  // 連続スペース正規化
+  s = s.replace(/[ \t]+/g, ' ');
+
+  // キーワード内ハイフンの全角化
+  //   両端が「ワード文字」(ASCII英数字 / かな / カナ / CJK漢字) のときだけ全角化。
+  //   演算子位置 (空白 or 括弧 or 他演算子に隣接) はそのまま。
+  const wordClass = '[\\w\\u3040-\\u309F\\u30A0-\\u30FF\\u4E00-\\u9FFF]';
+  const hyphenInWord = new RegExp(`(${wordClass})-(${wordClass})`, 'g');
+  // 反復適用: "A-B-C" のように連続するケースに対応
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(hyphenInWord, '$1－$2');
+  } while (s !== prev);
+
+  // 各 ')' の直後に構造タグが無い場合 /TX を付与
+  //   - ネストした内側の ')' はスキップ (paren depth で判定)
+  //   - 既にタグあり → スキップ
+  //   - 次が ) ] → 上位グループがあるのでスキップ
+  //   - 近傍検索の第1キーワード直後の ) → スキップ
+  let out = '';
+  let pDepth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    out += ch;
+    if (ch === '(') {
+      pDepth++;
+    } else if (ch === ')') {
+      pDepth = Math.max(0, pDepth - 1);
+      if (pDepth !== 0) continue; // 内側の閉じ括弧はタグ対象外
+      const tail = s.slice(i + 1);
+      if (/^\s*\/[A-Z]{2,4}(?:\+[A-Z]{2,4})*/.test(tail)) continue;
+      if (/^\s*[\])]/.test(tail)) continue;
+      if (/^\s*,\d+[CcNn],/.test(tail)) continue;
+      out += '/TX';
+    }
+  }
+  s = out;
+
+  return s.trim();
+}
+
+// エディタ上の式に自動修正を適用するボタン用
+function srAutoFixFormula() {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  const before = ta.value;
+  const after = srAutoFixFormulaText(before);
+  if (before === after) {
+    _srShowToast('修正対象の記法は見つかりませんでした');
+    return;
+  }
+  ta.value = after;
+  srOnFormulaChange();
+  _srShowToast(`検索式を自動修正しました (${before.length}→${after.length}字)`);
+}
+
+// 現在のメインエディタの式をクリップボードへコピー
+function srCopyMainFormula() {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  navigator.clipboard.writeText(ta.value || '').then(() => {
+    _srShowToast('検索式をクリップボードにコピーしました');
+  }).catch(() => {
+    _srShowToast('コピーに失敗しました');
+  });
+}
+
+// 検索を実行せず、式だけ保存 (source='formula_only', ヒット 0 件のラン)
+async function srSaveFormulaOnly() {
+  const formula = document.getElementById('sr-formula').value.trim();
+  if (!formula) { alert('検索式を入力してください'); return; }
+  const level = document.getElementById('sr-level').value;
+  const status = document.getElementById('sr-exec-status');
+  if (status) status.textContent = '保存中…';
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        formula, formula_level: level,
+        source: 'formula_only',
+        max_results: 0,
+        auto_click_search: false,
+        parent_run_id: _srParentRunId || null,
+      }),
+    });
+    const data = await r.json();
+    if (!r.ok) { if (status) status.textContent = ''; alert(data.error || '保存エラー'); return; }
+    if (status) status.textContent = '式を保存しました (0件)';
+    _srShowToast('検索式をラン登録しました (0件)');
+    srClearParent();
+    await loadSearchRuns();
+    if (data.run?.run_id) { srOpenRun(data.run.run_id); }
+  } catch (e) {
+    if (status) status.textContent = '';
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+// 軽量トースト
+function _srShowToast(msg, ms = 2800) {
+  let el = document.getElementById('_sr_toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = '_sr_toast';
+    el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e293b;color:#fff;padding:10px 16px;border-radius:8px;z-index:2147483647;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transition:opacity .2s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._tm);
+  el._tm = setTimeout(() => { el.style.opacity = '0'; }, ms);
 }
 
 function renderSrRunsList() {
@@ -3187,15 +3441,22 @@ function renderSrRunsList() {
     const star = r.stars ?? 0;
     const fx = (r.formula || '').replace(/</g, '&lt;');
     const short = fx.length > 80 ? fx.slice(0, 80) + '…' : fx;
+    const parentBadge = r.parent_run_id
+      ? `<span class="sr-parent-badge" title="親ラン: ${r.parent_run_id}">← ${r.parent_run_id.slice(9, 15)}</span>`
+      : '';
     return `<div class="sr-run-item" data-run-id="${r.run_id}">
       <div class="sr-run-head">
         <span class="sr-run-level">${r.formula_level || '?'}</span>
         <span class="sr-run-source">${r.source || '?'}</span>
         <span class="sr-run-date">${(r.created_at || '').slice(0, 16)}</span>
         <span class="sr-run-count">${hit}件 / ★${star}</span>
+        ${parentBadge}
         <span style="flex:1"></span>
         <button class="btn btn-primary" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
                 onclick="srOpenRun('${r.run_id}')">開く</button>
+        <button class="btn btn-outline" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
+                onclick="srDuplicateForEdit('${r.run_id}')"
+                title="この式を複製して編集モードに">複製して編集</button>
         <button class="btn btn-danger" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
                 onclick="srDeleteRun('${r.run_id}')">削除</button>
       </div>
@@ -3224,17 +3485,97 @@ async function srOpenRun(runId) {
     document.getElementById('sr-hits-panel').style.display = 'block';
     document.getElementById('sr-hits-title').textContent =
       `候補一覧: ${_srCurrentRun.formula_level || ''} (${_srCurrentRun.source || ''})`;
+    await srRenderDiffSummary();
     renderSrHits();
     document.getElementById('sr-hits-panel').scrollIntoView({behavior: 'smooth', block: 'start'});
   } catch (e) { alert('エラー: ' + e.message); }
+}
+
+async function srRenderDiffSummary() {
+  const el = document.getElementById('sr-diff-summary');
+  if (!el) return;
+  el.style.display = 'none';
+  el.innerHTML = '';
+  if (!_srCurrentRun || !_srCurrentRun.parent_run_id) return;
+  const parent = _srCurrentRun.parent_run_id;
+  try {
+    const r = await fetch(
+      `/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/diff?base=${encodeURIComponent(parent)}`
+    );
+    if (!r.ok) return;
+    const d = await r.json();
+    const s = d.summary || {};
+    el.innerHTML = `
+      <span class="sr-diff-label">親ラン <code>${parent}</code> との差分:</span>
+      <span class="sr-diff-chip sr-diff-common" title="両方のランに共通する文献">共通 ${s.common || 0}</span>
+      <span class="sr-diff-chip sr-diff-added" title="このランで新たに出現した文献">新規 ${s.added || 0}</span>
+      <span class="sr-diff-chip sr-diff-removed" title="親ランにはあったがこのランでは消えた文献">消失 ${s.removed || 0}</span>
+      <button class="sr-tool-btn" style="margin-left:auto;" onclick="srShowDiffDetail()">詳細</button>
+    `;
+    el.dataset.diff = JSON.stringify(d);
+    el.style.display = 'flex';
+  } catch (e) { /* silent */ }
+}
+
+function srShowDiffDetail() {
+  const el = document.getElementById('sr-diff-summary');
+  if (!el || !el.dataset.diff) return;
+  let d; try { d = JSON.parse(el.dataset.diff); } catch (e) { return; }
+  const section = (label, items, cls) => {
+    if (!items || !items.length) return `<div class="sr-diff-detail-sec"><h4 class="${cls}">${label} (0)</h4><div class="muted">なし</div></div>`;
+    const rows = items.slice(0, 30).map(h => {
+      const pid = (h.patent_id || '').replace(/</g, '&lt;');
+      const title = (h.title || '').replace(/</g, '&lt;');
+      const scr = h.screening || 'pending';
+      return `<li><code>${pid}</code> <span class="sr-diff-scr-${scr}">[${scr}]</span> ${title}</li>`;
+    }).join('');
+    const more = items.length > 30 ? `<li class="muted">...他 ${items.length - 30} 件</li>` : '';
+    return `<div class="sr-diff-detail-sec">
+      <h4 class="${cls}">${label} (${items.length})</h4>
+      <ul class="sr-diff-list">${rows}${more}</ul>
+    </div>`;
+  };
+  const modal = document.createElement('div');
+  modal.className = 'sr-modal-backdrop';
+  modal.innerHTML = `
+    <div class="sr-modal">
+      <div class="sr-modal-head">
+        <h3>検索ラン差分詳細</h3>
+        <button class="sr-tool-btn" onclick="this.closest('.sr-modal-backdrop').remove()">閉じる</button>
+      </div>
+      <div class="sr-modal-body">
+        <p style="font-size:0.8rem; color:var(--text2);">
+          比較: <code>${d.run_id}</code> vs 親 <code>${d.base_run_id}</code>
+        </p>
+        ${section('新規 (このランでのみ出現)', d.only_new, 'sr-diff-added')}
+        ${section('消失 (親ランにのみ)', d.only_base, 'sr-diff-removed')}
+        ${section('共通', d.common, 'sr-diff-common')}
+      </div>
+    </div>`;
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove();
+  });
+  document.body.appendChild(modal);
 }
 
 async function searchRunExecute() {
   const formula = document.getElementById('sr-formula').value.trim();
   if (!formula) { alert('検索式を入力してください'); return; }
   const level = document.getElementById('sr-level').value;
-  const source = document.getElementById('sr-source').value;
+  let source = document.getElementById('sr-source').value;
   const maxResults = parseInt(document.getElementById('sr-max').value || '50', 10);
+
+  // J-PlatPat 自動遷移トグルが OFF の場合は式の保存のみ
+  const autoToggle = document.getElementById('sr-enable-jplatpat-auto');
+  if (source === 'jplatpat' && autoToggle && !autoToggle.checked) {
+    const ok = confirm(
+      'J-PlatPat 自動遷移は OFF です。\n\n' +
+      '検索を実行せず「式の保存のみ」のランを作成します。よろしいですか?\n' +
+      '(自動遷移したい場合はチェックを入れてください)'
+    );
+    if (!ok) return;
+    return srSaveFormulaOnly();
+  }
 
   const btn = document.getElementById('btn-sr-execute');
   const loading = document.getElementById('loading-sr-exec');
@@ -3251,13 +3592,21 @@ async function searchRunExecute() {
         formula, formula_level: level, source,
         max_results: maxResults,
         auto_click_search: true,
+        parent_run_id: _srParentRunId || null,
       }),
     });
     const data = await r.json();
     btn.disabled = false;
     loading.classList.remove('show');
     if (!r.ok) { status.textContent = ''; alert(data.error || '実行エラー'); return; }
-    status.textContent = `${data.run?.hit_count ?? 0}件取得`;
+    const hitN = data.run?.hit_count ?? 0;
+    let summary = `${hitN}件取得`;
+    if (data.diff_summary) {
+      const d = data.diff_summary;
+      summary += ` / 親ラン比: 共通${d.common} 新規${d.added} 消失${d.removed}`;
+    }
+    status.textContent = summary;
+    srClearParent();
     await loadSearchRuns();
     if (data.run?.run_id) { srOpenRun(data.run.run_id); }
   } catch (e) {
@@ -3426,4 +3775,265 @@ async function srDownloadStarred() {
   const ok = results.filter(x => x.success).length;
   const fail = results.length - ok;
   alert(`完了: 成功 ${ok} / 失敗 ${fail}\n失敗した文献は J-PlatPat リンクから手動DLしてください。`);
+}
+
+
+// ===== Step 4.5 エディタ: 複製 / 演算子挿入 / 括弧チェック / キーワードヘルパー =====
+
+function srSetParentRun(runId, levelLabel, formula) {
+  _srParentRunId = runId || null;
+  const banner = document.getElementById('sr-parent-banner');
+  const info = document.getElementById('sr-parent-info');
+  if (!banner || !info) return;
+  if (_srParentRunId) {
+    const short = (formula || '').slice(0, 60);
+    info.innerHTML = `<code>${runId}</code> <span style="color:var(--text2);">(${levelLabel || ''})</span> <span style="color:var(--text2); font-size:0.75rem;">${short}${(formula || '').length > 60 ? '…' : ''}</span>`;
+    banner.style.display = 'flex';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+function srClearParent() { srSetParentRun(null); }
+
+async function srDuplicateForEdit(runId) {
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/${runId}`);
+    if (!r.ok) { alert('ラン読み込みエラー'); return; }
+    const run = await r.json();
+    // textarea と UI をセット
+    document.getElementById('sr-formula').value = run.formula || '';
+    const lvlSel = document.getElementById('sr-level');
+    if (lvlSel) {
+      const lvl = run.formula_level || 'custom';
+      // options から一致があれば選択、なければ custom
+      let found = false;
+      for (const o of lvlSel.options) {
+        if (o.value === lvl) { lvlSel.value = lvl; found = true; break; }
+      }
+      if (!found) lvlSel.value = 'custom';
+    }
+    const srcSel = document.getElementById('sr-source');
+    if (srcSel && run.source) srcSel.value = run.source;
+    srSetParentRun(runId, run.formula_level, run.formula);
+    srOnFormulaChange();
+    document.querySelector('.sr-formula-picker')?.scrollIntoView({behavior: 'smooth', block: 'start'});
+    document.getElementById('sr-formula').focus();
+  } catch (e) { alert('エラー: ' + e.message); }
+}
+
+function srDuplicateCurrent() {
+  if (!_srCurrentRun) return;
+  srDuplicateForEdit(_srCurrentRun.run_id);
+}
+
+function srInsertOp(op) {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? ta.value.length;
+  // *+ はスペース不要、- (NOT) は前後空白があると見やすい
+  const insert = op;
+  ta.value = ta.value.slice(0, start) + insert + ta.value.slice(end);
+  ta.focus();
+  const pos = start + insert.length;
+  ta.setSelectionRange(pos, pos);
+  srOnFormulaChange();
+}
+
+function srWrapParens() {
+  _srWrapWith('(', ')');
+}
+
+function srWrapBrackets() {
+  _srWrapWith('[', ']');
+}
+
+function _srWrapWith(open, close) {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  const start = ta.selectionStart ?? 0;
+  const end = ta.selectionEnd ?? 0;
+  if (start === end) {
+    ta.value = ta.value.slice(0, start) + open + close + ta.value.slice(end);
+    ta.setSelectionRange(start + 1, start + 1);
+  } else {
+    const sel = ta.value.slice(start, end);
+    ta.value = ta.value.slice(0, start) + open + sel + close + ta.value.slice(end);
+    ta.setSelectionRange(start + 1, end + 1);
+  }
+  ta.focus();
+  srOnFormulaChange();
+}
+
+// 近傍検索テンプレート挿入: キーワード1,<距離><C|N>,キーワード2/TX
+function srInsertProximity() {
+  const distStr = prompt('キーワード間の距離を指定してください (1〜99)', '5');
+  if (distStr === null) return;
+  const dist = parseInt(distStr, 10);
+  if (!(dist >= 1 && dist <= 99)) { alert('1〜99 の数字で指定してください'); return; }
+  const orderRaw = prompt('語順あり=C / 語順なし=N', 'C');
+  if (orderRaw === null) return;
+  const order = orderRaw.toUpperCase() === 'N' ? 'N' : 'C';
+  const kw1 = prompt('キーワード1', '');
+  if (!kw1) return;
+  const kw2 = prompt('キーワード2', '');
+  if (!kw2) return;
+  const snippet = `${kw1},${dist}${order},${kw2}/TX`;
+  srInsertText(snippet);
+}
+
+function srInsertText(text) {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  const start = ta.selectionStart ?? ta.value.length;
+  const end = ta.selectionEnd ?? ta.value.length;
+  // 前の文字が英数・閉じ括弧なら半角スペース or '*' 推奨; とはいえ単純挿入にとどめる
+  ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+  const pos = start + text.length;
+  ta.setSelectionRange(pos, pos);
+  ta.focus();
+  srOnFormulaChange();
+}
+
+// 直前の ')' または ']' (なければ末尾) に構造タグを付与する。
+// 選択範囲があればその終端。既タグがあれば置換。
+function srAppendTag(tag) {
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  const v = ta.value;
+  const selStart = ta.selectionStart ?? v.length;
+  const selEnd = ta.selectionEnd ?? v.length;
+
+  let insertAt = selEnd;
+  if (selStart === selEnd) {
+    const before = v.slice(0, selEnd);
+    // ')' と ']' の最後の位置のうち後ろの方を採用
+    const lastParen = before.lastIndexOf(')');
+    const lastBracket = before.lastIndexOf(']');
+    const last = Math.max(lastParen, lastBracket);
+    insertAt = (last >= 0) ? last + 1 : v.length;
+  }
+
+  const tail = v.slice(insertAt);
+  const m = tail.match(/^\s*(\/[A-Z]{2,4}(?:\+[A-Z]{2,4})*)/);
+  let newVal, newPos;
+  if (m) {
+    newVal = v.slice(0, insertAt) + tag + v.slice(insertAt + m[0].length);
+    newPos = insertAt + tag.length;
+  } else {
+    newVal = v.slice(0, insertAt) + tag + v.slice(insertAt);
+    newPos = insertAt + tag.length;
+  }
+  ta.value = newVal;
+  ta.setSelectionRange(newPos, newPos);
+  ta.focus();
+  srOnFormulaChange();
+}
+
+function srOnFormulaChange() {
+  // 入力毎に自動リサイズ (デバウンスなし)
+  srAutoResizeTextarea(document.getElementById('sr-formula'));
+  clearTimeout(_srValidateTimer);
+  _srValidateTimer = setTimeout(async () => {
+    const ta = document.getElementById('sr-formula');
+    const el = document.getElementById('sr-formula-valid');
+    if (!ta || !el) return;
+    const formula = ta.value;
+    if (!formula.trim()) { el.textContent = ''; el.className = 'sr-formula-valid'; return; }
+    try {
+      const r = await fetch(`/case/${CASE_ID}/search-run/validate-formula`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({formula}),
+      });
+      const d = await r.json();
+      if (d.ok && !(d.warnings || []).length) {
+        el.textContent = '✓ OK';
+        el.className = 'sr-formula-valid ok';
+      } else if (d.ok) {
+        el.textContent = `⚠ ${(d.warnings || []).join(' / ')}`;
+        el.className = 'sr-formula-valid warn';
+      } else {
+        el.textContent = `✗ ${(d.errors || []).join(' / ')}`;
+        el.className = 'sr-formula-valid err';
+      }
+    } catch (e) { /* silent */ }
+  }, 300);
+}
+
+async function srToggleKwHelper() {
+  const panel = document.getElementById('sr-kw-helper');
+  if (!panel) return;
+  const show = panel.style.display === 'none';
+  panel.style.display = show ? 'block' : 'none';
+  if (show && _srKwSnippets === null) {
+    await srLoadKwSnippets();
+  }
+}
+
+async function srLoadKwSnippets() {
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/snippets`);
+    _srKwSnippets = await r.json();
+  } catch (e) { _srKwSnippets = {groups: [], fi_codes: [], fterm_codes: []}; }
+  srRenderKwSnippets();
+}
+
+function srRenderKwSnippets() {
+  const g = document.getElementById('sr-kw-groups');
+  const c = document.getElementById('sr-kw-codes');
+  if (!g || !c) return;
+  const snip = _srKwSnippets || {};
+  const groups = snip.groups || [];
+  if (!groups.length) {
+    g.innerHTML = '<div class="muted" style="font-size:0.8rem;">Step 3 のキーワード辞書が未生成または group なし</div>';
+  } else {
+    g.innerHTML = groups.map((grp, i) => {
+      const terms = grp.terms || [];
+      const sanitized = grp.terms_sanitized || terms;
+      const termChips = terms.map((t, idx) => {
+        const safe = t.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        const insertTerm = sanitized[idx] || t;
+        const esc = JSON.stringify(insertTerm);
+        const tip = (insertTerm !== t)
+          ? `挿入時は全角ハイフン化: ${insertTerm}`
+          : '単語のみ挿入';
+        return `<button class="sr-kw-term" onclick='srInsertText(${esc})' title="${tip}">${safe}</button>`;
+      }).join('');
+      const groupTxt = grp.jplatpat_group || ''; // 例: (a+b+c)/TX
+      const groupRaw = grp.jplatpat_group_raw || groupTxt.replace(/\/[A-Z]{2,4}(?:\+[A-Z]{2,4})*$/, '');
+      const groupEscTx = JSON.stringify(groupTxt);
+      const groupEscRaw = JSON.stringify(groupRaw);
+      return `<div class="sr-kw-group">
+        <div class="sr-kw-group-head">
+          <span class="sr-kw-group-label">${(grp.label || `group${i+1}`).replace(/</g, '&lt;')}</span>
+          <button class="sr-tool-btn" onclick='srInsertText(${groupEscTx})' title="(a+b+c)/TX を挿入 (全文検索)">(グループ)/TX</button>
+          <button class="sr-tool-btn" onclick='srInsertText(${groupEscRaw})' title="(a+b+c) のみ挿入 (タグは後で付与)">(グループ)</button>
+        </div>
+        <div class="sr-kw-terms">${termChips}</div>
+      </div>`;
+    }).join('');
+  }
+  const fi = snip.fi_codes || [];
+  const ft = snip.fterm_codes || [];
+  // 既に /FI などが付いていればそのまま、無ければ付与
+  const withFI = (c) => /\/FI\b/.test(c) ? c : `${c}/FI`;
+  const withFT = (c) => /\/FT\b/.test(c) ? c : `${c}/FT`;
+  const fiBtns = fi.map(code => {
+    const tagged = withFI(code);
+    const esc = JSON.stringify(tagged);
+    return `<button class="sr-kw-code" onclick='srInsertText(${esc})' title="${tagged.replace(/"/g, '&quot;')}">${code.replace(/</g, '&lt;')}</button>`;
+  }).join('');
+  const ftBtns = ft.map(code => {
+    const tagged = withFT(code);
+    const esc = JSON.stringify(tagged);
+    return `<button class="sr-kw-code" onclick='srInsertText(${esc})' title="${tagged.replace(/"/g, '&quot;')}">${code.replace(/</g, '&lt;')}</button>`;
+  }).join('');
+  c.innerHTML = (fiBtns || ftBtns)
+    ? `
+      ${fiBtns ? `<div class="sr-kw-codes-row"><span class="sr-kw-codes-label">FI:</span>${fiBtns}</div>` : ''}
+      ${ftBtns ? `<div class="sr-kw-codes-row"><span class="sr-kw-codes-label">Fterm:</span>${ftBtns}</div>` : ''}
+    `
+    : '';
 }

@@ -401,6 +401,33 @@
     padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; cursor: pointer;
     margin-right: 4px; margin-bottom: 4px; font-family: monospace; }
   .sr-chip:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sr-chip-fixed { font-size: 0.7rem; opacity: 0.85; }
+  .sr-preset-hint { font-size: 0.72rem; color: var(--text2); margin-top: 6px;
+    padding: 4px 8px; background: rgba(251, 191, 36, 0.08); border-radius: 4px;
+    border-left: 3px solid #fbbf24; }
+
+  /* 検索式候補カード (narrow/medium/wide を編集可能に表示) */
+  .sr-cand-card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
+  .sr-cand-head { display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px; flex-wrap: wrap; }
+  .sr-cand-level { font-family: monospace; color: var(--accent);
+    min-width: 64px; font-size: 0.9rem; }
+  .sr-cand-desc { font-size: 0.78rem; color: var(--text2); }
+  .sr-cand-fixed { font-size: 0.72rem; color: #fbbf24;
+    background: rgba(251, 191, 36, 0.12); padding: 1px 6px; border-radius: 4px; }
+  .sr-cand-edit { width: 100%; font-family: monospace; font-size: 0.85rem;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 6px 8px; resize: none;
+    overflow: hidden; /* JSで高さを合わせるのでスクロールバーは不要 */
+    white-space: pre-wrap; word-break: break-all; line-height: 1.5;
+    min-height: 40px; box-sizing: border-box; }
+  .sr-cand-edit:focus { outline: none; border-color: var(--accent); }
+  .sr-cand-meta { display: flex; align-items: center; margin-top: 4px; }
+
+  /* メインエディタ textarea (内容に合わせて自動伸長) */
+  #sr-formula { min-height: 90px; resize: vertical;
+    white-space: pre-wrap; word-break: break-all; overflow: hidden; }
 
   .sr-runs-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
   .sr-run-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
@@ -448,3 +475,85 @@
     font-size: 0.7rem; font-weight: 700; }
   .sr-dled { background: #14532d; color: #4ade80; padding: 1px 6px; border-radius: 8px;
     font-size: 0.7rem; }
+
+  /* ----- エディタ強化 (複製して編集) ----- */
+  .sr-parent-banner { display: flex; align-items: center; gap: 0.5rem;
+    background: #1e3a5f; border: 1px solid #3b82f6; color: #cbd5e1;
+    padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; margin-bottom: 0.5rem; }
+  .sr-parent-label { color: #93c5fd; font-weight: 600; }
+  .sr-parent-clear { margin-left: auto; background: transparent; border: none;
+    color: #cbd5e1; cursor: pointer; font-size: 1rem; padding: 0 4px; }
+  .sr-parent-clear:hover { color: #fca5a5; }
+  .sr-parent-badge { background: #1e3a5f; color: #93c5fd; font-size: 0.7rem;
+    padding: 1px 6px; border-radius: 8px; font-family: monospace; }
+
+  .sr-editor-toolbar { display: flex; gap: 4px; align-items: center; margin-bottom: 4px;
+    flex-wrap: wrap; }
+  .sr-tool-btn { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 2px 10px; border-radius: 4px; cursor: pointer; font-size: 0.75rem;
+    font-family: monospace; }
+  .sr-tool-btn:hover { background: var(--surface2); border-color: var(--accent); }
+  .sr-tool-sep { width: 1px; background: var(--border); align-self: stretch; margin: 0 4px; }
+  .sr-formula-valid { font-size: 0.75rem; margin-left: auto; padding: 2px 6px; border-radius: 4px; }
+  .sr-formula-valid.ok { color: #4ade80; background: rgba(74, 222, 128, 0.1); }
+  .sr-formula-valid.warn { color: #fbbf24; background: rgba(251, 191, 36, 0.1); }
+  .sr-formula-valid.err { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+  /* キーワードヘルパー */
+  .sr-kw-helper { background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin-top: 6px; max-height: 280px; overflow-y: auto; }
+  .sr-kw-helper-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 6px;
+    font-size: 0.85rem; }
+  .sr-kw-groups { display: flex; flex-direction: column; gap: 6px; }
+  .sr-kw-group { border-top: 1px solid var(--border); padding-top: 4px; }
+  .sr-kw-group-head { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 3px; }
+  .sr-kw-group-label { font-size: 0.78rem; font-weight: 600; color: var(--accent); }
+  .sr-kw-terms { display: flex; flex-wrap: wrap; gap: 3px; }
+  .sr-kw-term { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; cursor: pointer;
+    font-family: monospace; }
+  .sr-kw-term:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .sr-kw-codes { margin-top: 6px; }
+  .sr-kw-codes-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+    margin-bottom: 3px; }
+  .sr-kw-codes-label { font-size: 0.72rem; color: var(--text2); font-weight: 600; }
+  .sr-kw-code { background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; cursor: pointer;
+    font-family: monospace; }
+  .sr-kw-code:hover { background: var(--accent); color: #fff; }
+
+  /* 差分サマリ */
+  .sr-diff-summary { display: flex; align-items: center; gap: 0.4rem; padding: 6px 10px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    margin-bottom: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; }
+  .sr-diff-label { color: var(--text2); }
+  .sr-diff-chip { padding: 2px 10px; border-radius: 10px; font-size: 0.75rem; font-weight: 600; }
+  .sr-diff-chip.sr-diff-common { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+  .sr-diff-chip.sr-diff-added { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+  .sr-diff-chip.sr-diff-removed { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+
+  /* モーダル (差分詳細) */
+  .sr-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 9999; }
+  .sr-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    max-width: 800px; max-height: 85vh; width: 90%; display: flex; flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+  .sr-modal-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); }
+  .sr-modal-head h3 { margin: 0; font-size: 1rem; }
+  .sr-modal-body { padding: 0.8rem 1rem; overflow-y: auto; }
+  .sr-diff-detail-sec { margin-bottom: 1rem; }
+  .sr-diff-detail-sec h4 { margin: 0 0 0.3rem 0; font-size: 0.88rem; padding: 2px 8px;
+    border-radius: 4px; display: inline-block; }
+  .sr-diff-detail-sec h4.sr-diff-added { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+  .sr-diff-detail-sec h4.sr-diff-removed { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+  .sr-diff-detail-sec h4.sr-diff-common { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+  .sr-diff-list { margin: 0; padding-left: 1.2rem; font-size: 0.8rem; }
+  .sr-diff-list li { margin-bottom: 2px; }
+  .sr-diff-list code { background: var(--bg); padding: 1px 5px; border-radius: 3px; }
+  .sr-diff-list .muted { color: var(--text2); font-style: italic; }
+  .sr-diff-scr-star { color: #eab308; font-weight: 600; }
+  .sr-diff-scr-triangle { color: #06b6d4; }
+  .sr-diff-scr-reject { color: #f87171; text-decoration: line-through; }
+  .sr-diff-scr-hold { color: #9ca3af; }
+  .sr-diff-scr-pending { color: var(--text2); }

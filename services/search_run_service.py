@@ -66,8 +66,18 @@ def _slugify(text: str, max_len: int = 20) -> str:
     return t[:max_len] or "run"
 
 
+_last_run_id_ts = {"ts": "", "seq": 0}
+
+
 def new_run_id(formula_level: str = "custom") -> str:
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    """重複しない run_id を生成。ミリ秒＋同一ミリ秒内シーケンスで保証。"""
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")[:-3]
+    if ts == _last_run_id_ts["ts"]:
+        _last_run_id_ts["seq"] += 1
+        ts = f"{ts}{_last_run_id_ts['seq']:02d}"
+    else:
+        _last_run_id_ts["ts"] = ts
+        _last_run_id_ts["seq"] = 0
     return f"{ts}-{_slugify(formula_level)}"
 
 
@@ -87,6 +97,7 @@ def list_runs(case_id: str) -> list:
                 "formula": data.get("formula", ""),
                 "hit_count": data.get("hit_count", len(data.get("hits", []))),
                 "status": data.get("status", ""),
+                "parent_run_id": data.get("parent_run_id"),
                 "stars": sum(1 for h in data.get("hits", [])
                              if h.get("screening") == "star"),
                 "rejects": sum(1 for h in data.get("hits", [])
@@ -134,8 +145,13 @@ def create_run_from_hits(
     search_url: str = "",
     status: str = "done",
     error: Optional[str] = None,
+    parent_run_id: Optional[str] = None,
 ) -> dict:
-    """JplatpatHit / 各種 hit dict からランを生成して保存。"""
+    """JplatpatHit / 各種 hit dict からランを生成して保存。
+
+    parent_run_id: この run が別ランをコピー編集して再実行されたものであるとき
+                   親ラン id を記録する。差分表示に利用。
+    """
     run_id = new_run_id(formula_level)
     normalized_hits = [_normalize_hit(h) for h in hits]
     data = {
@@ -149,6 +165,7 @@ def create_run_from_hits(
         "hit_count": len(normalized_hits),
         "status": status,
         "error": error,
+        "parent_run_id": parent_run_id,
         "hits": normalized_hits,
     }
     save_run(case_id, data)
@@ -456,6 +473,191 @@ def _parse_scoring_response(raw: str):
         return None, raw[:200]
 
 
+def _hit_key(hit: dict) -> str:
+    """hit の重複判定キー (patent_id ベース、dedup_key で国別正規化)。"""
+    from modules.jplatpat_client import JplatpatHit
+    pid = hit.get("patent_id", "") or ""
+    try:
+        tmp = JplatpatHit(patent_id=pid)
+        return tmp.dedup_key or pid
+    except Exception:
+        return pid
+
+
+def compute_run_diff(case_id: str, run_id: str, base_run_id: str) -> Optional[dict]:
+    """2つのランの hits を比較して差分を返す。
+
+    Returns:
+        {
+          "run_id": "...",                  # 比較対象 (新)
+          "base_run_id": "...",             # 比較基準 (旧)
+          "formula": "...",
+          "base_formula": "...",
+          "common": [{"patent_id": ...}, ...],     # 両方にある
+          "only_new": [{"patent_id": ...}, ...],   # run_id だけにある (新規追加)
+          "only_base": [{"patent_id": ...}, ...],  # base_run_id だけにある (消失)
+          "summary": {"common": N, "added": N, "removed": N},
+        }
+        ランが見つからなければ None。
+    """
+    target = load_run(case_id, run_id)
+    base = load_run(case_id, base_run_id)
+    if not target or not base:
+        return None
+
+    target_hits = target.get("hits", []) or []
+    base_hits = base.get("hits", []) or []
+
+    target_map = {_hit_key(h): h for h in target_hits if _hit_key(h)}
+    base_map = {_hit_key(h): h for h in base_hits if _hit_key(h)}
+
+    target_keys = set(target_map.keys())
+    base_keys = set(base_map.keys())
+
+    common_keys = target_keys & base_keys
+    only_new_keys = target_keys - base_keys
+    only_base_keys = base_keys - target_keys
+
+    def _slim(h: dict) -> dict:
+        return {
+            "patent_id": h.get("patent_id", ""),
+            "title": h.get("title", ""),
+            "applicant": h.get("applicant", ""),
+            "publication_date": h.get("publication_date", ""),
+            "screening": h.get("screening", "pending"),
+            "ai_score": h.get("ai_score"),
+        }
+
+    return {
+        "run_id": run_id,
+        "base_run_id": base_run_id,
+        "formula": target.get("formula", ""),
+        "base_formula": base.get("formula", ""),
+        "common": [_slim(target_map[k]) for k in common_keys],
+        "only_new": [_slim(target_map[k]) for k in only_new_keys],
+        "only_base": [_slim(base_map[k]) for k in only_base_keys],
+        "summary": {
+            "common": len(common_keys),
+            "added": len(only_new_keys),
+            "removed": len(only_base_keys),
+        },
+    }
+
+
+def validate_formula(formula: str) -> dict:
+    """検索式の括弧バランス・構文簡易チェック (J-PlatPat 論理式入力用)。
+
+    J-PlatPat 構文:
+      - AND: *  (または半角スペース)
+      - OR : +
+      - NOT: -  (半角ハイフン)
+      - 優先順位変更: [ ] (大括弧、三重まで)
+      - 同種キーワード群の省略: ( ) (丸括弧) 例: (a+b+c)/TX
+      - 検索キーワード末尾に構造タグ必須: /TX /TI /AB /CL /FI /FT ...
+
+    Returns:
+        {"ok": bool, "errors": [str], "warnings": [str],
+         "parens_balance": int, "brackets_balance": int}
+    """
+    errors: list = []
+    warnings: list = []
+    s = formula or ""
+
+    # 丸括弧バランス
+    paren_depth = 0
+    paren_min = 0
+    for ch in s:
+        if ch in "(（":
+            paren_depth += 1
+        elif ch in ")）":
+            paren_depth -= 1
+            if paren_depth < 0:
+                paren_min = min(paren_min, paren_depth)
+    if paren_depth != 0:
+        errors.append(f"丸括弧のバランスが崩れています (深さ {paren_depth:+d})")
+    if paren_min < 0:
+        errors.append("閉じ丸括弧が開き丸括弧より先に現れています")
+
+    # 大括弧バランス
+    br_depth = 0
+    br_min = 0
+    br_max_nest = 0
+    for ch in s:
+        if ch == "[":
+            br_depth += 1
+            br_max_nest = max(br_max_nest, br_depth)
+        elif ch == "]":
+            br_depth -= 1
+            if br_depth < 0:
+                br_min = min(br_min, br_depth)
+    if br_depth != 0:
+        errors.append(f"大括弧 [ ] のバランスが崩れています (深さ {br_depth:+d})")
+    if br_min < 0:
+        errors.append("閉じ大括弧が開き大括弧より先に現れています")
+    if br_max_nest > 3:
+        warnings.append(f"大括弧の入れ子が {br_max_nest} 重です (J-PlatPat は三重まで)")
+
+    # 全角演算子警告 (J-PlatPat は半角のみサポート)
+    if re.search(r'[＊＋－]', s):
+        warnings.append("全角の演算子 (＊ ＋ －) が含まれます。J-PlatPat は半角 (* + -) 必須です。")
+    if re.search(r'[（）]', s):
+        warnings.append("全角括弧 （ ） が含まれます。半角 ( ) 推奨です。")
+
+    # 連続演算子の簡易検出 (AND=* OR=+ NOT=- の連続)
+    if re.search(r'[*+\-]\s*[*+]', s):
+        errors.append("演算子が連続しています (例: *+ など)")
+
+    # NOT (/) の古い誤用検出
+    #   構造タグとして使われる /XX (大文字) はOK、
+    #   分類コードのスラッシュ (B32B1/00 等) もOK、
+    #   オペレータ位置で /語 のように使っていないか確認
+    if re.search(r'\s/\s*\S', s) and not re.search(r'\s/[A-Z]{2,4}', s):
+        warnings.append("NOT 演算子は ' / ' ではなく半角ハイフン '-' です")
+
+    # キーワード内ハイフンの誤用検出
+    #   J-PlatPat では '-' は NOT 演算子。キーワードの一部として使いたい場合は全角 '－' にする必要がある。
+    #   例: "SUS-304" "フィルム-電池" は "SUS－304" "フィルム－電池" と全角化しないとエラーになる。
+    word_class = r'[\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]'
+    if re.search(rf'{word_class}-{word_class}', s):
+        warnings.append(
+            "キーワードの途中にある半角 '-' は NOT 演算子と解釈されます。"
+            "キーワードの一部なら全角 '－' に変換してください (🔧 式を自動修正で対応)"
+        )
+
+    # 構造タグ不足の検出 (論理式入力では必須)
+    #   「キーワード)」や「キーワード]」の直後に /XX が無ければ警告。
+    #   分類コード (B32B1/00 等) のスラッシュは構造タグと誤判定しないよう、
+    #   ')' または ']' 直後の /[A-Z]{2,4} のみを構造タグとみなす。
+    tag_pattern = re.compile(r'^\s*/[A-Z]{2,4}(?:\+[A-Z]{2,4})*\b')
+    close_chars = list(re.finditer(r'[)\]]', s))
+    missing_tag = False
+    for m in close_chars:
+        after = s[m.end():m.end() + 10]
+        # 次が構造タグ → OK
+        if tag_pattern.match(after):
+            continue
+        # 次が閉じ括弧 → 上位のグルーピング、個別判定は不要
+        if re.match(r'\s*[\])]', after):
+            continue
+        # 次が ,数字C/N, (近傍検索の第2キーワード前) → OK
+        if re.match(r'\s*,\d+[CcNn],', after):
+            continue
+        missing_tag = True
+        break
+    if missing_tag:
+        warnings.append(
+            "キーワード括弧の直後に構造タグ (/TX /TI /AB+CL /CL /FI /FT など) が無い可能性があります"
+        )
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "parens_balance": paren_depth,
+        "brackets_balance": br_depth,
+    }
+
+
 def get_formulas_from_keyword_dict(case_id: str) -> dict:
     """Stage 3 の keyword_dictionary.json から search_formulas を取得。
 
@@ -476,3 +678,76 @@ def get_formulas_from_keyword_dict(case_id: str) -> dict:
     if not isinstance(sf, dict):
         return {}
     return sf
+
+
+def get_keyword_snippets(case_id: str) -> dict:
+    """Step3 の keyword_dictionary から、エディタに挿入するための語彙スニペットを返す。
+
+    Returns:
+        {
+          "groups": [
+            {"label": "<意味カテゴリ>",
+             "terms": ["語1", "語2", ...],
+             "jplatpat_group": "(語1+語2+...)"},
+            ...
+          ],
+          "fi_codes": ["B32B1/00", ...],
+          "fterm_codes": ["4F100AB01", ...],
+        }
+    """
+    case_dir = get_case_dir(case_id)
+    p = case_dir / "search" / "keyword_dictionary.json"
+    snippets: dict = {"groups": [], "fi_codes": [], "fterm_codes": []}
+    if not p.exists():
+        return snippets
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return snippets
+
+    # キーワード内ハイフンは J-PlatPat では NOT 扱いになるため全角 '－' に変換
+    def _sanitize_keyword(term: str) -> str:
+        # 両端がワード文字の '-' を '－' に変換 (反復)
+        pattern = re.compile(
+            r'([\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF])-'
+            r'([\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF])'
+        )
+        prev = None
+        t = term
+        while prev != t:
+            prev = t
+            t = pattern.sub(r'\1－\2', t)
+        return t
+
+    groups_raw = data.get("keyword_groups") or data.get("groups") or []
+    for g in groups_raw:
+        if not isinstance(g, dict):
+            continue
+        label = g.get("label") or g.get("name") or g.get("category") or ""
+        terms = g.get("terms") or g.get("synonyms") or g.get("keywords") or []
+        terms = [str(t).strip() for t in terms if str(t).strip()]
+        if not terms:
+            continue
+        # キーワード内 '-' を '－' に
+        sanitized = [_sanitize_keyword(t) for t in terms]
+        raw = "(" + "+".join(sanitized) + ")"
+        snippets["groups"].append({
+            "label": label,
+            "terms": terms,  # 表示用は元のまま
+            "terms_sanitized": sanitized,
+            # 構造タグなし (他の式に組み込む用途)
+            "jplatpat_group_raw": raw,
+            # 既定は全文検索タグ付き (J-PlatPat 論理式入力で有効な形)
+            "jplatpat_group": raw + "/TX",
+        })
+
+    fi = data.get("fi") or data.get("fi_codes") or []
+    if isinstance(fi, list):
+        snippets["fi_codes"] = [str(c).strip() for c in fi if str(c).strip()]
+
+    fterm = data.get("fterm") or data.get("fterm_codes") or []
+    if isinstance(fterm, list):
+        snippets["fterm_codes"] = [str(c).strip() for c in fterm if str(c).strip()]
+
+    return snippets

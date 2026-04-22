@@ -753,6 +753,7 @@ def search_run_execute(case_id):
     level = body.get("formula_level") or "custom"
     source = body.get("source") or "jplatpat"
     max_results = int(body.get("max_results") or 50)
+    parent_run_id = body.get("parent_run_id") or None
 
     if not formula:
         return jsonify({"error": "検索式が空です"}), 400
@@ -777,6 +778,11 @@ def search_run_execute(case_id):
                 "url": h.url,
             } for h in raw]
             search_url = f"https://patents.google.com/?q={formula}"
+        elif source == "formula_only":
+            # 検索実行はせず、式だけ run として保存 (後で手動貼付/別ツールで検索するため)
+            hits = []
+            from modules.jplatpat_client import JPLATPAT_SEARCH_URL
+            search_url = JPLATPAT_SEARCH_URL
         else:
             return jsonify({"error": f"unknown source: {source}"}), 400
     except Exception as e:
@@ -791,8 +797,21 @@ def search_run_execute(case_id):
         source=source,
         hits=hits,
         search_url=search_url,
+        parent_run_id=parent_run_id,
     )
-    return jsonify({"success": True, "run": data})
+
+    # 親ランがあれば差分サマリを同梱して返す
+    diff = None
+    if parent_run_id:
+        from services.search_run_service import compute_run_diff
+        try:
+            diff_full = compute_run_diff(case_id, data["run_id"], parent_run_id)
+            if diff_full:
+                diff = diff_full.get("summary")
+        except Exception:
+            diff = None
+
+    return jsonify({"success": True, "run": data, "diff_summary": diff})
 
 
 @app.route("/case/<case_id>/search-run/<run_id>/screening", methods=["POST"])
@@ -912,6 +931,45 @@ def search_run_enrich(case_id, run_id):
     if not data:
         return jsonify({"error": "検索ランが見つかりません"}), 404
     return jsonify({"success": True, "run": data})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/diff", methods=["GET"])
+def search_run_diff(case_id, run_id):
+    """ラン run_id と base ランの hits 差分を返す。
+
+    query: ?base=<base_run_id>  (省略時は run の parent_run_id)
+    """
+    from services.search_run_service import compute_run_diff, load_run
+    base = request.args.get("base") or ""
+    if not base:
+        run = load_run(case_id, run_id)
+        if run:
+            base = run.get("parent_run_id") or ""
+    if not base:
+        return jsonify({"error": "base ラン ID が未指定かつ parent_run_id も存在しません"}), 400
+    diff = compute_run_diff(case_id, run_id, base)
+    if diff is None:
+        return jsonify({"error": "ランが見つかりません"}), 404
+    return jsonify(diff)
+
+
+@app.route("/case/<case_id>/search-run/validate-formula", methods=["POST"])
+def search_run_validate_formula(case_id):
+    """検索式の括弧バランス・構文チェック。
+
+    body: {"formula": "..."}
+    """
+    from services.search_run_service import validate_formula
+    body = request.get_json() or {}
+    formula = body.get("formula") or ""
+    return jsonify(validate_formula(formula))
+
+
+@app.route("/case/<case_id>/search-run/snippets", methods=["GET"])
+def search_run_snippets(case_id):
+    """検索式エディタ用のキーワード/FI/Fterm 挿入候補を返す。"""
+    from services.search_run_service import get_keyword_snippets
+    return jsonify(get_keyword_snippets(case_id))
 
 
 # ===== オートモード =====

@@ -67,23 +67,70 @@ _INPUT_SELECTORS = [
     # 論理式入力モード (推奨)
     'textarea[placeholder*="検索式"]',
     'textarea[formcontrolname="searchExpression"]',
+    'textarea[formcontrolname*="logical"]',
     'input[placeholder*="検索式"]',
-    # 簡易検索フォールバック
+    # 選択式検索 / 特許・実用新案検索のキーワード欄
     'input[placeholder*="キーワード"]',
-    'textarea[formcontrolname*="keyword"]',
+    'textarea[placeholder*="キーワード"]',
+    'textarea[formcontrolname*="keyword" i]',
+    'input[formcontrolname*="keyword" i]',
+    # フォーム内の最大の textarea / input (最後の手段)
+    'textarea:visible',
+    'input[type="text"]:visible',
 ]
 
 _SEARCH_BUTTON_SELECTORS = [
     'button:has-text("検索")',
     'button[mat-flat-button]:has-text("検索")',
+    'button[mat-raised-button]:has-text("検索")',
+    'button[color="primary"]:has-text("検索")',
     'button.search-button',
 ]
 
 _LOGIC_TAB_SELECTORS = [
-    # 論理式入力タブ
-    'div[role="tab"]:has-text("論理式")',
-    'mat-tab:has-text("論理式")',
+    # Angular Material (MDC) tab のラベル要素 — J-PlatPat はこれ
+    '.mat-mdc-tab .mdc-tab__text-label:has-text("論理式入力")',
+    '.mdc-tab__text-label:has-text("論理式入力")',
+    '.mat-mdc-tab:has-text("論理式入力")',
+    '.mat-tab-label-content:has-text("論理式入力")',
+    '.mat-tab-label:has-text("論理式入力")',
+    # role ベース
+    '[role="tab"]:has-text("論理式入力")',
+    '[role="tab"]:has-text("論理式")',
+    # 汎用フォールバック
     'button:has-text("論理式入力")',
+    'a:has-text("論理式入力")',
+    'mat-tab:has-text("論理式")',
+    'label:has-text("論理式")',
+    # ラジオボタン型の切替え
+    'mat-radio-button:has-text("論理式")',
+    'input[type="radio"] + label:has-text("論理式")',
+]
+
+# 論理式入力タブに切り替わった後に現れる textarea (検証用)
+_LOGIC_TEXTAREA_SELECTORS = [
+    'textarea[formcontrolname="searchFormula"]',
+    'textarea[formcontrolname*="ormula" i]',
+    'textarea[placeholder*="論理式"]',
+    'textarea[aria-label*="論理式"]',
+    'textarea.logical-formula',
+    # 最後の手段: 論理式タブ配下の textarea
+    'mat-tab-body[aria-hidden="false"] textarea',
+    '.mat-mdc-tab-body-active textarea',
+]
+
+# 初期表示されるモーダル / 同意ダイアログを閉じるセレクタ
+_DISMISS_SELECTORS = [
+    'button:has-text("閉じる")',
+    'button:has-text("OK")',
+    'button:has-text("同意")',
+    'button:has-text("はい")',
+    'button:has-text("続ける")',
+    'button[aria-label*="close" i]',
+    'button[aria-label*="閉じる"]',
+    '.modal button.close',
+    'mat-dialog-container button:has-text("閉じる")',
+    'mat-dialog-container button:has-text("OK")',
 ]
 
 
@@ -93,18 +140,24 @@ def run_jplatpat_search(
     max_results: int = 50,
     auto_click_search: bool = True,
     wait_for_user_ms: int = 0,
+    manual_fallback_wait_ms: int = 180000,
     on_progress: Optional[Callable[[str], None]] = None,
     persistent_profile: Optional[str] = None,
 ) -> List[JplatpatHit]:
     """J-PlatPat を可視ブラウザで開き、検索式を投入して結果一覧を返す。
 
+    自動入力に失敗した場合はクリップボードに式を置き、画面にバナーを表示して
+    ユーザーが手動で貼付＆検索できるよう最大 manual_fallback_wait_ms ミリ秒待機する。
+
     Args:
-        formula: 論理式 (J-PlatPat 構文: AND=半角空白, OR=+, NOT=-, フィールド=/TI,/AB,/CL,/FI,/FT)
+        formula: 論理式 (J-PlatPat 構文: AND=半角空白 or *, OR=+, NOT=半角/)
         max_results: 返す最大件数
         auto_click_search: 検索式入力後に検索ボタンを自動クリックするか。
             False の場合はユーザーが手動でクリック。
         wait_for_user_ms: 検索ボタンクリック後、結果スクレイピング前にユーザーの操作を
             待つミリ秒 (ページング等したい場合に利用)。
+        manual_fallback_wait_ms: 自動入力失敗時にユーザー操作を待つ最大ミリ秒 (既定 3 分)。
+            結果テーブルが現れた時点で早期終了する。
         on_progress: 進捗コールバック (str -> None)。UI 連携用。
         persistent_profile: 永続プロファイルのパス (ログイン状態維持用)。
 
@@ -140,64 +193,137 @@ def run_jplatpat_search(
             browser_ctx = browser.new_context(locale="ja-JP", viewport={"width": 1280, "height": 900})
             page = browser_ctx.new_page()
 
+        # クリップボード読み書き権限 (手動貼付フォールバック用)
+        try:
+            browser_ctx.grant_permissions(
+                ["clipboard-read", "clipboard-write"],
+                origin="https://www.j-platpat.inpit.go.jp",
+            )
+        except Exception:
+            pass
+
         try:
             _log(f"J-PlatPat を開く: {JPLATPAT_SEARCH_URL}")
             page.goto(JPLATPAT_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(1500)
 
-            # 論理式入力タブに切替え (存在すれば)
-            _log("論理式入力タブに切替え")
-            for sel in _LOGIC_TAB_SELECTORS:
-                try:
-                    loc = page.locator(sel).first
-                    if loc.count() > 0:
-                        loc.click(timeout=3000)
-                        page.wait_for_timeout(400)
-                        break
-                except Exception:
-                    continue
+            # クリップボードに式をセット (ユーザーが貼りやすいように)
+            try:
+                page.evaluate(
+                    "(f) => navigator.clipboard && navigator.clipboard.writeText(f)", formula
+                )
+                _log("検索式をクリップボードにコピーしました")
+            except Exception:
+                pass
+
+            # 初期モーダル (同意ダイアログ等) を閉じる
+            _dismiss_modals(page, _log)
+
+            # タブグループが描画されるまで少し待つ
+            try:
+                page.wait_for_selector(
+                    '.mat-mdc-tab-group, mat-tab-group, [role="tablist"]',
+                    timeout=8000,
+                )
+                _log("タブグループを検出")
+            except Exception:
+                _log("警告: タブグループが見つかりません (画面構造が変わっている可能性)")
+
+            # 論理式入力タブに切替え (最大3回リトライ + JSクリックフォールバック)
+            tab_switched = _switch_to_logic_tab(page, _log)
+            if not tab_switched:
+                _log("論理式タブ切替に失敗。現在のタブで入力を試行します")
 
             # 検索式を入力
             _log(f"検索式を入力: {formula[:80]}{'...' if len(formula) > 80 else ''}")
-            input_el = None
-            for sel in _INPUT_SELECTORS:
-                try:
-                    loc = page.locator(sel).first
-                    if loc.count() > 0 and loc.is_visible(timeout=2000):
-                        input_el = loc
-                        break
-                except Exception:
-                    continue
+            # 論理式タブが有効なら論理式 textarea を優先して探す
+            input_el = _find_logic_textarea(page) if tab_switched else None
+            if not input_el:
+                input_el = _find_visible_input(page)
 
             if not input_el:
-                _log("警告: 検索式入力欄を自動特定できませんでした。"
-                      "手動で式を貼り付けて検索してください。")
-                page.wait_for_timeout(max(wait_for_user_ms, 5000))
+                _log("警告: 検索式入力欄を自動特定できませんでした")
+                _show_manual_banner(page, formula)
+                fill_ok = False
             else:
-                input_el.click()
-                input_el.fill("")
-                input_el.type(formula, delay=5)
-                page.wait_for_timeout(300)
+                try:
+                    input_el.click()
+                    page.wait_for_timeout(200)
+                    # まず fill で一気に投入 (高速) → input イベント dispatch
+                    try:
+                        input_el.fill(formula)
+                    except Exception:
+                        input_el.fill("")
+                        input_el.type(formula, delay=8)
+                    try:
+                        input_el.evaluate(
+                            "el => el.dispatchEvent(new Event('input', {bubbles: true}))"
+                        )
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(300)
 
-                if auto_click_search:
-                    for sel in _SEARCH_BUTTON_SELECTORS:
+                    # 入力値が反映されたか検証 (Angular form と双方向バインドが失敗する事例あり)
+                    try:
+                        actual = input_el.input_value(timeout=1500) or ""
+                    except Exception:
+                        actual = ""
+                    if actual.strip() == "":
+                        _log("入力値が空のまま。type で再投入")
                         try:
-                            btn = page.locator(sel).first
-                            if btn.count() > 0 and btn.is_visible(timeout=1000):
-                                _log("検索ボタンをクリック")
-                                btn.click()
-                                break
+                            input_el.click()
+                            page.keyboard.type(formula, delay=6)
+                            page.wait_for_timeout(300)
+                            actual = input_el.input_value(timeout=1000) or ""
                         except Exception:
-                            continue
+                            pass
+                    if actual.strip() == "":
+                        _log("警告: 入力が反映されませんでした")
+                        _show_manual_banner(page, formula)
+                        fill_ok = False
+                    else:
+                        fill_ok = True
+                        _log(f"検索式を入力しました ({len(actual)}文字)")
+                except Exception as e:
+                    _log(f"自動入力に失敗: {e}")
+                    _show_manual_banner(page, formula)
+                    fill_ok = False
+
+            if fill_ok and auto_click_search:
+                clicked = False
+                for sel in _SEARCH_BUTTON_SELECTORS:
+                    try:
+                        btn = page.locator(sel).first
+                        if btn.count() > 0 and btn.is_visible(timeout=1000):
+                            _log(f"検索ボタンをクリック ({sel})")
+                            btn.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if not clicked:
+                    _log("検索ボタンが見つかりません。Enter キーで検索を試みます")
+                    try:
+                        page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+
+            # 検索後のモーダル (件数が多い等) を閉じる
+            page.wait_for_timeout(1500)
+            _dismiss_modals(page, _log)
 
             # 結果テーブル or 件数表示を待つ
             _log("検索結果を待機中")
+            result_selector = 'table tbody tr, .result-list, .result-row, .mat-row, .no-result, .result-count, [class*="result" i]'
+            timeout_ms = manual_fallback_wait_ms if not fill_ok else 45000
             try:
-                page.wait_for_selector(
-                    'table tbody tr, .result-list, .result-row, .mat-row, .no-result, .result-count',
-                    timeout=30000,
-                )
+                page.wait_for_selector(result_selector, timeout=timeout_ms)
+                _log("結果が表示されました")
             except Exception:
-                _log("警告: 結果の読み込みがタイムアウトしました")
+                _log(f"警告: 結果の読み込みが {timeout_ms}ms でタイムアウトしました")
+
+            # 結果テーブル出現後の追加モーダル閉じ
+            _dismiss_modals(page, _log)
 
             if wait_for_user_ms > 0:
                 _log(f"ユーザー操作待機 ({wait_for_user_ms}ms)")
@@ -207,7 +333,7 @@ def run_jplatpat_search(
             _log(f"取得: {len(hits)}件")
         finally:
             try:
-                page.wait_for_timeout(800)
+                page.wait_for_timeout(1500)
                 if browser:
                     browser.close()
                 else:
@@ -216,6 +342,148 @@ def run_jplatpat_search(
                 pass
 
     return hits
+
+
+def _dismiss_modals(page, log_fn) -> None:
+    """出現中のモーダルダイアログを閉じる (複数回試行)"""
+    for _ in range(3):
+        closed = False
+        for sel in _DISMISS_SELECTORS:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=300):
+                    loc.click(timeout=1000)
+                    log_fn(f"モーダルを閉じました: {sel}")
+                    page.wait_for_timeout(400)
+                    closed = True
+                    break
+            except Exception:
+                continue
+        if not closed:
+            break
+
+
+def _switch_to_logic_tab(page, log_fn) -> bool:
+    """論理式入力タブに切り替える。切替成功を textarea 出現で検証。"""
+    def _logic_textarea_visible() -> bool:
+        for sel in _LOGIC_TEXTAREA_SELECTORS:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() > 0 and loc.is_visible(timeout=500):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    # 既に論理式タブが開いている可能性をまず確認
+    if _logic_textarea_visible():
+        log_fn("論理式 textarea が既に表示されています")
+        return True
+
+    for attempt in range(3):
+        clicked = False
+        for sel in _LOGIC_TAB_SELECTORS:
+            try:
+                loc = page.locator(sel).first
+                cnt = loc.count()
+                if cnt == 0:
+                    continue
+                # force click: 他要素にオーバーラップされていても押す
+                try:
+                    loc.scroll_into_view_if_needed(timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    loc.click(timeout=2000, force=True)
+                    log_fn(f"タブ切替 試行{attempt+1}: {sel}")
+                    clicked = True
+                    break
+                except Exception:
+                    # JS クリックにフォールバック
+                    try:
+                        loc.evaluate("el => el.click()")
+                        log_fn(f"タブ切替 JS 試行{attempt+1}: {sel}")
+                        clicked = True
+                        break
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        page.wait_for_timeout(900)
+        if _logic_textarea_visible():
+            log_fn(f"論理式タブへの切替を検証 (試行{attempt+1})")
+            return True
+        if not clicked:
+            # クリック候補が 1 つも見つからなかった場合は早期終了
+            break
+
+    return False
+
+
+def _find_logic_textarea(page):
+    """論理式入力タブの textarea を返す。見つからなければ None。"""
+    for sel in _LOGIC_TEXTAREA_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                try:
+                    if loc.is_visible(timeout=1500):
+                        return loc
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _find_visible_input(page):
+    """候補セレクタから可視の入力欄を返す。見つからなければ None。"""
+    for sel in _INPUT_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0:
+                try:
+                    if loc.is_visible(timeout=1500):
+                        return loc
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _show_manual_banner(page, formula: str) -> None:
+    """画面上部にクリップボードから貼付を促すバナーを表示。"""
+    escaped = (formula or "").replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n")
+    js = """
+    (f) => {
+      const id = '__pc_banner__';
+      let el = document.getElementById(id);
+      if (el) el.remove();
+      el = document.createElement('div');
+      el.id = id;
+      el.style.cssText = [
+        'position:fixed', 'top:10px', 'left:50%', 'transform:translateX(-50%)',
+        'background:#b91c1c', 'color:#fff', 'padding:14px 22px',
+        'border-radius:10px', 'z-index:2147483647', 'font-size:15px',
+        'box-shadow:0 8px 24px rgba(0,0,0,.4)', 'max-width:80vw',
+        'font-family:sans-serif', 'line-height:1.5'
+      ].join(';');
+      el.innerHTML =
+        '<div style=\"font-weight:700; margin-bottom:4px;\">自動入力に失敗しました</div>' +
+        '<div>検索式はクリップボードにコピー済みです。</div>' +
+        '<div>検索フォームをクリック → <b>Ctrl + V</b> で貼付 → <b>検索</b> ボタンをクリックしてください。</div>' +
+        '<div style=\"margin-top:6px; font-family:monospace; background:rgba(0,0,0,.25); padding:4px 8px; border-radius:4px; font-size:12px; max-height:80px; overflow:auto; word-break:break-all;\">' + f.replace(/</g, '&lt;') + '</div>';
+      document.body.appendChild(el);
+      // 20秒後に自動で半透明化
+      setTimeout(() => { try { el.style.opacity = '0.35'; } catch(e){} }, 20000);
+    }
+    """
+    try:
+        page.evaluate(js, formula)
+    except Exception:
+        pass
 
 
 def _extract_hits(page, max_results: int, on_progress=None) -> List[JplatpatHit]:

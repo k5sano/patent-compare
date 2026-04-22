@@ -528,11 +528,59 @@
           <label style="font-size:0.85rem; margin-left:0.5rem;">最大件数:</label>
           <input type="number" id="sr-max" value="50" min="1" max="200" style="width:72px;">
         </div>
-        <textarea id="sr-formula" rows="3" placeholder="例: (化粧料+メイクアップ)*シリコーン"
-                  style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
-        <div class="btn-row" style="margin-top:0.5rem;">
+        <!-- 親ラン表示 (複製して編集の時のみ) -->
+        <div id="sr-parent-banner" class="sr-parent-banner" style="display:none;">
+          <span class="sr-parent-label">親ラン:</span>
+          <span id="sr-parent-info"></span>
+          <button class="sr-parent-clear" onclick="srClearParent()" title="親ラン参照をクリア">×</button>
+        </div>
+
+        <!-- エディタツールバー -->
+        <div class="sr-editor-toolbar">
+          <button class="sr-tool-btn" onclick="srInsertOp('*')" title="AND (かつ) 優先度:2">AND (*)</button>
+          <button class="sr-tool-btn" onclick="srInsertOp('+')" title="OR (または) 優先度:3">OR (+)</button>
+          <button class="sr-tool-btn" onclick="srInsertOp('-')" title="NOT (除外) 優先度:3 半角ハイフン">NOT (-)</button>
+          <button class="sr-tool-btn" onclick="srWrapBrackets()" title="[ ] 優先順位変更 (三重まで)">[ ]</button>
+          <button class="sr-tool-btn" onclick="srWrapParens()" title="( ) 同種キーワード群の省略 例: (a+b)/TX">( )</button>
+          <span class="sr-tool-sep"></span>
+          <span style="font-size:0.75rem; color:var(--text2);">構造タグ:</span>
+          <button class="sr-tool-btn" onclick="srAppendTag('/TX')" title="全文 (名称+要約+請求+明細書)">/TX</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/TI')" title="発明の名称">/TI</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/AB+CL')" title="要約+請求の範囲">/AB+CL</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/CL')" title="請求の範囲">/CL</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/FI')" title="FI 分類">/FI</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/FT')" title="Fターム">/FT</button>
+          <span class="sr-tool-sep"></span>
+          <button class="sr-tool-btn" onclick="srInsertProximity()" title="近傍検索 (A,5C,B/TX) C=語順あり N=語順なし">近傍</button>
+          <button class="sr-tool-btn" onclick="srAutoFixFormula()" title="NOT演算子の / → -、キーワード括弧に /TX を付与、全角記号→半角 など">🔧 式を自動修正</button>
+          <button class="sr-tool-btn" onclick="srToggleKwHelper()" title="キーワード辞書から挿入">＋ 語を挿入</button>
+          <span id="sr-formula-valid" class="sr-formula-valid"></span>
+        </div>
+
+        <textarea id="sr-formula" rows="6" placeholder="例: (化粧料+メイクアップ+ファンデーション)/AB+CL*(シリコーン+silicone)/AB+CL"
+                  style="width:100%; font-family:monospace; font-size:0.9rem; line-height:1.4;"
+                  oninput="srOnFormulaChange()"></textarea>
+
+        <!-- キーワードヘルパー (折りたたみ式) -->
+        <div id="sr-kw-helper" class="sr-kw-helper" style="display:none;">
+          <div class="sr-kw-helper-head">
+            <strong>キーワード辞書から挿入</strong>
+            <span style="font-size:0.75rem; color:var(--text2);">クリックで式に挿入されます</span>
+            <button class="sr-tool-btn" style="margin-left:auto;" onclick="srToggleKwHelper()">閉じる</button>
+          </div>
+          <div id="sr-kw-groups" class="sr-kw-groups"></div>
+          <div id="sr-kw-codes" class="sr-kw-codes"></div>
+        </div>
+
+        <div class="btn-row" style="margin-top:0.5rem; align-items:center; gap:0.6rem;">
           <button class="btn btn-primary" id="btn-sr-execute" onclick="searchRunExecute()">検索を実行</button>
-          <span id="sr-exec-status" style="font-size:0.8rem; color:var(--text2); margin-left:0.3rem;"></span>
+          <label style="font-size:0.82rem; display:inline-flex; align-items:center; gap:4px;" title="OFF の場合: J-PlatPat を自動で開かず、検索式だけ保存します (ラン作成、ヒット0件)">
+            <input type="checkbox" id="sr-enable-jplatpat-auto">
+            J-PlatPat 自動遷移
+          </label>
+          <button class="btn btn-secondary" onclick="srSaveFormulaOnly()" title="検索を実行せず、式だけラン登録して保存">💾 式だけ保存</button>
+          <button class="btn btn-secondary" onclick="srCopyMainFormula()" title="現在の式をクリップボードへ">📋 コピー</button>
+          <span id="sr-exec-status" style="font-size:0.8rem; color:var(--text2);"></span>
         </div>
         <div class="loading-msg" id="loading-sr-exec">
           <div class="spinner"></div>
@@ -560,7 +608,13 @@
         <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.6rem;">
           <h3 id="sr-hits-title" style="font-size:1rem; margin:0;">候補一覧</h3>
           <span id="sr-hits-stats" style="font-size:0.8rem; color:var(--text2);"></span>
+          <span style="flex:1"></span>
+          <button class="btn btn-outline" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
+                  onclick="srDuplicateCurrent()" title="この式を複製して編集モードに">この式を複製して編集</button>
         </div>
+
+        <!-- 親ランとの差分サマリ -->
+        <div id="sr-diff-summary" class="sr-diff-summary" style="display:none;"></div>
 
         <div class="btn-row" style="margin-top:0; margin-bottom:0.6rem; flex-wrap:wrap;">
           <button class="btn btn-outline" onclick="srEnrich()" title="Google Patents から要約/請求項1を取得">要約/請求項1 を取得</button>
