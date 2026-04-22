@@ -28,13 +28,88 @@ def _dict_path(field: str, name: str) -> str:
     return str(PROJECT_ROOT / "dictionaries" / field / name)
 
 
-# ── ツリー辞書（fterm_4c083_tree.json） ─────────────────────────
+# 分野 → 辞書ファイル名のマッピング
+# 2系統サポート:
+#   (a) "tree"      : {theme, nodes: {CODE: {label, examples, depth, parent, children}}, reverse_index}
+#   (b) "structure" : {theme_code, theme_name, categories: {GROUP: {label, entries: {CODE: {...}}}}}
+#
+# (b) はスケルトン定義用で、load 時に (a) 形式に正規化される。
+_FTERM_DICTS: dict = {
+    "cosmetics": {"file": "fterm_4c083_tree.json", "format": "tree"},
+    "laminate": {"file": "fterm_4f100_structure.json", "format": "structure"},
+}
+
+
+def _normalize_structure_to_tree(raw: dict) -> dict:
+    """カテゴリ型のスケルトン辞書を tree 形式に正規化して返す。
+
+    structure:
+        { theme_code, theme_name, categories: {GROUP: {label, entries: {CODE: {label, examples}}}} }
+    -> tree:
+        { theme, theme_name, nodes: {CODE: {label, examples, depth, parent, children}}, reverse_index }
+    """
+    theme = raw.get("theme_code") or raw.get("theme") or ""
+    theme_name = raw.get("theme_name") or ""
+    nodes: dict = {}
+    reverse: dict = {}
+
+    for group_code, group in (raw.get("categories") or {}).items():
+        group_label = group.get("label", "")
+        # グループノード（depth=1）
+        nodes[group_code] = {
+            "label": group_label,
+            "examples": [],
+            "depth": 1,
+            "parent": None,
+            "children": [],
+            "note": group.get("note", ""),
+        }
+        if group_label:
+            reverse.setdefault(group_label, []).append(group_code)
+
+        entries = group.get("entries") or {}
+        for code, entry in entries.items():
+            label = entry.get("label", "")
+            examples = entry.get("examples") or []
+            nodes[code] = {
+                "label": label,
+                "examples": examples,
+                "depth": 2,
+                "parent": group_code,
+                "children": [],
+                "note": entry.get("note", ""),
+            }
+            nodes[group_code]["children"].append(code)
+            # reverse_index は重複コード登録を避ける
+            seen_terms: set = set()
+            for term in [label] + list(examples):
+                if not term or term in seen_terms:
+                    continue
+                seen_terms.add(term)
+                bucket = reverse.setdefault(term, [])
+                if code not in bucket:
+                    bucket.append(code)
+
+    return {
+        "theme": theme,
+        "theme_name": theme_name,
+        "nodes": nodes,
+        "reverse_index": reverse,
+    }
+
+
+# ── ツリー辞書（統一アクセサ） ─────────────────────────
 
 def get_tree(field: str = "cosmetics") -> dict:
-    fname = {"cosmetics": "fterm_4c083_tree.json"}.get(field, "")
-    if not fname:
+    info = _FTERM_DICTS.get(field)
+    if not info:
         return {}
-    return _load_json(_dict_path(field, fname))
+    raw = _load_json(_dict_path(field, info["file"]))
+    if not raw:
+        return {}
+    if info["format"] == "structure":
+        return _normalize_structure_to_tree(raw)
+    return raw
 
 
 def get_nodes(field: str = "cosmetics") -> dict:
