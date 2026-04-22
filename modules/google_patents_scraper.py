@@ -214,6 +214,89 @@ def _extract_from_html(html: str, max_results: int) -> List[PatentHit]:
     return hits
 
 
+# --- 詳細ページ取得 ---
+
+def fetch_patent_detail(
+    patent_id: str,
+    *,
+    language: str = "ja",
+    timeout_ms: int = 20000,
+) -> dict:
+    """Google Patents の特許詳細ページから要約と請求項1を取得する。
+
+    Returns:
+        {"abstract": "...", "claim1": "...", "title": "...", "assignee": "...", "url": "..."}
+        取得失敗時は空文字列でフィールドが埋められる。
+    """
+    cleaned = re.sub(r'[\s\-/]', '', patent_id)
+    url = f"https://patents.google.com/patent/{cleaned}/{language}"
+
+    result = {
+        "patent_id": patent_id,
+        "url": url,
+        "title": "",
+        "abstract": "",
+        "claim1": "",
+        "assignee": "",
+    }
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return result
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(locale=language)
+                page = context.new_page()
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+
+                # タイトル
+                try:
+                    el = page.locator("h1#title, h1").first
+                    if el.count() > 0:
+                        result["title"] = (el.inner_text() or "").strip()[:200]
+                except Exception:
+                    pass
+
+                # 出願人
+                try:
+                    el = page.locator('dd[itemprop="assigneeCurrent"], dd[itemprop="assigneeOriginal"]').first
+                    if el.count() > 0:
+                        result["assignee"] = (el.inner_text() or "").strip()
+                except Exception:
+                    pass
+
+                # Abstract
+                try:
+                    el = page.locator('abstract, section[itemprop="abstract"]').first
+                    if el.count() > 0:
+                        txt = (el.inner_text() or "").strip()
+                        result["abstract"] = txt[:1500]
+                except Exception:
+                    pass
+
+                # Claim 1
+                try:
+                    el = page.locator('div.claim[num="00001"], div[num="00001"]').first
+                    if el.count() == 0:
+                        el = page.locator('.claim-text, .claim').first
+                    if el.count() > 0:
+                        txt = (el.inner_text() or "").strip()
+                        result["claim1"] = txt[:1500]
+                except Exception:
+                    pass
+            finally:
+                browser.close()
+    except Exception as e:
+        logger.warning("fetch_patent_detail error (%s): %s", patent_id, e)
+
+    return result
+
+
 # --- 便利関数 ---
 
 def search_patents_with_keywords(

@@ -729,6 +729,140 @@ def _auto_additional_search(case_dir, segs, hongan, field, meta, uncovered_ids, 
 # メインエントリポイント（SSEジェネレータ）
 # ------------------------------------------------------------------
 
+def _auto_formula_search(case_dir, case_id, meta, *, source="google_patents",
+                         levels=("narrow", "medium"), max_results=30,
+                         auto_dl_top_n=0, score_threshold=70):
+    """Stage 3 の search_formulas から検索式を実行して候補を収集し
+    search_run として保存する。auto_dl_top_n > 0 の場合、AI スコア上位 N 件を
+    自動で引用文献に登録する。"""
+    from services.search_run_service import (
+        get_formulas_from_keyword_dict, create_run_from_hits,
+        enrich_run, ai_score_run, load_run, mark_downloaded,
+    )
+    formulas = get_formulas_from_keyword_dict(case_id)
+    if not formulas:
+        return {"runs": 0, "total_hits": 0, "downloaded": 0}
+
+    total_hits = 0
+    runs_created = []
+
+    for level in levels:
+        spec = formulas.get(level)
+        if not spec:
+            continue
+        formula = (spec.get("formula_google_patents") if source == "google_patents"
+                   else spec.get("formula_jplatpat")) or ""
+        formula = formula.strip()
+        if not formula:
+            continue
+
+        if source == "google_patents":
+            from modules.google_patents_scraper import search_google_patents
+            raw = search_google_patents(formula, max_results=max_results)
+            hits = [{
+                "patent_id": h.patent_id, "title": h.title,
+                "applicant": h.assignee, "publication_date": h.priority_date,
+                "url": h.url,
+            } for h in raw]
+        elif source == "jplatpat":
+            # auto モードでは visible モードは避ける。必要なら別フラグで
+            from modules.jplatpat_client import run_jplatpat_search
+            raw = run_jplatpat_search(formula, max_results=max_results,
+                                       auto_click_search=True)
+            hits = [h.to_dict() for h in raw]
+        else:
+            continue
+
+        total_hits += len(hits)
+        run_data = create_run_from_hits(
+            case_id, formula=formula, formula_level=level,
+            source=source, hits=hits,
+        )
+        runs_created.append(run_data["run_id"])
+
+    if not runs_created:
+        return {"runs": 0, "total_hits": 0, "downloaded": 0}
+
+    # auto_dl_top_n > 0 ならスコアリング & 上位N件を自動DL
+    downloaded = 0
+    if auto_dl_top_n > 0:
+        for rid in runs_created:
+            try:
+                enrich_run(case_id, rid, limit=max_results)
+                ai_score_run(case_id, rid, limit=max_results)
+            except Exception as e:
+                logger.warning("auto enrich/score error: %s", e)
+                continue
+
+            data = load_run(case_id, rid)
+            if not data:
+                continue
+            scored = sorted(
+                [h for h in data["hits"] if h.get("ai_score") is not None],
+                key=lambda h: h["ai_score"], reverse=True,
+            )[:auto_dl_top_n]
+            top = [h for h in scored if h["ai_score"] >= score_threshold]
+            if not top:
+                continue
+
+            from services.search_service import search_download
+            pids = [h["patent_id"] for h in top if h.get("patent_id")]
+            if pids:
+                try:
+                    result, _ = search_download(case_id, pids, role="副引例")
+                    for r in (result.get("results") or []):
+                        if r.get("success"):
+                            mark_downloaded(case_id, rid, r.get("patent_id"), True)
+                            downloaded += 1
+                except Exception as e:
+                    logger.warning("auto search_download error: %s", e)
+
+    return {"runs": len(runs_created), "total_hits": total_hits, "downloaded": downloaded}
+
+
+def feedback_not_terms(case_id: str, min_occurrences: int = 2) -> dict:
+    """スクリーニング結果 (reject) から NOT 語候補を抽出する。
+
+    reject された候補の title / abstract / applicant に頻出するが、
+    star/triangle の候補には出現しない語を NOT 語として提案。
+    """
+    from services.search_run_service import list_runs, load_run
+    from collections import Counter
+    import re as _re
+
+    reject_tokens = Counter()
+    positive_tokens = Counter()
+
+    for run_summary in list_runs(case_id):
+        data = load_run(case_id, run_summary["run_id"])
+        if not data:
+            continue
+        for h in data.get("hits", []):
+            scr = h.get("screening") or "pending"
+            text = " ".join([
+                h.get("title") or "", h.get("applicant") or "",
+                (h.get("abstract") or "")[:500],
+            ])
+            tokens = _re.findall(r'[ァ-ヴー]{3,}|[一-龥]{2,}(?:剤|物|体|油|酸|液|層|膜|比|料)?', text)
+            if scr == "reject":
+                for t in tokens:
+                    reject_tokens[t] += 1
+            elif scr in ("star", "triangle"):
+                for t in tokens:
+                    positive_tokens[t] += 1
+
+    # 却下のみに出る語を抽出
+    candidates = []
+    for tok, cnt in reject_tokens.most_common(50):
+        if cnt < min_occurrences:
+            continue
+        if positive_tokens.get(tok, 0) > 0:
+            continue
+        candidates.append({"term": tok, "reject_count": cnt})
+
+    return {"not_term_candidates": candidates[:20]}
+
+
 def auto_run(case_ids, steps=None):
     """オートモード: 複数案件を順次自動処理（SSEジェネレータ）
 
@@ -738,6 +872,8 @@ def auto_run(case_ids, steps=None):
     Args:
         case_ids: 処理対象の案件IDリスト
         steps: 実行ステップのリスト（デフォルト: 全ステップ）
+            追加サポート: "formula_search" を含めると、Stage 3 の検索式を
+            Google Patents で実行して search_runs に保存する。
     """
     if steps is None:
         steps = ["keywords", "presearch", "download_citations", "compare", "excel"]
@@ -846,6 +982,30 @@ def auto_run(case_ids, steps=None):
                     # 残りのSSEイベントを送出
                     while not sse_queue.empty():
                         yield sse_queue.get_nowait()
+
+            # --- Step: Stage 3 検索式で自動検索 (J-PlatPat/Google Patents) ---
+            if "formula_search" in steps:
+                yield _sse_event("step_start", {
+                    "case_id": case_id, "step": "formula_search",
+                })
+                try:
+                    fs_result = _auto_formula_search(
+                        case_dir, case_id, meta,
+                        source="google_patents",
+                        levels=("narrow", "medium"),
+                        max_results=30,
+                        auto_dl_top_n=5,
+                        score_threshold=70,
+                    )
+                    yield _sse_event("step_done", {
+                        "case_id": case_id, "step": "formula_search",
+                        "detail": f"{fs_result['runs']}ラン / 計{fs_result['total_hits']}件 / 自動DL{fs_result['downloaded']}件",
+                    })
+                except Exception as e:
+                    yield _sse_event("step_error", {
+                        "case_id": case_id, "step": "formula_search",
+                        "error": str(e),
+                    })
 
             # --- Step: 引用文献DL ---
             if "download_citations" in steps:

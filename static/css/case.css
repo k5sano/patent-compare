@@ -391,3 +391,60 @@
     padding: 10px 20px; border-radius: 6px; font-size: 0.88rem; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     animation: toast-in 0.3s ease; }
   @keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ============================================================
+     Step 4.5: J-PlatPat 検索 & スクリーニング
+  ============================================================ */
+  .sr-formula-picker { background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.8rem; margin-bottom: 1rem; }
+  .sr-chip { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    padding: 3px 10px; border-radius: 12px; font-size: 0.78rem; cursor: pointer;
+    margin-right: 4px; margin-bottom: 4px; font-family: monospace; }
+  .sr-chip:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  .sr-runs-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+  .sr-run-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  .sr-run-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }
+  .sr-run-level { background: var(--accent); color: #fff; padding: 1px 8px; border-radius: 10px;
+    font-size: 0.72rem; font-weight: 700; }
+  .sr-run-source { color: var(--text2); font-size: 0.75rem; }
+  .sr-run-date { color: var(--text2); font-size: 0.75rem; }
+  .sr-run-count { color: var(--text); font-weight: 600; font-size: 0.8rem; }
+  .sr-run-formula { font-family: monospace; font-size: 0.75rem; color: var(--text2);
+    margin-top: 3px; word-break: break-all; }
+
+  .sr-hits-list { display: flex; flex-direction: column; gap: 6px; margin-top: 0.4rem; }
+  .sr-hit-card { background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; transition: border-color 0.15s; }
+  .sr-hit-card.sr-star { border-left-color: #eab308; background: #422006; }
+  .sr-hit-card.sr-triangle { border-left-color: #06b6d4; }
+  .sr-hit-card.sr-reject { border-left-color: #7f1d1d; opacity: 0.5; }
+  .sr-hit-card.sr-hold { border-left-color: #6b7280; }
+  .sr-hit-row1 { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.8rem; }
+  .sr-hit-actions { display: flex; gap: 2px; }
+  .sr-hit-actions button { background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    width: 24px; height: 24px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; padding: 0;
+    line-height: 1; }
+  .sr-hit-actions button:hover { background: var(--surface2); }
+  .sr-hit-actions button.sr-btn-star.active { background: #eab308; border-color: #eab308; color: #422006; }
+  .sr-hit-actions button.sr-btn-triangle.active { background: #06b6d4; border-color: #06b6d4; color: #fff; }
+  .sr-hit-actions button.sr-btn-reject.active { background: #7f1d1d; border-color: #7f1d1d; color: #fff; }
+  .sr-hit-actions button.sr-btn-hold.active { background: #6b7280; border-color: #6b7280; color: #fff; }
+  .sr-hit-actions button.sr-btn-pending.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .sr-hit-meta { display: flex; align-items: center; gap: 0.6rem; flex: 1; flex-wrap: wrap; font-size: 0.78rem; }
+  .sr-hit-pid { font-family: monospace; font-weight: 700; color: var(--text); }
+  .sr-hit-date { color: var(--text2); }
+  .sr-hit-ipc { color: var(--text2); font-family: monospace; font-size: 0.72rem; }
+  .sr-hit-link { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+  .sr-hit-link:hover { text-decoration: underline; }
+  .sr-hit-title { color: var(--text); margin-top: 3px; font-size: 0.86rem; font-weight: 500; }
+  .sr-hit-applicant { color: var(--text2); font-size: 0.75rem; margin-top: 2px; }
+  .sr-hit-details { margin-top: 4px; font-size: 0.78rem; }
+  .sr-hit-details summary { cursor: pointer; color: var(--accent); font-size: 0.75rem; }
+  .sr-hit-text { background: var(--surface); padding: 6px 10px; border-radius: 4px; margin-top: 3px;
+    white-space: pre-wrap; color: var(--text); font-size: 0.78rem; max-height: 200px; overflow-y: auto; }
+  .sr-hit-reason { margin-top: 3px; font-size: 0.72rem; color: var(--text2); font-style: italic; }
+  .sr-score { background: #14532d; color: #4ade80; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.7rem; font-weight: 700; }
+  .sr-dled { background: #14532d; color: #4ade80; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.7rem; }

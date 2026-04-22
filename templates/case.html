@@ -68,9 +68,12 @@
       <span class="num">4</span>引用文献
     </div>
     <div class="step" onclick="showPanel(4)">
-      <span class="num">5</span>対比
+      <span class="num">4.5</span>検索&スクリーニング
     </div>
     <div class="step" onclick="showPanel(5)">
+      <span class="num">5</span>対比
+    </div>
+    <div class="step" onclick="showPanel(6)">
       <span class="num">6</span>出力
     </div>
   </div>
@@ -488,7 +491,108 @@
         {% if citations %}
         <button class="btn btn-danger" onclick="clearAllCitations()">全文献クリア</button>
         {% endif %}
-        <button class="btn btn-outline" onclick="showPanel(4)">次へ: 対比 &rarr;</button>
+        <button class="btn btn-outline" onclick="showPanel(4)">次へ: 検索&amp;スクリーニング &rarr;</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Step 4.5: J-PlatPat 検索 & スクリーニング ===== -->
+  <div class="panel" id="panel-searchrun">
+    <div class="card">
+      <h2>Step 4.5: 検索式実行 &amp; 候補スクリーニング</h2>
+      <p style="font-size:0.85rem; color:var(--text2); margin-bottom:1rem;">
+        Stage 3 で生成した検索式を J-PlatPat (可視ブラウザ) / Google Patents で実行し、
+        ヒット候補を<strong>☆(主引例) / △(副引例) / ×(不要) / 保留</strong>にスクリーニング。
+        ☆を付けた候補はまとめて PDF DL → 引用文献に登録できます。
+      </p>
+
+      <!-- 検索式セレクタ -->
+      <div class="sr-formula-picker">
+        <h3 style="font-size:1rem; margin-bottom:0.5rem;">検索式を選択 / 入力</h3>
+        <div id="sr-formula-candidates" style="margin-bottom:0.6rem; font-size:0.85rem; color:var(--text2);">
+          Stage 3 の keyword_dictionary から読み込み中...
+        </div>
+        <div style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:center; margin-bottom:0.5rem;">
+          <label style="font-size:0.85rem;">レベル:</label>
+          <select id="sr-level">
+            <option value="narrow">narrow (狭)</option>
+            <option value="medium" selected>medium (中)</option>
+            <option value="wide">wide (広)</option>
+            <option value="custom">custom (手書き)</option>
+          </select>
+          <label style="font-size:0.85rem; margin-left:0.5rem;">検索エンジン:</label>
+          <select id="sr-source">
+            <option value="jplatpat" selected>J-PlatPat (可視ブラウザ)</option>
+            <option value="google_patents">Google Patents (ヘッドレス)</option>
+          </select>
+          <label style="font-size:0.85rem; margin-left:0.5rem;">最大件数:</label>
+          <input type="number" id="sr-max" value="50" min="1" max="200" style="width:72px;">
+        </div>
+        <textarea id="sr-formula" rows="3" placeholder="例: (化粧料+メイクアップ)*シリコーン"
+                  style="width:100%; font-family:monospace; font-size:0.85rem;"></textarea>
+        <div class="btn-row" style="margin-top:0.5rem;">
+          <button class="btn btn-primary" id="btn-sr-execute" onclick="searchRunExecute()">検索を実行</button>
+          <span id="sr-exec-status" style="font-size:0.8rem; color:var(--text2); margin-left:0.3rem;"></span>
+        </div>
+        <div class="loading-msg" id="loading-sr-exec">
+          <div class="spinner"></div>
+          <span>ブラウザで検索中... (可視モードの場合は開いたウィンドウを確認してください)</span>
+        </div>
+      </div>
+
+      <hr class="search-divider">
+
+      <!-- 検索ラン一覧 -->
+      <div>
+        <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+          <h3 style="font-size:1rem; margin:0;">実行済み検索ラン</h3>
+          <span id="sr-runs-count" style="font-size:0.8rem; color:var(--text2);"></span>
+          <button class="btn btn-outline" style="padding:0.2rem 0.6rem; font-size:0.75rem; margin-left:auto;"
+                  onclick="loadSearchRuns()">更新</button>
+        </div>
+        <div id="sr-runs-list" class="sr-runs-list"></div>
+      </div>
+
+      <hr class="search-divider">
+
+      <!-- 候補一覧・スクリーニング -->
+      <div id="sr-hits-panel" style="display:none;">
+        <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+          <h3 id="sr-hits-title" style="font-size:1rem; margin:0;">候補一覧</h3>
+          <span id="sr-hits-stats" style="font-size:0.8rem; color:var(--text2);"></span>
+        </div>
+
+        <div class="btn-row" style="margin-top:0; margin-bottom:0.6rem; flex-wrap:wrap;">
+          <button class="btn btn-outline" onclick="srEnrich()" title="Google Patents から要約/請求項1を取得">要約/請求項1 を取得</button>
+          <button class="btn btn-outline" onclick="srAiScore()" title="Claudeで本願との関連度スコアを付与">AI関連度スコア</button>
+          <button class="btn btn-success" onclick="srDownloadStarred()" title="☆マークの候補を一括DL&amp;引用登録">☆をまとめてDL&amp;引用登録</button>
+          <span style="flex:1"></span>
+          <label style="font-size:0.8rem; color:var(--text2);">フィルタ:</label>
+          <select id="sr-filter" onchange="renderSrHits()">
+            <option value="">全て</option>
+            <option value="star">☆ のみ</option>
+            <option value="triangle">△ のみ</option>
+            <option value="pending">未判定</option>
+            <option value="not-rejected">×以外</option>
+          </select>
+          <label style="font-size:0.8rem; color:var(--text2);">ソート:</label>
+          <select id="sr-sort" onchange="renderSrHits()">
+            <option value="default">元の順</option>
+            <option value="ai_score">AIスコア(高→低)</option>
+            <option value="date">公開日(新→古)</option>
+          </select>
+        </div>
+
+        <div class="loading-msg" id="loading-sr-enrich">
+          <div class="spinner"></div>
+          <span>要約/請求項1を取得中...</span>
+        </div>
+        <div class="loading-msg" id="loading-sr-aiscore">
+          <div class="spinner"></div>
+          <span>AI関連度スコアを計算中... (候補数により数分かかります)</span>
+        </div>
+
+        <div id="sr-hits-list" class="sr-hits-list"></div>
       </div>
     </div>
   </div>

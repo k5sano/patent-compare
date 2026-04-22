@@ -705,6 +705,215 @@ def search_report_pdf(case_id, filename):
     return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
 
 
+# ===== J-PlatPat 検索ラン (Step 4.5) =====
+
+@app.route("/case/<case_id>/search-run/formulas", methods=["GET"])
+def search_run_formulas(case_id):
+    """Stage 3 の keyword_dictionary.json から narrow/medium/wide の式を返す"""
+    from services.search_run_service import get_formulas_from_keyword_dict
+    return _svc_response({"formulas": get_formulas_from_keyword_dict(case_id)})
+
+
+@app.route("/case/<case_id>/search-run/list", methods=["GET"])
+def search_run_list(case_id):
+    from services.search_run_service import list_runs
+    return _svc_response({"runs": list_runs(case_id)})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>", methods=["GET"])
+def search_run_get(case_id, run_id):
+    from services.search_run_service import load_run
+    data = load_run(case_id, run_id)
+    if not data:
+        return jsonify({"error": "検索ランが見つかりません"}), 404
+    return jsonify(data)
+
+
+@app.route("/case/<case_id>/search-run/<run_id>", methods=["DELETE"])
+def search_run_delete(case_id, run_id):
+    from services.search_run_service import delete_run
+    ok = delete_run(case_id, run_id)
+    return jsonify({"success": ok}), (200 if ok else 404)
+
+
+@app.route("/case/<case_id>/search-run/execute", methods=["POST"])
+def search_run_execute(case_id):
+    """J-PlatPat (or Google Patents) で検索式を実行して run を保存。
+
+    body: {
+      "formula": "...",
+      "formula_level": "narrow" | "medium" | "wide" | "custom",
+      "source": "jplatpat" | "google_patents",
+      "max_results": 50,
+      "auto_click_search": true  # jplatpat のみ
+    }
+    """
+    body = request.get_json() or {}
+    formula = (body.get("formula") or "").strip()
+    level = body.get("formula_level") or "custom"
+    source = body.get("source") or "jplatpat"
+    max_results = int(body.get("max_results") or 50)
+
+    if not formula:
+        return jsonify({"error": "検索式が空です"}), 400
+
+    from services.search_run_service import create_run_from_hits
+
+    try:
+        if source == "jplatpat":
+            from modules.jplatpat_client import run_jplatpat_search, JPLATPAT_SEARCH_URL
+            hits = run_jplatpat_search(
+                formula,
+                max_results=max_results,
+                auto_click_search=bool(body.get("auto_click_search", True)),
+            )
+            search_url = JPLATPAT_SEARCH_URL
+        elif source == "google_patents":
+            from modules.google_patents_scraper import search_google_patents
+            raw = search_google_patents(formula, max_results=max_results)
+            hits = [{
+                "patent_id": h.patent_id, "title": h.title,
+                "applicant": h.assignee, "publication_date": h.priority_date,
+                "url": h.url,
+            } for h in raw]
+            search_url = f"https://patents.google.com/?q={formula}"
+        else:
+            return jsonify({"error": f"unknown source: {source}"}), 400
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"検索エラー: {e}"}), 500
+
+    data = create_run_from_hits(
+        case_id,
+        formula=formula,
+        formula_level=level,
+        source=source,
+        hits=hits,
+        search_url=search_url,
+    )
+    return jsonify({"success": True, "run": data})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/screening", methods=["POST"])
+def search_run_screening(case_id, run_id):
+    """単一候補のスクリーニング状態更新。
+
+    body: {"patent_id": "...", "screening": "star|triangle|reject|hold|pending", "note": "..."}
+    """
+    from services.search_run_service import update_screening
+    body = request.get_json() or {}
+    pid = body.get("patent_id")
+    scr = body.get("screening")
+    note = body.get("note")
+    if not pid or not scr:
+        return jsonify({"error": "patent_id と screening が必要です"}), 400
+    try:
+        data = update_screening(case_id, run_id, pid, scr, note=note)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if not data:
+        return jsonify({"error": "候補が見つかりません"}), 404
+    return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/screening/bulk", methods=["POST"])
+def search_run_screening_bulk(case_id, run_id):
+    from services.search_run_service import bulk_update_screening
+    body = request.get_json() or {}
+    updates = body.get("updates") or []
+    data = bulk_update_screening(case_id, run_id, updates)
+    if not data:
+        return jsonify({"error": "検索ランが見つかりません"}), 404
+    return jsonify({"success": True, "updated": len(updates)})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/download-starred", methods=["POST"])
+def search_run_download_starred(case_id, run_id):
+    """☆付き候補を一括でPDFダウンロード→引用文献登録。"""
+    from services.search_run_service import load_run, mark_downloaded
+    from services.search_service import search_download as svc_search_download
+
+    data = load_run(case_id, run_id)
+    if not data:
+        return jsonify({"error": "検索ランが見つかりません"}), 404
+
+    body = request.get_json() or {}
+    role = body.get("role", "主引例")
+
+    pids = [
+        h.get("patent_id") for h in data.get("hits", [])
+        if h.get("screening") == "star" and not h.get("downloaded_as_citation")
+        and h.get("patent_id")
+    ]
+    if not pids:
+        return jsonify({"error": "☆の候補がありません"}), 400
+
+    result, code = svc_search_download(case_id, pids, role=role)
+    # DL 成功のものにフラグを付ける
+    for r in (result.get("results") or []):
+        if r.get("success"):
+            mark_downloaded(case_id, run_id, r.get("patent_id"), True)
+    result["run_id"] = run_id
+    return jsonify(result), code
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/ai-score", methods=["POST"])
+def search_run_ai_score(case_id, run_id):
+    """AIで本願関連度スコアを付与 (Phase 2)"""
+    from services.search_run_service import ai_score_run
+    body = request.get_json() or {}
+    try:
+        data = ai_score_run(case_id, run_id, limit=int(body.get("limit") or 20))
+    except NotImplementedError:
+        return jsonify({"error": "AIスコア機能は未実装 (Phase2)"}), 501
+    if not data:
+        return jsonify({"error": "検索ランが見つかりません"}), 404
+    return jsonify({"success": True, "run": data})
+
+
+@app.route("/case/<case_id>/search-run/feedback/not-terms", methods=["GET"])
+def search_run_feedback_not_terms(case_id):
+    """却下された候補から NOT 語候補を抽出 (Phase 3)"""
+    from services.auto_service import feedback_not_terms
+    return jsonify(feedback_not_terms(case_id))
+
+
+@app.route("/case/<case_id>/search-run/merge", methods=["POST"])
+def search_run_merge(case_id):
+    """複数ランの hits をマージ＆重複排除して返す (永続化しない、プレビュー用)。
+
+    body: {"run_ids": ["...", "..."]}
+    """
+    from services.search_run_service import merge_runs, list_runs
+    body = request.get_json() or {}
+    run_ids = body.get("run_ids") or []
+    if not run_ids:
+        # 指定なしなら全ランマージ
+        run_ids = [r["run_id"] for r in list_runs(case_id)]
+    merged = merge_runs(case_id, run_ids)
+    return jsonify({
+        "success": True,
+        "run_ids": run_ids,
+        "hit_count": len(merged),
+        "hits": merged,
+    })
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/enrich", methods=["POST"])
+def search_run_enrich(case_id, run_id):
+    """候補の要約・請求項1を Google Patents から取得して埋める (Phase 2)"""
+    from services.search_run_service import enrich_run
+    body = request.get_json() or {}
+    try:
+        data = enrich_run(case_id, run_id, limit=int(body.get("limit") or 20))
+    except NotImplementedError:
+        return jsonify({"error": "Enrich 機能は未実装 (Phase2)"}), 501
+    if not data:
+        return jsonify({"error": "検索ランが見つかりません"}), 404
+    return jsonify({"success": True, "run": data})
+
+
 # ===== オートモード =====
 
 @app.route("/auto/run", methods=["POST"])

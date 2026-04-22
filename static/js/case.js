@@ -45,7 +45,8 @@ function showPanel(idx) {
       s.classList.toggle('active', i === idx);
     }
   });
-  if (idx === 5) loadComparisonSummary();
+  if (idx === 4) loadSearchRuns();
+  if (idx === 6) loadComparisonSummary();
 }
 
 // 初期表示: 最初の未完了ステップ
@@ -55,7 +56,7 @@ function showPanel(idx) {
   else if (!b.has_segments) showPanel(1);
   else if (!b.has_keywords) showPanel(2);
   else if (!b.has_citations) showPanel(3);
-  else showPanel(4);
+  else showPanel(5);
 })();
 
 // ================================================================
@@ -3105,7 +3106,324 @@ loadSearchStatus();
 const _origShowPanel = showPanel;
 showPanel = function(idx) {
   _origShowPanel(idx);
-  if (idx === 5) {
+  if (idx === 6) {
     loadCitationFullTexts();
   }
 };
+
+
+// ================================================================
+// Step 4.5: J-PlatPat 検索 & 候補スクリーニング
+// ================================================================
+
+let _srCurrentRun = null;        // 現在表示中の run データ
+let _srFormulas = {};            // Stage 3 由来の検索式
+let _srRuns = [];                // 検索ラン一覧
+
+const SR_SCREEN_LABELS = {
+  star: '★', triangle: '△', reject: '×', hold: '…', pending: '—',
+};
+const SR_SCREEN_CLASS = {
+  star: 'sr-star', triangle: 'sr-triangle', reject: 'sr-reject',
+  hold: 'sr-hold', pending: 'sr-pending',
+};
+
+async function loadSearchRuns() {
+  try {
+    // Stage 3 式
+    const fResp = await fetch(`/case/${CASE_ID}/search-run/formulas`);
+    const fData = await fResp.json();
+    _srFormulas = fData.formulas || {};
+    renderSrFormulaCandidates();
+  } catch (e) { console.warn('formula load error', e); }
+
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search-run/list`);
+    const data = await resp.json();
+    _srRuns = data.runs || [];
+    renderSrRunsList();
+  } catch (e) { console.warn('runs load error', e); }
+}
+
+function renderSrFormulaCandidates() {
+  const el = document.getElementById('sr-formula-candidates');
+  if (!el) return;
+  const keys = Object.keys(_srFormulas || {});
+  if (keys.length === 0) {
+    el.innerHTML = '<em>Stage 3 のキーワード辞書が未生成です。下の textarea に手動で検索式を書いてください。</em>';
+    return;
+  }
+  const chips = keys.map(k => {
+    const f = _srFormulas[k] || {};
+    const jp = (f.formula_jplatpat || '').trim();
+    const desc = f.description || '';
+    const short = jp.length > 40 ? jp.slice(0, 40) + '…' : jp;
+    const safe = String(jp).replace(/"/g, '&quot;');
+    return `<button class="sr-chip" data-level="${k}" data-formula="${safe}" title="${desc}"
+             onclick="srSelectFormula('${k}')">${k}: ${short}</button>`;
+  }).join(' ');
+  el.innerHTML = chips;
+}
+
+function srSelectFormula(level) {
+  const f = _srFormulas[level];
+  if (!f) return;
+  document.getElementById('sr-level').value = level;
+  document.getElementById('sr-formula').value = f.formula_jplatpat || '';
+}
+
+function renderSrRunsList() {
+  const el = document.getElementById('sr-runs-list');
+  const countEl = document.getElementById('sr-runs-count');
+  if (!el) return;
+  if (!_srRuns.length) {
+    el.innerHTML = '<div style="font-size:0.85rem; color:var(--text2); padding:0.5rem;">まだ検索ランがありません</div>';
+    if (countEl) countEl.textContent = '';
+    return;
+  }
+  if (countEl) countEl.textContent = `(${_srRuns.length}件)`;
+  el.innerHTML = _srRuns.map(r => {
+    const hit = r.hit_count ?? 0;
+    const star = r.stars ?? 0;
+    const fx = (r.formula || '').replace(/</g, '&lt;');
+    const short = fx.length > 80 ? fx.slice(0, 80) + '…' : fx;
+    return `<div class="sr-run-item" data-run-id="${r.run_id}">
+      <div class="sr-run-head">
+        <span class="sr-run-level">${r.formula_level || '?'}</span>
+        <span class="sr-run-source">${r.source || '?'}</span>
+        <span class="sr-run-date">${(r.created_at || '').slice(0, 16)}</span>
+        <span class="sr-run-count">${hit}件 / ★${star}</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-primary" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
+                onclick="srOpenRun('${r.run_id}')">開く</button>
+        <button class="btn btn-danger" style="padding:0.2rem 0.6rem; font-size:0.75rem;"
+                onclick="srDeleteRun('${r.run_id}')">削除</button>
+      </div>
+      <div class="sr-run-formula">${short}</div>
+    </div>`;
+  }).join('');
+}
+
+async function srDeleteRun(runId) {
+  if (!confirm(`ラン ${runId} を削除しますか？`)) return;
+  const r = await fetch(`/case/${CASE_ID}/search-run/${runId}`, {method: 'DELETE'});
+  if (r.ok) {
+    loadSearchRuns();
+    if (_srCurrentRun && _srCurrentRun.run_id === runId) {
+      _srCurrentRun = null;
+      document.getElementById('sr-hits-panel').style.display = 'none';
+    }
+  }
+}
+
+async function srOpenRun(runId) {
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/${runId}`);
+    if (!r.ok) { alert('ランの読み込みに失敗'); return; }
+    _srCurrentRun = await r.json();
+    document.getElementById('sr-hits-panel').style.display = 'block';
+    document.getElementById('sr-hits-title').textContent =
+      `候補一覧: ${_srCurrentRun.formula_level || ''} (${_srCurrentRun.source || ''})`;
+    renderSrHits();
+    document.getElementById('sr-hits-panel').scrollIntoView({behavior: 'smooth', block: 'start'});
+  } catch (e) { alert('エラー: ' + e.message); }
+}
+
+async function searchRunExecute() {
+  const formula = document.getElementById('sr-formula').value.trim();
+  if (!formula) { alert('検索式を入力してください'); return; }
+  const level = document.getElementById('sr-level').value;
+  const source = document.getElementById('sr-source').value;
+  const maxResults = parseInt(document.getElementById('sr-max').value || '50', 10);
+
+  const btn = document.getElementById('btn-sr-execute');
+  const loading = document.getElementById('loading-sr-exec');
+  const status = document.getElementById('sr-exec-status');
+  btn.disabled = true;
+  loading.classList.add('show');
+  status.textContent = '実行中…';
+
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        formula, formula_level: level, source,
+        max_results: maxResults,
+        auto_click_search: true,
+      }),
+    });
+    const data = await r.json();
+    btn.disabled = false;
+    loading.classList.remove('show');
+    if (!r.ok) { status.textContent = ''; alert(data.error || '実行エラー'); return; }
+    status.textContent = `${data.run?.hit_count ?? 0}件取得`;
+    await loadSearchRuns();
+    if (data.run?.run_id) { srOpenRun(data.run.run_id); }
+  } catch (e) {
+    btn.disabled = false;
+    loading.classList.remove('show');
+    status.textContent = '';
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+function renderSrHits() {
+  const el = document.getElementById('sr-hits-list');
+  if (!el) return;
+  if (!_srCurrentRun) { el.innerHTML = ''; return; }
+
+  const filter = (document.getElementById('sr-filter') || {}).value || '';
+  const sortBy = (document.getElementById('sr-sort') || {}).value || 'default';
+  let hits = [..._srCurrentRun.hits];
+
+  if (filter === 'star') hits = hits.filter(h => h.screening === 'star');
+  else if (filter === 'triangle') hits = hits.filter(h => h.screening === 'triangle');
+  else if (filter === 'pending') hits = hits.filter(h => (h.screening || 'pending') === 'pending');
+  else if (filter === 'not-rejected') hits = hits.filter(h => h.screening !== 'reject');
+
+  if (sortBy === 'ai_score') {
+    hits.sort((a, b) => (b.ai_score ?? -1) - (a.ai_score ?? -1));
+  } else if (sortBy === 'date') {
+    hits.sort((a, b) => (b.publication_date || '').localeCompare(a.publication_date || ''));
+  }
+
+  // 統計
+  const stats = _srCurrentRun.hits.reduce((acc, h) => {
+    const k = h.screening || 'pending';
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+  document.getElementById('sr-hits-stats').textContent =
+    `全${_srCurrentRun.hits.length}件 / ★${stats.star || 0} △${stats.triangle || 0} ×${stats.reject || 0} …${stats.hold || 0} 未${stats.pending || 0}`;
+
+  if (!hits.length) {
+    el.innerHTML = '<div style="font-size:0.85rem; color:var(--text2); padding:0.5rem;">フィルタ該当なし</div>';
+    return;
+  }
+
+  el.innerHTML = hits.map(h => srRenderHitCard(h)).join('');
+}
+
+function srRenderHitCard(h) {
+  const screening = h.screening || 'pending';
+  const scrClass = SR_SCREEN_CLASS[screening] || 'sr-pending';
+  const pid = h.patent_id || '';
+  const title = (h.title || '').replace(/</g, '&lt;');
+  const applicant = (h.applicant || '').replace(/</g, '&lt;');
+  const date = h.publication_date || '';
+  const ipc = (h.ipc || []).slice(0, 3).join(' ');
+  const abstract = (h.abstract || '').replace(/</g, '&lt;');
+  const claim1 = (h.claim1 || '').replace(/</g, '&lt;');
+  const aiScore = (h.ai_score != null) ? `<span class="sr-score">AI: ${h.ai_score}</span>` : '';
+  const aiReason = (h.ai_reason || '').replace(/</g, '&lt;');
+  const dled = h.downloaded_as_citation ? '<span class="sr-dled">引用登録済</span>' : '';
+  const jpUrl = (typeof buildJplatpatUrl === 'function') ? (buildJplatpatUrl(pid) || '') : '';
+  const gpUrl = `https://patents.google.com/?q=${encodeURIComponent(pid)}`;
+
+  return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
+    <div class="sr-hit-row1">
+      <div class="sr-hit-actions">
+        ${['star', 'triangle', 'pending', 'hold', 'reject'].map(s => {
+          const active = (s === screening) ? 'active' : '';
+          return `<button class="sr-btn-${s} ${active}" title="${s}"
+                   onclick="srSetScreening('${pid}', '${s}')">${SR_SCREEN_LABELS[s]}</button>`;
+        }).join('')}
+      </div>
+      <div class="sr-hit-meta">
+        <span class="sr-hit-pid">${pid}</span>
+        <span class="sr-hit-date">${date}</span>
+        <span class="sr-hit-ipc">${ipc}</span>
+        ${aiScore}${dled}
+        <span style="flex:1"></span>
+        ${jpUrl ? `<a href="${jpUrl}" target="_blank" class="sr-hit-link">J-PlatPat</a>` : ''}
+        <a href="${gpUrl}" target="_blank" class="sr-hit-link">Google Patents</a>
+      </div>
+    </div>
+    <div class="sr-hit-title">${title}</div>
+    <div class="sr-hit-applicant">${applicant}</div>
+    ${abstract ? `<details class="sr-hit-details"><summary>要約</summary><div class="sr-hit-text">${abstract}</div></details>` : ''}
+    ${claim1 ? `<details class="sr-hit-details"><summary>請求項1</summary><div class="sr-hit-text">${claim1}</div></details>` : ''}
+    ${aiReason ? `<div class="sr-hit-reason">AI: ${aiReason}</div>` : ''}
+  </div>`;
+}
+
+async function srSetScreening(patentId, screening) {
+  if (!_srCurrentRun) return;
+  // 楽観的更新
+  const hit = _srCurrentRun.hits.find(h => h.patent_id === patentId);
+  if (hit) hit.screening = screening;
+  renderSrHits();
+  try {
+    await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/screening`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patent_id: patentId, screening}),
+    });
+  } catch (e) { console.warn('screening save error', e); }
+}
+
+async function srEnrich() {
+  if (!_srCurrentRun) return;
+  const loading = document.getElementById('loading-sr-enrich');
+  loading.classList.add('show');
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/enrich`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({limit: 20}),
+    });
+    const data = await r.json();
+    loading.classList.remove('show');
+    if (!r.ok) { alert(data.error || 'Enrichエラー'); return; }
+    _srCurrentRun = data.run;
+    renderSrHits();
+  } catch (e) {
+    loading.classList.remove('show');
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function srAiScore() {
+  if (!_srCurrentRun) return;
+  if (!confirm('Claudeを呼び出して関連度スコアを計算します。\n未スコアの最大20件まで実行します。')) return;
+  const loading = document.getElementById('loading-sr-aiscore');
+  loading.classList.add('show');
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/ai-score`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({limit: 20}),
+    });
+    const data = await r.json();
+    loading.classList.remove('show');
+    if (!r.ok) { alert(data.error || 'AIスコアエラー'); return; }
+    _srCurrentRun = data.run;
+    document.getElementById('sr-sort').value = 'ai_score';
+    renderSrHits();
+  } catch (e) {
+    loading.classList.remove('show');
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function srDownloadStarred() {
+  if (!_srCurrentRun) return;
+  const stars = _srCurrentRun.hits.filter(h => h.screening === 'star' && !h.downloaded_as_citation);
+  if (!stars.length) { alert('☆の候補がありません (既にDL済みの可能性あり)'); return; }
+  const role = prompt(`☆マーク ${stars.length} 件をPDF DL&引用登録します。\n役割を入力 (主引例/副引例/技術常識):`, '副引例');
+  if (!role) return;
+  const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/download-starred`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({role}),
+  });
+  const data = await r.json();
+  if (!r.ok) { alert(data.error || 'DLエラー'); return; }
+  // ラン再読み込み
+  await srOpenRun(_srCurrentRun.run_id);
+  const results = data.results || [];
+  const ok = results.filter(x => x.success).length;
+  const fail = results.length - ok;
+  alert(`完了: 成功 ${ok} / 失敗 ${fail}\n失敗した文献は J-PlatPat リンクから手動DLしてください。`);
+}
