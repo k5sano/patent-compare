@@ -79,6 +79,11 @@ def case_detail(case_id):
         flash("案件が見つかりません。", "error")
         return redirect(url_for("index"))
 
+    # fallback 検索でフォルダ名が解決された場合、正規 URL にリダイレクト
+    canonical_id = meta.get("case_id", case_id)
+    if canonical_id != case_id:
+        return redirect(url_for("case_detail", case_id=canonical_id))
+
     case_dir = get_case_dir(case_id)
 
     hongan = load_json_file(case_id, "hongan.json")

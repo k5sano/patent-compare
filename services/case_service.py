@@ -43,10 +43,38 @@ def save_search_data(case_dir, filename, data):
 
 
 def load_case_meta(case_id):
+    """case_id に対応する案件 meta を返す。
+
+    フォールバック順:
+      1. cases/{case_id}/case.yaml が存在すればそれを読む
+      2. 各案件フォルダを走査し、yaml 内 case_id / jp_id / patent_number が
+         一致するものを探す (古いリンクや case_id 書換後の互換維持)
+    """
     p = get_case_dir(case_id) / "case.yaml"
     if p.exists():
         with open(p, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f)
+            meta = yaml.safe_load(f) or {}
+        # ディレクトリ名を正とする (yaml 内 case_id とのズレによる 404 回避)
+        meta["case_id"] = case_id
+        return meta
+
+    cases_dir = get_cases_dir()
+    if not cases_dir.exists():
+        return None
+    for d in cases_dir.iterdir():
+        if not d.is_dir():
+            continue
+        cand = d / "case.yaml"
+        if not cand.exists():
+            continue
+        try:
+            with open(cand, "r", encoding="utf-8") as f:
+                meta = yaml.safe_load(f) or {}
+        except Exception:
+            continue
+        if case_id in (meta.get("case_id"), meta.get("jp_id"), meta.get("patent_number")):
+            meta["case_id"] = d.name
+            return meta
     return None
 
 
@@ -64,6 +92,9 @@ def list_all_cases():
             if d.is_dir() and (d / "case.yaml").exists():
                 meta = load_case_meta(d.name)
                 if meta:
+                    # ディレクトリ名と yaml 内 case_id の不整合から生じる
+                    # リンク切れ (404) を防ぐため、常にディレクトリ名を正とする。
+                    meta["case_id"] = d.name
                     has_hongan = (d / "hongan.json").exists()
                     has_segments = (d / "segments.json").exists()
                     has_keywords = (d / "keywords.json").exists()
