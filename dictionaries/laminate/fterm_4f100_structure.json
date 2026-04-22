@@ -1,310 +1,3968 @@
 {
   "theme_code": "4F100",
   "theme_name": "積層体",
-  "version": "0.2.0-ai-draft",
-  "note": "AI (Claude) が JPO の 4F100 分類表の一般的構造に基づいて起草した拡張版。精度上の注意事項は fterm_4f100_README.md を参照。実際の J-PlatPat 検索で使用する前に、各コード番号を分類表検索で必ず確認してください。",
+  "ipc": "B32B1/00-43/00",
+  "source": "J-PlatPat Fタームリスト PDF (座標ベースパース)",
+  "version": "0.3.0-official",
   "categories": {
     "AA": {
-      "label": "層の種類 (特徴層の識別)",
+      "label": "無機化合物・単体化物・水酸化物",
       "entries": {
-        "AA01": {"label": "基材層",                  "examples": ["基材", "支持体"]},
-        "AA02": {"label": "表面層",                  "examples": ["表面", "最外層", "トップコート"]},
-        "AA03": {"label": "中間層",                  "examples": ["中間", "コア層"]},
-        "AA07": {"label": "裏面層・最裏層",          "examples": ["裏面", "バックコート"]},
-        "AA10": {"label": "印刷層",                  "examples": ["印刷", "インキ層", "グラビア印刷", "オフセット印刷"]},
-        "AA14": {"label": "帯電防止層",              "examples": ["帯電防止", "アンチスタティック"]},
-        "AA17": {"label": "接着層 / 粘着層",          "examples": ["粘着剤", "接着剤", "アンカーコート"]},
-        "AA20": {"label": "蒸着層 / 金属化層",        "examples": ["アルミ蒸着", "VM", "シリカ蒸着", "SiOx", "AlOx"]},
-        "AA21": {"label": "ハードコート層",           "examples": ["HC", "ハードコート", "耐擦傷"]},
-        "AA25": {"label": "ガスバリア層",             "examples": ["バリア", "EVOH層", "酸素バリア"]},
-        "AA30": {"label": "防湿層",                   "examples": ["防湿", "モイスチャーバリア"]},
-        "AA37": {"label": "易剥離層",                 "examples": ["易剥離", "ピール層", "セパレータ"]},
-        "AA40": {"label": "シーラント層",             "examples": ["シーラント", "ヒートシール層"]}
+        "AA01": {
+          "label": "無機化合物",
+          "depth": 1,
+          "examples": []
+        },
+        "AA02": {
+          "label": "無機金属化合物",
+          "depth": 2,
+          "examples": [
+            "けい酸塩",
+            "シリケート"
+          ]
+        },
+        "AA03": {
+          "label": "けい酸塩",
+          "depth": 3,
+          "examples": []
+        },
+        "AA04": {
+          "label": "燐酸塩",
+          "depth": 3,
+          "examples": []
+        },
+        "AA05": {
+          "label": "ハロゲン化物",
+          "depth": 3,
+          "examples": []
+        },
+        "AA06": {
+          "label": "アルカリ土類金属",
+          "depth": 0,
+          "examples": []
+        },
+        "AA07": {
+          "label": "硫酸塩",
+          "depth": 3,
+          "examples": []
+        },
+        "AA08": {
+          "label": "炭酸塩",
+          "depth": 3,
+          "examples": []
+        },
+        "AA09": {
+          "label": "硫化物",
+          "depth": 3,
+          "examples": []
+        },
+        "AA10": {
+          "label": "硫化銅",
+          "depth": 4,
+          "examples": []
+        },
+        "AA11": {
+          "label": "硫化亜鉛",
+          "depth": 4,
+          "examples": [
+            "窒化物"
+          ]
+        },
+        "AA12": {
+          "label": "窒化物",
+          "depth": 3,
+          "examples": []
+        },
+        "AA13": {
+          "label": "窒化アルミニウム",
+          "depth": 4,
+          "examples": []
+        },
+        "AA14": {
+          "label": "窒化ほう素",
+          "depth": 4,
+          "examples": []
+        },
+        "AA15": {
+          "label": "ハロゲン化",
+          "depth": 4,
+          "examples": []
+        },
+        "AA16": {
+          "label": "炭化けい素",
+          "depth": 4,
+          "examples": []
+        },
+        "AA17": {
+          "label": "物・水酸化物",
+          "depth": 0,
+          "examples": []
+        },
+        "AA18": {
+          "label": "アルカリ土類金属の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA19": {
+          "label": "アルミニウムの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA20": {
+          "label": "けい素の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA21": {
+          "label": "チタンの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA22": {
+          "label": "クロムの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA23": {
+          "label": "鉄の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA24": {
+          "label": "ニッケルの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA25": {
+          "label": "亜鉛の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA26": {
+          "label": "ゲルマニウムの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA27": {
+          "label": "ジルコニウムの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA28": {
+          "label": "錫の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA29": {
+          "label": "アンチモンの酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA30": {
+          "label": "鉛の酸化物・水酸化物",
+          "depth": 4,
+          "examples": []
+        },
+        "AA31": {
+          "label": "ほう化物",
+          "depth": 3,
+          "examples": [
+            "アルミナ",
+            "酸化アルミニウム",
+            "Al2O3"
+          ]
+        },
+        "AA32": {
+          "label": "けい化物",
+          "depth": 3,
+          "examples": []
+        },
+        "AA33": {
+          "label": "複酸化物・金属酸塩",
+          "depth": 3,
+          "examples": []
+        },
+        "AA34": {
+          "label": "チタン酸塩",
+          "depth": 4,
+          "examples": []
+        },
+        "AA36": {
+          "label": "単体",
+          "depth": 1,
+          "examples": []
+        },
+        "AA37": {
+          "label": "炭素",
+          "depth": 2,
+          "examples": [
+            "酸化チタン",
+            "TiO2"
+          ]
+        },
+        "AA40": {
+          "label": "その他の無機化合物・単体",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
     "AB": {
-      "label": "層の数",
+      "label": "金属材料",
       "entries": {
-        "AB01": {"label": "2層 (二層)",           "examples": ["2層", "二層"]},
-        "AB02": {"label": "3層 (三層)",           "examples": ["3層", "三層"]},
-        "AB03": {"label": "4層",                  "examples": ["4層", "四層"]},
-        "AB04": {"label": "5層",                  "examples": ["5層", "五層"]},
-        "AB05": {"label": "6層",                  "examples": ["6層", "六層"]},
-        "AB06": {"label": "7層以上 (多層)",       "examples": ["7層", "多層", "7層以上"]},
-        "AB10": {"label": "層数不特定",           "examples": ["多層構造", "複数層"]}
+        "AB01": {
+          "label": "金属",
+          "depth": 1,
+          "examples": []
+        },
+        "AB02": {
+          "label": "Ｆｅ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB03": {
+          "label": "鋼",
+          "depth": 3,
+          "examples": []
+        },
+        "AB04": {
+          "label": "ステンレス鋼",
+          "depth": 4,
+          "examples": []
+        },
+        "AB05": {
+          "label": "軟鋼",
+          "depth": 4,
+          "examples": []
+        },
+        "AB06": {
+          "label": "けい素鋼",
+          "depth": 4,
+          "examples": []
+        },
+        "AB07": {
+          "label": "炭素鋼",
+          "depth": 4,
+          "examples": []
+        },
+        "AB08": {
+          "label": "鋳鉄",
+          "depth": 3,
+          "examples": []
+        },
+        "AB09": {
+          "label": "アルカリ土類金属",
+          "depth": 2,
+          "examples": [
+            "アルミニウム",
+            "Al",
+            "アルミ"
+          ]
+        },
+        "AB10": {
+          "label": "Ａｌ",
+          "depth": 2,
+          "examples": [
+            "銅",
+            "Cu"
+          ]
+        },
+        "AB11": {
+          "label": "Ｓｉ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB12": {
+          "label": "Ｔｉ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB13": {
+          "label": "Ｃｒ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB14": {
+          "label": "Ｍｎ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB15": {
+          "label": "Ｃｏ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB16": {
+          "label": "Ｎｉ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB17": {
+          "label": "Ｃｕ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB18": {
+          "label": "Ｚｎ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB19": {
+          "label": "Ｚｒ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB20": {
+          "label": "Ｍｏ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB21": {
+          "label": "Ｓｎ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB22": {
+          "label": "Ｓｂ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB23": {
+          "label": "Ｐｂ",
+          "depth": 2,
+          "examples": []
+        },
+        "AB24": {
+          "label": "貴金属",
+          "depth": 2,
+          "examples": []
+        },
+        "AB25": {
+          "label": "Ａｕ",
+          "depth": 3,
+          "examples": []
+        },
+        "AB31": {
+          "label": "合金",
+          "depth": 1,
+          "examples": []
+        },
+        "AB32": {
+          "label": "サーメット",
+          "depth": 2,
+          "examples": []
+        },
+        "AB33": {
+          "label": "箔",
+          "depth": 1,
+          "examples": []
+        },
+        "AB40": {
+          "label": "その他の金属材料",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "AC": {
+      "label": "鉱物ック）",
+      "entries": {
+        "AC01": {
+          "label": "石綿",
+          "depth": 1,
+          "examples": []
+        },
+        "AC02": {
+          "label": "シラス",
+          "depth": 1,
+          "examples": []
+        },
+        "AC03": {
+          "label": "粘土",
+          "depth": 1,
+          "examples": []
+        },
+        "AC04": {
+          "label": "ゼオライト",
+          "depth": 1,
+          "examples": []
+        },
+        "AC05": {
+          "label": "マイカ",
+          "depth": 1,
+          "examples": []
+        },
+        "AC06": {
+          "label": "石材",
+          "depth": 1,
+          "examples": []
+        },
+        "AC10": {
+          "label": "その他の鉱物",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "AD": {
+      "label": "ック）セラミックック）",
+      "entries": {
+        "AD01": {
+          "label": "粘土製品（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD02": {
+          "label": "塩基性耐火物",
+          "depth": 1,
+          "examples": []
+        },
+        "AD03": {
+          "label": "酸化物（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD04": {
+          "label": "窒化物（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD05": {
+          "label": "窒化けい素（セラミック）",
+          "depth": 2,
+          "examples": []
+        },
+        "AD06": {
+          "label": "窒化ほう素（セラミック）",
+          "depth": 2,
+          "examples": []
+        },
+        "AD07": {
+          "label": "炭化物（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD08": {
+          "label": "炭化けい素（セラミック）",
+          "depth": 2,
+          "examples": []
+        },
+        "AD09": {
+          "label": "けい化物（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD10": {
+          "label": "ほう化物（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD11": {
+          "label": "炭素製品（セラミック）",
+          "depth": 1,
+          "examples": []
+        },
+        "AD20": {
+          "label": "その他のセラミック",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "AE": {
+      "label": "水硬性又は自硬性物質・組成物ト",
+      "entries": {
+        "AE01": {
+          "label": "無機質セメント",
+          "depth": 1,
+          "examples": []
+        },
+        "AE02": {
+          "label": "ポルトランドセメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE03": {
+          "label": "スラグセメント、高炉セメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE04": {
+          "label": "アルミナセメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE05": {
+          "label": "マグネシアセメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE06": {
+          "label": "石膏",
+          "depth": 2,
+          "examples": []
+        },
+        "AE07": {
+          "label": "石灰",
+          "depth": 2,
+          "examples": []
+        },
+        "AE08": {
+          "label": "けい酸塩セメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE09": {
+          "label": "けい酸カルシュウム",
+          "depth": 2,
+          "examples": []
+        },
+        "AE10": {
+          "label": "石綿セメント",
+          "depth": 2,
+          "examples": []
+        },
+        "AE11": {
+          "label": "レジンコンクリート",
+          "depth": 1,
+          "examples": []
+        },
+        "AE20": {
+          "label": "その他の硬化性物質",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "AH": {
-      "label": "特徴的な層 (機能別)",
+      "label": "有機化合物化合物",
       "entries": {
-        "AH01": {"label": "特徴層 - 熱可塑性樹脂",   "examples": ["熱可塑性"]},
-        "AH02": {"label": "特徴層 - 熱硬化性樹脂",   "examples": ["熱硬化性", "硬化樹脂"]},
-        "AH03": {"label": "特徴層 - 紫外線硬化樹脂", "examples": ["UV硬化", "光硬化"]},
-        "AH10": {"label": "特徴層 - 無機質層",       "examples": ["無機", "セラミック"]},
-        "AH20": {"label": "特徴層 - 発泡体層",       "examples": ["発泡", "フォーム層"]}
+        "AH01": {
+          "label": "非環式、炭素環式化合物",
+          "depth": 1,
+          "examples": []
+        },
+        "AH02": {
+          "label": "含酸素化合物",
+          "depth": 2,
+          "examples": []
+        },
+        "AH03": {
+          "label": "含窒素化合物",
+          "depth": 2,
+          "examples": []
+        },
+        "AH04": {
+          "label": "含硫黄化合物",
+          "depth": 2,
+          "examples": []
+        },
+        "AH05": {
+          "label": "含ハロゲン化合物",
+          "depth": 2,
+          "examples": []
+        },
+        "AH06": {
+          "label": "含けい素化合物・複素環式化合物",
+          "depth": 2,
+          "examples": []
+        },
+        "AH07": {
+          "label": "炭化物",
+          "depth": 3,
+          "examples": []
+        },
+        "AH08": {
+          "label": "金属含有化合物",
+          "depth": 1,
+          "examples": []
+        },
+        "AH10": {
+          "label": "その他の有機化合物",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "AJ": {
+      "label": "天然有機物",
+      "entries": {
+        "AJ01": {
+          "label": "天然高分子物質",
+          "depth": 1,
+          "examples": [
+            "紙",
+            "パルプ"
+          ]
+        },
+        "AJ02": {
+          "label": "植物質",
+          "depth": 2,
+          "examples": []
+        },
+        "AJ03": {
+          "label": "多糖類",
+          "depth": 3,
+          "examples": []
+        },
+        "AJ04": {
+          "label": "セルロース",
+          "depth": 4,
+          "examples": []
+        },
+        "AJ05": {
+          "label": "ロース",
+          "depth": 0,
+          "examples": []
+        },
+        "AJ06": {
+          "label": "セルロース誘導体",
+          "depth": 5,
+          "examples": []
+        },
+        "AJ07": {
+          "label": "デンプン",
+          "depth": 4,
+          "examples": [
+            "動物繊維",
+            "天然繊維"
+          ]
+        },
+        "AJ08": {
+          "label": "動物質",
+          "depth": 2,
+          "examples": []
+        },
+        "AJ09": {
+          "label": "動物性蛋白質",
+          "depth": 3,
+          "examples": []
+        },
+        "AJ10": {
+          "label": "金属の酸化",
+          "depth": 3,
+          "examples": []
+        },
+        "AJ11": {
+          "label": "ワックス",
+          "depth": 1,
+          "examples": []
+        },
+        "AJ20": {
+          "label": "その他の天然有機物",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "AK": {
-      "label": "層の材質",
-      "note": "最頻出カテゴリ。プラスチック系・無機系・その他まで含む。",
+      "label": "和結合以外の基が関与する重高分子材料Ｉ",
       "entries": {
-        "AK01": {"label": "ポリオレフィン (一般)",           "examples": ["ポリエチレン", "ポリプロピレン", "PE", "PP", "ポリオレフィン"]},
-        "AK02": {"label": "低密度ポリエチレン (LDPE)",       "examples": ["LDPE", "低密度ポリエチレン"]},
-        "AK03": {"label": "直鎖状低密度ポリエチレン (LLDPE)","examples": ["LLDPE", "直鎖状低密度ポリエチレン"]},
-        "AK04": {"label": "高密度ポリエチレン (HDPE)",        "examples": ["HDPE", "高密度ポリエチレン"]},
-        "AK05": {"label": "メタロセン系ポリエチレン",          "examples": ["メタロセン", "mPE", "シングルサイト"]},
-        "AK07": {"label": "エチレン共重合体 (一般)",          "examples": ["エチレン共重合体"]},
-        "AK08": {"label": "アイオノマー",                     "examples": ["アイオノマー", "Surlyn"]},
-        "AK09": {"label": "エチレン-酢酸ビニル共重合体 (EVA)", "examples": ["EVA", "エチレン酢酸ビニル", "エチレン-酢ビ"]},
-        "AK10": {"label": "エチレン-アクリル酸共重合体 (EAA)", "examples": ["EAA", "エチレンアクリル酸"]},
-        "AK11": {"label": "エチレン-メタクリル酸共重合体 (EMAA)","examples":["EMAA", "エチレンメタクリル酸"]},
-        "AK12": {"label": "エチレン-アクリル酸エステル (EEA等)","examples":["EEA", "EMA", "EBA", "エチレンアクリル酸エステル"]},
-        "AK15": {"label": "ポリプロピレン (PP)",              "examples": ["PP", "ポリプロピレン", "ホモPP"]},
-        "AK16": {"label": "プロピレン共重合体",                "examples": ["ランダムPP", "ブロックPP", "プロピレン共重合"]},
-        "AK17": {"label": "変性ポリオレフィン",                "examples": ["無水マレイン酸変性", "マレイン化", "MAH変性"]},
-        "AK18": {"label": "環状オレフィン系樹脂 (COC/COP)",    "examples": ["COC", "COP", "環状オレフィン", "シクロオレフィン"]},
-        "AK21": {"label": "ポリ塩化ビニル (PVC)",              "examples": ["PVC", "塩化ビニル"]},
-        "AK22": {"label": "ポリ塩化ビニリデン (PVDC)",          "examples": ["PVDC", "塩化ビニリデン", "サラン"]},
-        "AK23": {"label": "ポリビニルアルコール (PVA)",        "examples": ["PVA", "ポリビニルアルコール"]},
-        "AK24": {"label": "ポリ酢酸ビニル (PVAc)",              "examples": ["PVAc", "酢酸ビニル"]},
-        "AK25": {"label": "ポリエステル (一般)",                "examples": ["ポリエステル", "PET", "PEN"]},
-        "AK26": {"label": "ポリエチレンテレフタレート (PET)",   "examples": ["PET", "ポリエチレンテレフタレート"]},
-        "AK27": {"label": "ポリブチレンテレフタレート (PBT)",   "examples": ["PBT", "ポリブチレンテレフタレート"]},
-        "AK28": {"label": "ポリエチレンナフタレート (PEN)",     "examples": ["PEN", "ポリエチレンナフタレート"]},
-        "AK30": {"label": "生分解性ポリエステル (PLA/PBS/PBAT)","examples": ["PLA", "ポリ乳酸", "PBS", "PBAT", "ポリブチレンサクシネート", "生分解性"]},
-        "AK33": {"label": "ポリヒドロキシアルカノエート (PHA)",  "examples": ["PHA", "PHB", "PHBH"]},
-        "AK41": {"label": "ポリアミド (ナイロン系)",            "examples": ["ナイロン", "PA", "ポリアミド"]},
-        "AK42": {"label": "ポリアミド 6",                      "examples": ["ナイロン6", "PA6", "Ny6"]},
-        "AK43": {"label": "ポリアミド 66 / 610 / 612 等",       "examples": ["ナイロン66", "PA66", "ナイロン610"]},
-        "AK44": {"label": "MXD6 (芳香族ナイロン)",              "examples": ["MXD6", "ポリメタキシリレンアジパミド"]},
-        "AK45": {"label": "芳香族ポリアミド (アラミド)",        "examples": ["アラミド", "ケブラー", "ノーメックス"]},
-        "AK46": {"label": "ポリカーボネート (PC)",              "examples": ["PC", "ポリカーボネート"]},
-        "AK47": {"label": "ポリアセタール (POM)",              "examples": ["POM", "ポリアセタール"]},
-        "AK48": {"label": "ポリウレタン (PU)",                  "examples": ["PU", "ポリウレタン", "TPU"]},
-        "AK49": {"label": "ポリサルホン類 (PSU/PES)",           "examples": ["PSU", "PES", "ポリサルホン"]},
-        "AK51": {"label": "EVOH (エチレン-ビニルアルコール)",    "examples": ["EVOH", "エチレンビニルアルコール共重合体"]},
-        "AK54": {"label": "アクリル系樹脂 (PMMA 等)",           "examples": ["PMMA", "アクリル", "メタクリル樹脂"]},
-        "AK55": {"label": "ポリスチレン系 (PS/HIPS)",           "examples": ["PS", "ポリスチレン", "HIPS"]},
-        "AK56": {"label": "ABS / AS 樹脂",                      "examples": ["ABS", "AS", "SAN"]},
-        "AK58": {"label": "スチレン系エラストマー (SBS/SIS/SEBS)","examples": ["SBS", "SIS", "SEBS", "熱可塑性エラストマー", "TPE"]},
-        "AK61": {"label": "フッ素樹脂",                         "examples": ["PTFE", "PVDF", "ETFE", "フッ素樹脂", "テフロン"]},
-        "AK62": {"label": "シリコーン樹脂",                     "examples": ["シリコーン", "PDMS", "シリコーンゴム"]},
-        "AK63": {"label": "ポリフェニレンサルファイド (PPS)",    "examples": ["PPS", "ポリフェニレンサルファイド"]},
-        "AK64": {"label": "ポリイミド (PI)",                     "examples": ["PI", "ポリイミド", "カプトン"]},
-        "AK66": {"label": "PEEK / PEK",                         "examples": ["PEEK", "ポリエーテルエーテルケトン"]},
-        "AK68": {"label": "LCP (液晶ポリマー)",                 "examples": ["LCP", "液晶ポリマー"]},
-        "AK70": {"label": "金属 (一般)",                        "examples": ["金属", "Al", "Cu", "Fe", "SUS"]},
-        "AK71": {"label": "アルミニウム / 合金",                "examples": ["アルミ", "アルミニウム", "Al箔"]},
-        "AK72": {"label": "ステンレス (SUS)",                   "examples": ["SUS", "ステンレス"]},
-        "AK73": {"label": "銅 / 銅合金",                        "examples": ["銅", "Cu", "銅箔"]},
-        "AK74": {"label": "鋼 / 鉄",                            "examples": ["鋼", "鉄", "スチール", "SPCC"]},
-        "AK76": {"label": "チタン / チタン合金",                "examples": ["チタン", "Ti"]},
-        "AK77": {"label": "ニッケル / ニッケル合金",             "examples": ["ニッケル", "Ni"]},
-        "AK80": {"label": "紙 / 板紙 / セルロース",              "examples": ["紙", "板紙", "クラフト紙", "セルロース"]},
-        "AK81": {"label": "木材 / 木質材料",                    "examples": ["木材", "木質", "合板", "MDF"]},
-        "AK82": {"label": "織布 / 不織布",                      "examples": ["織布", "不織布", "繊維"]},
-        "AK83": {"label": "発泡体",                             "examples": ["発泡", "フォーム", "スポンジ", "ウレタンフォーム"]},
-        "AK84": {"label": "ガラス / ガラス繊維",                "examples": ["ガラス", "ガラス繊維", "GF"]},
-        "AK85": {"label": "セラミックス",                       "examples": ["セラミックス", "アルミナ", "シリカ"]},
-        "AK87": {"label": "無機コート (蒸着膜)",                "examples": ["SiOx", "AlOx", "SiNx", "DLC", "蒸着膜"]},
-        "AK90": {"label": "ゴム (一般)",                        "examples": ["ゴム", "エラストマー"]},
-        "AK91": {"label": "天然ゴム (NR)",                      "examples": ["NR", "天然ゴム"]},
-        "AK92": {"label": "合成ゴム (SBR/BR/IR/CR 等)",         "examples": ["SBR", "BR", "IR", "CR", "ニトリルゴム", "NBR"]}
+        "AK01": {
+          "label": "有機高分子材料",
+          "depth": 1,
+          "examples": [
+            "有機高分子",
+            "ポリマー",
+            "樹脂"
+          ]
+        },
+        "AK02": {
+          "label": "炭素―炭素不飽和結合のみが関与する重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AK03": {
+          "label": "オレフィン系重合体",
+          "depth": 3,
+          "examples": [
+            "ポリオレフィン",
+            "PO",
+            "オレフィン"
+          ]
+        },
+        "AK04": {
+          "label": "エチレン",
+          "depth": 4,
+          "examples": [
+            "ポリエチレン",
+            "PE",
+            "エチレン重合体"
+          ]
+        },
+        "AK05": {
+          "label": "高密度ポリエチレン",
+          "depth": 5,
+          "examples": [
+            "HDPE",
+            "高密度PE",
+            "高密度ポリエチレン"
+          ]
+        },
+        "AK06": {
+          "label": "低密度ポリエチレン",
+          "depth": 5,
+          "examples": [
+            "LDPE",
+            "低密度PE",
+            "低密度ポリエチレン",
+            "LLDPE"
+          ]
+        },
+        "AK07": {
+          "label": "プロピレン",
+          "depth": 4,
+          "examples": [
+            "ポリプロピレン",
+            "PP"
+          ]
+        },
+        "AK08": {
+          "label": "上のオレフィン",
+          "depth": 0,
+          "examples": []
+        },
+        "AK09": {
+          "label": "ブテン",
+          "depth": 5,
+          "examples": []
+        },
+        "AK10": {
+          "label": "塩素化ポリオレフィン",
+          "depth": 4,
+          "examples": [
+            "塩素化PE",
+            "CPE"
+          ]
+        },
+        "AK11": {
+          "label": "芳香族ビニル重合体",
+          "depth": 3,
+          "examples": [
+            "ポリスチレン",
+            "PS",
+            "スチレン重合体",
+            "芳香族ビニル"
+          ]
+        },
+        "AK12": {
+          "label": "スチレン系重合体",
+          "depth": 4,
+          "examples": []
+        },
+        "AK13": {
+          "label": "アリル樹脂",
+          "depth": 3,
+          "examples": []
+        },
+        "AK14": {
+          "label": "ハロゲン化ビニル系重合体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK15": {
+          "label": "塩化ビニル系重合体",
+          "depth": 4,
+          "examples": [
+            "ポリ塩化ビニル",
+            "PVC",
+            "塩ビ",
+            "塩化ビニル樹脂"
+          ]
+        },
+        "AK16": {
+          "label": "塩化ビニリデン系重合体",
+          "depth": 5,
+          "examples": [
+            "ポリ塩化ビニリデン",
+            "PVDC",
+            "塩化ビニリデン"
+          ]
+        },
+        "AK17": {
+          "label": "弗素樹脂",
+          "depth": 4,
+          "examples": []
+        },
+        "AK18": {
+          "label": "ポリ４弗化エチレン",
+          "depth": 5,
+          "examples": [
+            "PTFE",
+            "テフロン",
+            "ポリテトラフルオロエチレン"
+          ]
+        },
+        "AK19": {
+          "label": "ポリ弗化ビニリデン",
+          "depth": 5,
+          "examples": [
+            "PVDF",
+            "ポリフッ化ビニリデン"
+          ]
+        },
+        "AK21": {
+          "label": "ポリビニルアルコール、その誘導体",
+          "depth": 3,
+          "examples": [
+            "PVA",
+            "PVOH",
+            "ポリビニルアルコール"
+          ]
+        },
+        "AK22": {
+          "label": "ポリ酢酸ビニル",
+          "depth": 4,
+          "examples": [
+            "ポリ酢酸ビニル",
+            "PVAc"
+          ]
+        },
+        "AK23": {
+          "label": "ポリビニルアセタール",
+          "depth": 4,
+          "examples": []
+        },
+        "AK24": {
+          "label": "不飽和カルボン酸の重合体、その誘導体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK25": {
+          "label": "アクリル酸、アクリル酸エステルの重合体",
+          "depth": 4,
+          "examples": [
+            "ポリアクリル酸",
+            "アクリル樹脂",
+            "PMMA",
+            "メタクリル樹脂",
+            "アクリル"
+          ]
+        },
+        "AK26": {
+          "label": "ポリアクリルアミド",
+          "depth": 4,
+          "examples": []
+        },
+        "AK27": {
+          "label": "ポリアクリロニトリル",
+          "depth": 4,
+          "examples": [
+            "PAN",
+            "ポリアクリロニトリル",
+            "アクリロニトリル"
+          ]
+        },
+        "AK28": {
+          "label": "ジエン系重合体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK29": {
+          "label": "ポリブタジエン",
+          "depth": 4,
+          "examples": []
+        },
+        "AK30": {
+          "label": "アセチレン重合体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK31": {
+          "label": "炭素―炭素不飽和結合以外の基が関与する重",
+          "depth": 2,
+          "examples": []
+        },
+        "AK32": {
+          "label": "アルデヒド縮合樹脂",
+          "depth": 3,
+          "examples": []
+        },
+        "AK33": {
+          "label": "フェノール樹脂",
+          "depth": 4,
+          "examples": [
+            "フェノール樹脂",
+            "PF"
+          ]
+        },
+        "AK34": {
+          "label": "レゾール型フェノール樹脂",
+          "depth": 5,
+          "examples": []
+        },
+        "AK35": {
+          "label": "アミノ樹脂",
+          "depth": 4,
+          "examples": []
+        },
+        "AK36": {
+          "label": "樹脂、尿素樹脂",
+          "depth": 0,
+          "examples": []
+        },
+        "AK41": {
+          "label": "ポリエステル",
+          "depth": 3,
+          "examples": [
+            "ポリエステル",
+            "PET",
+            "ポリエチレンテレフタレート"
+          ]
+        },
+        "AK42": {
+          "label": "レンフタレート",
+          "depth": 0,
+          "examples": [
+            "PBT",
+            "ポリブチレンテレフタレート"
+          ]
+        },
+        "AK43": {
+          "label": "ポリアリレート",
+          "depth": 4,
+          "examples": [
+            "ポリアリレート",
+            "PEN",
+            "ポリエチレンナフタレート"
+          ]
+        },
+        "AK44": {
+          "label": "不飽和ポリエステル",
+          "depth": 4,
+          "examples": [
+            "不飽和ポリエステル",
+            "UP"
+          ]
+        },
+        "AK45": {
+          "label": "ポリカーボネート",
+          "depth": 4,
+          "examples": [
+            "ポリカーボネート",
+            "PC"
+          ]
+        },
+        "AK46": {
+          "label": "ポリアミド",
+          "depth": 3,
+          "examples": [
+            "ポリアミド",
+            "ナイロン",
+            "PA",
+            "ナイロン6",
+            "ナイロン66"
+          ]
+        },
+        "AK47": {
+          "label": "芳香族ポリアミド",
+          "depth": 4,
+          "examples": [
+            "芳香族ポリアミド",
+            "アラミド",
+            "アラミド樹脂"
+          ]
+        },
+        "AK48": {
+          "label": "脂肪族ポリアミド",
+          "depth": 4,
+          "examples": [
+            "脂肪族ポリアミド"
+          ]
+        },
+        "AK49": {
+          "label": "ポリイミド",
+          "depth": 3,
+          "examples": [
+            "ポリイミド",
+            "PI"
+          ]
+        },
+        "AK50": {
+          "label": "ポリアミドイミド",
+          "depth": 3,
+          "examples": [
+            "ポリアミドイミド",
+            "PAI"
+          ]
+        },
+        "AK51": {
+          "label": "ポリウレタン",
+          "depth": 3,
+          "examples": [
+            "ポリウレタン",
+            "PU",
+            "PUR"
+          ]
+        },
+        "AK52": {
+          "label": "再生セル",
+          "depth": 5,
+          "examples": [
+            "セロハン",
+            "セルロース",
+            "再生セルロース"
+          ]
+        },
+        "AK53": {
+          "label": "エポキシ樹脂",
+          "depth": 3,
+          "examples": [
+            "エポキシ樹脂",
+            "EP"
+          ]
+        },
+        "AK54": {
+          "label": "（―Ｏ―）",
+          "depth": 0,
+          "examples": []
+        },
+        "AK55": {
+          "label": "ポリスルフォン（―ＳＯ２―）",
+          "depth": 3,
+          "examples": [
+            "ポリスルホン",
+            "PSU"
+          ]
+        },
+        "AK56": {
+          "label": "ポリケトン（―ＣＯ―）",
+          "depth": 3,
+          "examples": []
+        },
+        "AK57": {
+          "label": "ポリスルフィド",
+          "depth": 3,
+          "examples": []
+        },
+        "AK61": {
+          "label": "特定の共重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AK62": {
+          "label": "レフィン共重合体",
+          "depth": 0,
+          "examples": []
+        },
+        "AK63": {
+          "label": "線状低密度ポリエチレン",
+          "depth": 4,
+          "examples": [
+            "LLDPE",
+            "線状低密度ポリエチレン"
+          ]
+        },
+        "AK64": {
+          "label": "エチレン―プロピレン共重合体",
+          "depth": 4,
+          "examples": []
+        },
+        "AK65": {
+          "label": "エチレン―ブテン共重合体",
+          "depth": 4,
+          "examples": []
+        },
+        "AK66": {
+          "label": "プロピレン―Ｃ４以上のオレフィン共重合体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK67": {
+          "label": "プロピレン―ブテン共重合体",
+          "depth": 4,
+          "examples": []
+        },
+        "AK68": {
+          "label": "オレフィン―酢酸ビニル共重合体",
+          "depth": 3,
+          "examples": [
+            "EVA",
+            "エチレン酢酸ビニル",
+            "エチレン-酢酸ビニル共重合体"
+          ]
+        },
+        "AK69": {
+          "label": "オレフィン―酢酸ビニル共重合体加水分解物",
+          "depth": 3,
+          "examples": [
+            "EVOH",
+            "エチレン-ビニルアルコール共重合体",
+            "エチレンビニルアルコール"
+          ]
+        },
+        "AK70": {
+          "label": "オレフィン―不飽和カルボン酸系共重合体（",
+          "depth": 3,
+          "examples": []
+        },
+        "AK71": {
+          "label": "オレフィン―アクリル系共重合体（除アクリ",
+          "depth": 3,
+          "examples": []
+        },
+        "AK73": {
+          "label": "スチレン―ブタジエン共重合体",
+          "depth": 3,
+          "examples": [
+            "SBR",
+            "スチレン-ブタジエン"
+          ]
+        },
+        "AK74": {
+          "label": "ＡＢＳ樹脂",
+          "depth": 3,
+          "examples": [
+            "ABS",
+            "ABS樹脂"
+          ]
+        },
+        "AK75": {
+          "label": "エチレン―プロピレン―ジエン共重合体",
+          "depth": 3,
+          "examples": []
+        },
+        "AK79": {
+          "label": "無機高分子",
+          "depth": 1,
+          "examples": []
+        },
+        "AK80": {
+          "label": "その他の高分子材料",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
-    "AR": {
-      "label": "添加剤 / 副成分",
-      "note": "材質 (AK) に含まれる添加物全般。",
+    "AL": {
+      "label": "高分子材料２れき青質",
       "entries": {
-        "AR01": {"label": "酸化防止剤",         "examples": ["酸化防止剤", "ヒンダードフェノール", "AO"]},
-        "AR02": {"label": "紫外線吸収剤 (UVA)",  "examples": ["紫外線吸収剤", "UVA", "HALS"]},
-        "AR03": {"label": "光安定剤",            "examples": ["光安定剤", "HALS"]},
-        "AR05": {"label": "滑剤",                "examples": ["滑剤", "エルカ酸アミド", "ステアリン酸"]},
-        "AR06": {"label": "アンチブロッキング剤","examples": ["アンチブロッキング", "シリカ", "AB剤"]},
-        "AR07": {"label": "帯電防止剤",          "examples": ["帯電防止剤", "アンチスタティック"]},
-        "AR10": {"label": "可塑剤",              "examples": ["可塑剤", "DOP", "DEHP", "DINP"]},
-        "AR15": {"label": "難燃剤",              "examples": ["難燃剤", "リン系難燃剤", "臭素系難燃剤"]},
-        "AR20": {"label": "顔料 / 着色剤",        "examples": ["顔料", "着色剤", "カーボンブラック", "酸化チタン"]},
-        "AR25": {"label": "フィラー / 無機充填剤","examples": ["フィラー", "タルク", "炭酸カルシウム", "CaCO3", "シリカ"]},
-        "AR30": {"label": "核剤 / 造核剤",        "examples": ["造核剤", "核剤"]},
-        "AR40": {"label": "粘着付与樹脂 (タッキファイヤ)","examples": ["タッキファイヤ", "ロジン", "テルペン樹脂"]},
-        "AR50": {"label": "架橋剤",              "examples": ["架橋剤", "イソシアネート", "ポリカルボジイミド"]}
+        "AL01": {
+          "label": "共重合体",
+          "depth": 1,
+          "examples": []
+        },
+        "AL02": {
+          "label": "ブロック共重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AL03": {
+          "label": "ランダム共重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AL04": {
+          "label": "グラフト共重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AL05": {
+          "label": "高分子組成物",
+          "depth": 1,
+          "examples": []
+        },
+        "AL06": {
+          "label": "変性された重合体",
+          "depth": 1,
+          "examples": []
+        },
+        "AL07": {
+          "label": "皮革",
+          "depth": 3,
+          "examples": []
+        },
+        "AL08": {
+          "label": "シリコーン変性重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "AL09": {
+          "label": "エラストマー",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "AN": {
+      "label": "ゴム材料",
+      "entries": {
+        "AN01": {
+          "label": "天然ゴム",
+          "depth": 1,
+          "examples": []
+        },
+        "AN02": {
+          "label": "合成ゴム",
+          "depth": 1,
+          "examples": []
+        },
+        "AN10": {
+          "label": "その他のゴム材料1/4",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "AP": {
+      "label": "木質材料機能・物性のみで特定",
+      "entries": {
+        "AP01": {
+          "label": "天然木材（単板）・合板",
+          "depth": 1,
+          "examples": []
+        },
+        "AP02": {
+          "label": "炭素数４以",
+          "depth": 4,
+          "examples": []
+        },
+        "AP03": {
+          "label": "パーティクルボード、ファイバーボード",
+          "depth": 1,
+          "examples": []
+        },
+        "AP10": {
+          "label": "その他の木質材料",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "BA": {
-      "label": "層の機能",
+      "label": "積層体の層構成の規定された積層体",
       "entries": {
-        "BA01": {"label": "基材層 (支持層)",    "examples": ["基材", "支持体"]},
-        "BA02": {"label": "表面保護層",          "examples": ["表面保護", "HC", "トップコート"]},
-        "BA03": {"label": "ガスバリア層",        "examples": ["ガスバリア", "酸素バリア", "OTR"]},
-        "BA04": {"label": "水蒸気バリア層",      "examples": ["水蒸気バリア", "WVTR", "防湿"]},
-        "BA05": {"label": "遮光層",              "examples": ["遮光", "ブラックアウト"]},
-        "BA06": {"label": "接着層 / 粘着層",      "examples": ["接着層", "粘着", "タッキファイヤ"]},
-        "BA07": {"label": "シーラント層 (ヒートシール層)","examples": ["シーラント", "ヒートシール", "HS層"]},
-        "BA08": {"label": "易開封層 / イージーピール","examples":["易開封", "イージーピール", "EasyPeel"]},
-        "BA10": {"label": "印刷受容層",          "examples": ["印刷層", "受容層"]},
-        "BA12": {"label": "帯電防止層",          "examples": ["帯電防止"]},
-        "BA15": {"label": "遮熱層 / 断熱層",      "examples": ["断熱", "遮熱"]},
-        "BA18": {"label": "導電層",              "examples": ["導電", "ITO", "導電性フィルム"]},
-        "BA20": {"label": "反射 / 反射防止層",    "examples": ["反射", "反射防止", "AR層"]},
-        "BA22": {"label": "光拡散層",            "examples": ["光拡散", "拡散層"]},
-        "BA25": {"label": "防眩層 (AG)",         "examples": ["防眩", "AG層", "アンチグレア"]},
-        "BA30": {"label": "抗菌 / 抗ウイルス層",   "examples": ["抗菌", "抗ウイルス"]},
-        "BA35": {"label": "易剥離層 / セパレータ","examples": ["セパレータ", "剥離層", "剥離紙"]},
-        "BA40": {"label": "放熱層",              "examples": ["放熱", "熱伝導"]}
+        "BA01": {
+          "label": "１層構造積層体",
+          "depth": 1,
+          "examples": []
+        },
+        "BA02": {
+          "label": "２層構造積層体",
+          "depth": 1,
+          "examples": [
+            "2層"
+          ]
+        },
+        "BA03": {
+          "label": "３層構造積層体",
+          "depth": 1,
+          "examples": [
+            "3層"
+          ]
+        },
+        "BA04": {
+          "label": "４層構造積層体",
+          "depth": 1,
+          "examples": [
+            "4層"
+          ]
+        },
+        "BA05": {
+          "label": "５層以上の層を有する積層体",
+          "depth": 1,
+          "examples": [
+            "5層以上",
+            "多層"
+          ]
+        },
+        "BA06": {
+          "label": "対称構造の積層体（ＡＢＡ）",
+          "depth": 1,
+          "examples": [
+            "対称構造",
+            "ABA"
+          ]
+        },
+        "BA07": {
+          "label": "非対称構造の積層体（ＡＢＣ）",
+          "depth": 1,
+          "examples": [
+            "非対称構造",
+            "ABC"
+          ]
+        },
+        "BA08": {
+          "label": "互層構造の積層体（ＡＢＡＢ、ＡＢＣＢＣ）",
+          "depth": 1,
+          "examples": [
+            "互層",
+            "ABAB",
+            "ABCBC"
+          ]
+        },
+        "BA10": {
+          "label": "外層",
+          "depth": 1,
+          "examples": []
+        },
+        "BA11": {
+          "label": "同層多重積層体（ＡＡＡ、ＡＡＢ）",
+          "depth": 1,
+          "examples": []
+        },
+        "BA12": {
+          "label": "形状同一層の多重積層体",
+          "depth": 2,
+          "examples": []
+        },
+        "BA13": {
+          "label": "同一材料層の多重積層体",
+          "depth": 2,
+          "examples": []
+        },
+        "BA14": {
+          "label": "同一材料層のみの多重積層体",
+          "depth": 3,
+          "examples": []
+        },
+        "BA15": {
+          "label": "樹脂材料層のみの多重積層体",
+          "depth": 4,
+          "examples": []
+        },
+        "BA16": {
+          "label": "ＡＫの３ドット展開内に含まれる樹脂のみの",
+          "depth": 5,
+          "examples": []
+        },
+        "BA21": {
+          "label": "層間の相対的関係の規定された積層体",
+          "depth": 1,
+          "examples": []
+        },
+        "BA22": {
+          "label": "方向性のある層の相対的配列を有する積層体",
+          "depth": 2,
+          "examples": []
+        },
+        "BA23": {
+          "label": "順方向に積層されたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "BA24": {
+          "label": "逆方向に積層されたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "BA25": {
+          "label": "層間の積層構成要素が相対的に相違する積層",
+          "depth": 2,
+          "examples": []
+        },
+        "BA26": {
+          "label": "層間で物性が相違するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA27": {
+          "label": "層間で配合割合が相違するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA28": {
+          "label": "層間で共重合比、変性比が相違するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA31": {
+          "label": "隣接する層間の結合状態が特定された積層体",
+          "depth": 1,
+          "examples": []
+        },
+        "BA32": {
+          "label": "部分的に結合されたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "BA33": {
+          "label": "網目状に結合されたもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA41": {
+          "label": "単一層の層構成要素が不均一",
+          "depth": 1,
+          "examples": []
+        },
+        "BA42": {
+          "label": "単一層の物性が不均一なもの",
+          "depth": 2,
+          "examples": []
+        },
+        "BA43": {
+          "label": "単一層の密度が不均一なもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA44": {
+          "label": "単一層の成分分布が不均一なもの",
+          "depth": 3,
+          "examples": []
+        }
       }
     },
-
     "CA": {
-      "label": "積層体の形状",
+      "label": "添加剤、充填材",
       "entries": {
-        "CA01": {"label": "フィルム (~250μm)",   "examples": ["フィルム", "薄膜"]},
-        "CA02": {"label": "シート (250μm~)",     "examples": ["シート"]},
-        "CA03": {"label": "板状体 / プレート",    "examples": ["板", "プレート", "ボード"]},
-        "CA05": {"label": "管状 / チューブ",      "examples": ["チューブ", "管", "パイプ"]},
-        "CA06": {"label": "瓶 / ボトル",          "examples": ["ボトル", "瓶", "チューブ容器"]},
-        "CA07": {"label": "袋 / パウチ",          "examples": ["パウチ", "袋", "スタンディングパウチ"]},
-        "CA10": {"label": "成形容器 / カップ",    "examples": ["カップ", "成形容器", "トレー"]},
-        "CA15": {"label": "異形成形物",           "examples": ["ブロー成形", "熱成形"]}
+        "CA01": {
+          "label": "発泡剤、膨脹剤",
+          "depth": 1,
+          "examples": [
+            "発泡剤",
+            "造核剤"
+          ]
+        },
+        "CA02": {
+          "label": "架橋剤、硬化剤",
+          "depth": 1,
+          "examples": [
+            "加硫剤"
+          ]
+        },
+        "CA03": {
+          "label": "加硫剤",
+          "depth": 2,
+          "examples": []
+        },
+        "CA04": {
+          "label": "可塑剤",
+          "depth": 1,
+          "examples": [
+            "安定剤",
+            "酸化防止剤"
+          ]
+        },
+        "CA05": {
+          "label": "安定剤",
+          "depth": 1,
+          "examples": [
+            "酸化防止剤"
+          ]
+        },
+        "CA06": {
+          "label": "酸化防止剤",
+          "depth": 1,
+          "examples": [
+            "紫外線吸収剤",
+            "UV吸収剤"
+          ]
+        },
+        "CA07": {
+          "label": "紫外線吸収剤",
+          "depth": 1,
+          "examples": [
+            "難燃剤"
+          ]
+        },
+        "CA08": {
+          "label": "難燃剤",
+          "depth": 1,
+          "examples": []
+        },
+        "CA09": {
+          "label": "酸素吸収剤",
+          "depth": 1,
+          "examples": []
+        },
+        "CA10": {
+          "label": "防曇剤",
+          "depth": 1,
+          "examples": []
+        },
+        "CA11": {
+          "label": "香料",
+          "depth": 1,
+          "examples": [
+            "顔料",
+            "色剤"
+          ]
+        },
+        "CA12": {
+          "label": "薬剤",
+          "depth": 1,
+          "examples": [
+            "染料"
+          ]
+        },
+        "CA13": {
+          "label": "着色剤、顔料",
+          "depth": 1,
+          "examples": []
+        },
+        "CA14": {
+          "label": "防錆剤",
+          "depth": 1,
+          "examples": [
+            "防錆剤"
+          ]
+        },
+        "CA15": {
+          "label": "防錆顔料",
+          "depth": 2,
+          "examples": []
+        },
+        "CA16": {
+          "label": "粘着付与剤",
+          "depth": 1,
+          "examples": []
+        },
+        "CA17": {
+          "label": "粘着防止剤",
+          "depth": 1,
+          "examples": [
+            "粘着付与剤"
+          ]
+        },
+        "CA18": {
+          "label": "界面活性剤",
+          "depth": 1,
+          "examples": [
+            "粘着防止剤"
+          ]
+        },
+        "CA19": {
+          "label": "滑材",
+          "depth": 1,
+          "examples": [
+            "滑剤"
+          ]
+        },
+        "CA20": {
+          "label": "磁性材",
+          "depth": 1,
+          "examples": []
+        },
+        "CA21": {
+          "label": "導電材",
+          "depth": 1,
+          "examples": []
+        },
+        "CA22": {
+          "label": "帯電・静電防止剤・充填材、補強材",
+          "depth": 1,
+          "examples": []
+        },
+        "CA23": {
+          "label": "メラミン",
+          "depth": 5,
+          "examples": []
+        },
+        "CA24": {
+          "label": "骨材",
+          "depth": 2,
+          "examples": []
+        },
+        "CA25": {
+          "label": "移行防止剤、マイグレーション防止剤",
+          "depth": 1,
+          "examples": []
+        },
+        "CA30": {
+          "label": "その他の添加剤、充填材",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "CB": {
+      "label": "接着材料塗装材料",
+      "entries": {
+        "CB01": {
+          "label": "溶剤型接着材料",
+          "depth": 1,
+          "examples": [
+            "溶剤型接着剤"
+          ]
+        },
+        "CB02": {
+          "label": "反応型接着材料",
+          "depth": 1,
+          "examples": [
+            "反応型接着剤"
+          ]
+        },
+        "CB03": {
+          "label": "ホットメルト型接着材料",
+          "depth": 1,
+          "examples": [
+            "ホットメルト"
+          ]
+        },
+        "CB04": {
+          "label": "光硬化型接着材料・感圧型接着材料",
+          "depth": 1,
+          "examples": [
+            "光硬化型接着剤"
+          ]
+        },
+        "CB05": {
+          "label": "ポリアルキ",
+          "depth": 4,
+          "examples": []
+        },
+        "CB10": {
+          "label": "その他の接着材料",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "CC": {
+      "label": "塗装材料平面以外の",
+      "entries": {
+        "CC01": {
+          "label": "溶剤型塗装材料",
+          "depth": 1,
+          "examples": []
+        },
+        "CC02": {
+          "label": "光硬化型塗装材料・熱硬化型塗装材料",
+          "depth": 1,
+          "examples": []
+        },
+        "CC03": {
+          "label": "けい素樹脂",
+          "depth": 3,
+          "examples": []
+        },
+        "CC10": {
+          "label": "その他の塗装材料",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "DA": {
-      "label": "物理的・機械的性質",
+      "label": "平面以外の一般形状構造",
       "entries": {
-        "DA01": {"label": "引張強度 / 弾性率",   "examples": ["引張強度", "弾性率", "ヤング率"]},
-        "DA03": {"label": "伸び / 破断伸度",      "examples": ["伸び", "破断伸度", "エロンゲーション"]},
-        "DA05": {"label": "耐衝撃性",             "examples": ["耐衝撃", "アイゾッド", "シャルピー"]},
-        "DA07": {"label": "耐摩耗性",             "examples": ["耐摩耗", "耐擦傷"]},
-        "DA10": {"label": "耐熱性 / 融点",        "examples": ["耐熱", "融点", "Tm", "HDT"]},
-        "DA12": {"label": "耐寒性",               "examples": ["耐寒", "低温特性"]},
-        "DA15": {"label": "寸法安定性",           "examples": ["寸法安定性", "熱収縮", "寸法変化"]},
-        "DA20": {"label": "ガス透過性 (OTR/WVTR)","examples": ["OTR", "酸素透過率", "WVTR", "水蒸気透過率"]},
-        "DA22": {"label": "透明性 / 光線透過率",   "examples": ["透明", "ヘイズ", "全光線透過率"]},
-        "DA25": {"label": "光沢 / 艶",            "examples": ["光沢", "グロス", "艶"]},
-        "DA30": {"label": "ヒートシール強度",      "examples": ["ヒートシール強度", "シール強度"]},
-        "DA35": {"label": "ラミネート強度 / 接着強度","examples":["ラミネート強度", "ピール強度", "接着強度"]},
-        "DA40": {"label": "耐薬品性 / 耐溶剤性",   "examples": ["耐薬品", "耐溶剤"]}
+        "DA01": {
+          "label": "容器（形状）",
+          "depth": 1,
+          "examples": []
+        },
+        "DA02": {
+          "label": "チューブ（形状）",
+          "depth": 2,
+          "examples": []
+        },
+        "DA03": {
+          "label": "容器の蓋（形状）",
+          "depth": 2,
+          "examples": []
+        },
+        "DA04": {
+          "label": "容器の口縁",
+          "depth": 2,
+          "examples": []
+        },
+        "DA05": {
+          "label": "容器の底部",
+          "depth": 2,
+          "examples": []
+        },
+        "DA06": {
+          "label": "容器の各部分における肉厚部",
+          "depth": 2,
+          "examples": []
+        },
+        "DA11": {
+          "label": "管状体",
+          "depth": 1,
+          "examples": []
+        },
+        "DA12": {
+          "label": "断面が偏平形状である管",
+          "depth": 2,
+          "examples": []
+        },
+        "DA13": {
+          "label": "管壁が蛇腹状である管",
+          "depth": 2,
+          "examples": []
+        },
+        "DA14": {
+          "label": "リブを有する管",
+          "depth": 2,
+          "examples": []
+        },
+        "DA15": {
+          "label": "ポリエーテル",
+          "depth": 3,
+          "examples": []
+        },
+        "DA16": {
+          "label": "棒状体",
+          "depth": 1,
+          "examples": []
+        },
+        "DA17": {
+          "label": "継手",
+          "depth": 1,
+          "examples": []
+        },
+        "DA20": {
+          "label": "その他の一般形状",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "DB": {
+      "label": "特定部分の形状・構造いるもの",
+      "entries": {
+        "DB01": {
+          "label": "端部の形状・構造",
+          "depth": 1,
+          "examples": []
+        },
+        "DB02": {
+          "label": "エチレン―オ",
+          "depth": 3,
+          "examples": []
+        },
+        "DB03": {
+          "label": "るもの",
+          "depth": 0,
+          "examples": []
+        },
+        "DB04": {
+          "label": "切断端面の形状・構造",
+          "depth": 3,
+          "examples": []
+        },
+        "DB05": {
+          "label": "結合部に連結部材を有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB06": {
+          "label": "結合部にシール部材を有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB07": {
+          "label": "折り返し部を有するもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB08": {
+          "label": "薄肉部が形成されているもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB09": {
+          "label": "フランジを有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB10": {
+          "label": "段差を有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB11": {
+          "label": "端部が分岐しているもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB12": {
+          "label": "端部が湾曲しているもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB13": {
+          "label": "端部に凸状を有するもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB14": {
+          "label": "端部に溝を有するもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DB15": {
+          "label": "端部の整形",
+          "depth": 2,
+          "examples": []
+        },
+        "DB16": {
+          "label": "被覆部材を有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB17": {
+          "label": "枠材を有するもの",
+          "depth": 3,
+          "examples": []
+        },
+        "DB18": {
+          "label": "端部以外の特定部分の形状・構造",
+          "depth": 1,
+          "examples": []
+        },
+        "DB19": {
+          "label": "曲げ加工部の形状・構造",
+          "depth": 2,
+          "examples": []
+        },
+        "DB20": {
+          "label": "その他の特定部分",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DC": {
+      "label": "不連続層の形状・構造",
+      "entries": {
+        "DC01": {
+          "label": "ハニカム",
+          "depth": 1,
+          "examples": [
+            "ハニカム"
+          ]
+        },
+        "DC02": {
+          "label": "ハニカムコア",
+          "depth": 2,
+          "examples": []
+        },
+        "DC03": {
+          "label": "円柱状のセル",
+          "depth": 3,
+          "examples": []
+        },
+        "DC04": {
+          "label": "酸変性重合体",
+          "depth": 2,
+          "examples": []
+        },
+        "DC05": {
+          "label": "分布が不均一なもの",
+          "depth": 0,
+          "examples": []
+        },
+        "DC06": {
+          "label": "スリット入りのセル、ハニカム",
+          "depth": 2,
+          "examples": []
+        },
+        "DC07": {
+          "label": "セル内に充填物を有するもの",
+          "depth": 2,
+          "examples": [
+            "有孔層"
+          ]
+        },
+        "DC11": {
+          "label": "有孔層・網状層",
+          "depth": 1,
+          "examples": []
+        },
+        "DC12": {
+          "label": "長孔",
+          "depth": 2,
+          "examples": []
+        },
+        "DC13": {
+          "label": "切込み、切目",
+          "depth": 2,
+          "examples": []
+        },
+        "DC14": {
+          "label": "模様形状の孔",
+          "depth": 2,
+          "examples": []
+        },
+        "DC15": {
+          "label": "格子状の孔",
+          "depth": 2,
+          "examples": []
+        },
+        "DC16": {
+          "label": "網状層",
+          "depth": 2,
+          "examples": []
+        },
+        "DC17": {
+          "label": "切り起こし",
+          "depth": 2,
+          "examples": []
+        },
+        "DC21": {
+          "label": "分離片からなる層",
+          "depth": 1,
+          "examples": []
+        },
+        "DC22": {
+          "label": "管の継目部分",
+          "depth": 2,
+          "examples": []
+        },
+        "DC23": {
+          "label": "ブロック片",
+          "depth": 2,
+          "examples": []
+        },
+        "DC24": {
+          "label": "棒状片",
+          "depth": 2,
+          "examples": []
+        },
+        "DC25": {
+          "label": "中空片",
+          "depth": 2,
+          "examples": []
+        },
+        "DC26": {
+          "label": "管状体",
+          "depth": 3,
+          "examples": []
+        },
+        "DC27": {
+          "label": "柱状片",
+          "depth": 2,
+          "examples": []
+        },
+        "DC28": {
+          "label": "目地のあるもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DC30": {
+          "label": "その他の不連続層",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DD": {
+      "label": "連続層の形状・構造",
+      "entries": {
+        "DD01": {
+          "label": "凹凸",
+          "depth": 1,
+          "examples": []
+        },
+        "DD02": {
+          "label": "独立凹凸",
+          "depth": 2,
+          "examples": []
+        },
+        "DD03": {
+          "label": "独立凸部",
+          "depth": 3,
+          "examples": []
+        },
+        "DD04": {
+          "label": "凸条",
+          "depth": 2,
+          "examples": []
+        },
+        "DD05": {
+          "label": "凹溝",
+          "depth": 2,
+          "examples": []
+        },
+        "DD06": {
+          "label": "連続凹凸",
+          "depth": 2,
+          "examples": []
+        },
+        "DD07": {
+          "label": "微小凹凸、粗面",
+          "depth": 2,
+          "examples": []
+        },
+        "DD08": {
+          "label": "（大きさ、分布）",
+          "depth": 0,
+          "examples": []
+        },
+        "DD09": {
+          "label": "凹部に充填",
+          "depth": 2,
+          "examples": []
+        },
+        "DD11": {
+          "label": "変形シ－ト",
+          "depth": 1,
+          "examples": []
+        },
+        "DD12": {
+          "label": "波形",
+          "depth": 2,
+          "examples": []
+        },
+        "DD13": {
+          "label": "波形の曲率を特定",
+          "depth": 3,
+          "examples": []
+        },
+        "DD14": {
+          "label": "角波",
+          "depth": 3,
+          "examples": []
+        },
+        "DD15": {
+          "label": "斜行波",
+          "depth": 3,
+          "examples": []
+        },
+        "DD16": {
+          "label": "蛇行波",
+          "depth": 3,
+          "examples": []
+        },
+        "DD17": {
+          "label": "箱形凹凸",
+          "depth": 2,
+          "examples": []
+        },
+        "DD18": {
+          "label": "ピラミッド型凹凸",
+          "depth": 2,
+          "examples": []
+        },
+        "DD19": {
+          "label": "凹凸の不均一（大きさ、分布）",
+          "depth": 2,
+          "examples": []
+        },
+        "DD20": {
+          "label": "凹部に充填",
+          "depth": 2,
+          "examples": []
+        },
+        "DD21": {
+          "label": "空気室",
+          "depth": 2,
+          "examples": []
+        },
+        "DD22": {
+          "label": "独立空気室",
+          "depth": 3,
+          "examples": []
+        },
+        "DD23": {
+          "label": "球状の空気室",
+          "depth": 4,
+          "examples": []
+        },
+        "DD24": {
+          "label": "接合膜・隔膜を有するもの",
+          "depth": 4,
+          "examples": []
+        },
+        "DD25": {
+          "label": "封入物を有するもの",
+          "depth": 4,
+          "examples": []
+        },
+        "DD26": {
+          "label": "膨張剤",
+          "depth": 5,
+          "examples": []
+        },
+        "DD27": {
+          "label": "連通空気室",
+          "depth": 3,
+          "examples": []
+        },
+        "DD28": {
+          "label": "空気バルブを有するもの",
+          "depth": 4,
+          "examples": []
+        },
+        "DD31": {
+          "label": "包被体",
+          "depth": 1,
+          "examples": []
+        },
+        "DD32": {
+          "label": "完全包被体",
+          "depth": 2,
+          "examples": []
+        },
+        "DD40": {
+          "label": "その他の連続層",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DE": {
+      "label": "粉粒体等、又はそれより構成される層",
+      "entries": {
+        "DE01": {
+          "label": "粉、粒",
+          "depth": 1,
+          "examples": []
+        },
+        "DE02": {
+          "label": "鱗片",
+          "depth": 1,
+          "examples": []
+        },
+        "DE03": {
+          "label": "ウィスカー",
+          "depth": 1,
+          "examples": []
+        },
+        "DE04": {
+          "label": "微小球",
+          "depth": 1,
+          "examples": []
+        },
+        "DE05": {
+          "label": "チップ、小片",
+          "depth": 1,
+          "examples": []
+        },
+        "DE06": {
+          "label": "塊状物",
+          "depth": 1,
+          "examples": []
+        },
+        "DE10": {
+          "label": "その他の粉粒体等",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DG": {
+      "label": "繊維又はそれより構成される層",
+      "entries": {
+        "DG01": {
+          "label": "繊維",
+          "depth": 1,
+          "examples": [
+            "パルプ状物"
+          ]
+        },
+        "DG02": {
+          "label": "パルプ状物",
+          "depth": 2,
+          "examples": [
+            "短繊維"
+          ]
+        },
+        "DG03": {
+          "label": "短繊維",
+          "depth": 2,
+          "examples": [
+            "長繊維"
+          ]
+        },
+        "DG04": {
+          "label": "長繊維",
+          "depth": 2,
+          "examples": [
+            "不織布",
+            "フェルト"
+          ]
+        },
+        "DG06": {
+          "label": "繊維集合体、繊維ウェッブ",
+          "depth": 1,
+          "examples": []
+        },
+        "DG07": {
+          "label": "糸、紐、綱",
+          "depth": 1,
+          "examples": []
+        },
+        "DG08": {
+          "label": "植毛",
+          "depth": 1,
+          "examples": []
+        },
+        "DG10": {
+          "label": "紙、抄造物",
+          "depth": 1,
+          "examples": []
+        },
+        "DG11": {
+          "label": "布帛",
+          "depth": 1,
+          "examples": []
+        },
+        "DG12": {
+          "label": "織物",
+          "depth": 2,
+          "examples": []
+        },
+        "DG13": {
+          "label": "編物",
+          "depth": 2,
+          "examples": []
+        },
+        "DG14": {
+          "label": "その他の特定組織を有する布帛",
+          "depth": 2,
+          "examples": []
+        },
+        "DG15": {
+          "label": "不織布、フェルト",
+          "depth": 2,
+          "examples": []
+        },
+        "DG16": {
+          "label": "立毛を有する布帛",
+          "depth": 2,
+          "examples": []
+        },
+        "DG17": {
+          "label": "繊維材料を混合してなる層",
+          "depth": 1,
+          "examples": []
+        },
+        "DG18": {
+          "label": "異なる種類の繊維を混合したもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DG19": {
+          "label": "異なる形状の繊維材料を組合わせたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "DG20": {
+          "label": "その他の繊維材料",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DH": {
+      "label": "補強部材を有する層多孔質構造を有する層",
+      "entries": {
+        "DH01": {
+          "label": "プリプレグ",
+          "depth": 1,
+          "examples": []
+        },
+        "DH02": {
+          "label": "ＦＲＰ",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DJ": {
+      "label": "多孔質構造を有する層材料供給、調整",
+      "entries": {
+        "DJ01": {
+          "label": "発泡体層",
+          "depth": 1,
+          "examples": []
+        },
+        "DJ02": {
+          "label": "独立気泡を有する発泡体層",
+          "depth": 2,
+          "examples": []
+        },
+        "DJ03": {
+          "label": "連続気泡を有する発泡体層",
+          "depth": 2,
+          "examples": []
+        },
+        "DJ04": {
+          "label": "発泡性を内在する層",
+          "depth": 2,
+          "examples": []
+        },
+        "DJ05": {
+          "label": "発泡性粒子から形成された層",
+          "depth": 3,
+          "examples": []
+        },
+        "DJ06": {
+          "label": "延伸により形成された多孔質層",
+          "depth": 1,
+          "examples": []
+        },
+        "DJ10": {
+          "label": "その他の多孔質構造",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "EA": {
+      "label": "材料供給、調整積層手段",
+      "entries": {
+        "EA01": {
+          "label": "材料供給",
+          "depth": 1,
+          "examples": []
+        },
+        "EA02": {
+          "label": "長尺物の供給",
+          "depth": 2,
+          "examples": []
+        },
+        "EA03": {
+          "label": "短尺物の供給",
+          "depth": 2,
+          "examples": []
+        },
+        "EA04": {
+          "label": "液体の供給",
+          "depth": 2,
+          "examples": []
+        },
+        "EA05": {
+          "label": "粉、粒、短繊維の供給",
+          "depth": 2,
+          "examples": []
+        },
+        "EA06": {
+          "label": "材料調整",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "EC": {
-      "label": "表面処理 / 層間処理",
+      "label": "積層手段",
       "entries": {
-        "EC01": {"label": "コロナ処理",         "examples": ["コロナ処理", "コロナ放電"]},
-        "EC02": {"label": "プラズマ処理",        "examples": ["プラズマ処理", "大気圧プラズマ"]},
-        "EC03": {"label": "火炎処理",            "examples": ["火炎処理", "フレーム処理"]},
-        "EC05": {"label": "UV/オゾン処理",        "examples": ["UV処理", "オゾン処理"]},
-        "EC10": {"label": "アンカーコート / プライマー","examples":["プライマー", "アンカーコート", "AC剤"]},
-        "EC15": {"label": "エンボス / 凹凸加工",   "examples": ["エンボス", "凹凸", "マット加工"]}
+        "EC01": {
+          "label": "圧接",
+          "depth": 1,
+          "examples": []
+        },
+        "EC02": {
+          "label": "爆発圧接",
+          "depth": 2,
+          "examples": []
+        },
+        "EC03": {
+          "label": "融着、溶着",
+          "depth": 1,
+          "examples": []
+        },
+        "EC04": {
+          "label": "転写",
+          "depth": 1,
+          "examples": []
+        },
+        "EC05": {
+          "label": "無圧積層",
+          "depth": 1,
+          "examples": []
+        },
+        "EC07": {
+          "label": "機械的結合",
+          "depth": 1,
+          "examples": []
+        },
+        "EC08": {
+          "label": "縫合",
+          "depth": 2,
+          "examples": []
+        },
+        "EC09": {
+          "label": "ニードリング、絡合",
+          "depth": 2,
+          "examples": []
+        },
+        "EC10": {
+          "label": "嵌合2/4",
+          "depth": 2,
+          "examples": []
+        },
+        "EC11": {
+          "label": "面ファスナー",
+          "depth": 2,
+          "examples": []
+        },
+        "EC12": {
+          "label": "固定具を用いるもの",
+          "depth": 2,
+          "examples": []
+        },
+        "EC13": {
+          "label": "釘、針、ねじを用いるもの",
+          "depth": 3,
+          "examples": []
+        },
+        "EC14": {
+          "label": "埋込み、アンカー",
+          "depth": 2,
+          "examples": []
+        },
+        "EC15": {
+          "label": "結合媒体",
+          "depth": 1,
+          "examples": []
+        },
+        "EC16": {
+          "label": "ろう付け、半田付け",
+          "depth": 2,
+          "examples": []
+        },
+        "EC17": {
+          "label": "溶接",
+          "depth": 2,
+          "examples": []
+        },
+        "EC18": {
+          "label": "接着剤の使用",
+          "depth": 2,
+          "examples": []
+        },
+        "EC20": {
+          "label": "その他の積層手段",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
     "EH": {
-      "label": "特殊な使用目的 / 機能",
+      "label": "層形成手段ート・帯状材料の巻き付け（スパイラル",
       "entries": {
-        "EH01": {"label": "包装用 (食品)",        "examples": ["食品包装", "レトルト", "スナック"]},
-        "EH02": {"label": "包装用 (医薬・医療)",   "examples": ["医薬包装", "PTP", "ブリスター"]},
-        "EH03": {"label": "包装用 (化粧品)",       "examples": ["化粧品包装", "チューブ容器"]},
-        "EH10": {"label": "光学用 (ディスプレイ)", "examples": ["ディスプレイ", "液晶", "LCD", "有機EL", "OLED"]},
-        "EH11": {"label": "光学用 (偏光板/位相差板)","examples":["偏光板", "位相差板", "光学フィルム"]},
-        "EH13": {"label": "タッチパネル用",         "examples": ["タッチパネル", "ITO"]},
-        "EH20": {"label": "電子部品用 / FPC",       "examples": ["FPC", "フレキシブル基板", "銅張積層板", "CCL"]},
-        "EH25": {"label": "電池用",                "examples": ["電池", "セパレータ", "ラミネート外装", "リチウムイオン"]},
-        "EH30": {"label": "太陽電池 / バックシート","examples":["太陽電池", "バックシート", "PV"]},
-        "EH35": {"label": "半導体製造用",           "examples": ["半導体", "ダイシング", "バックグラインド"]},
-        "EH40": {"label": "建材 / 内装",            "examples": ["建材", "化粧板", "壁紙", "床材"]},
-        "EH45": {"label": "自動車・車両用",          "examples": ["自動車", "車両", "内装材"]},
-        "EH50": {"label": "農業・土木用",            "examples": ["農業", "マルチフィルム", "土木シート"]},
-        "EH55": {"label": "生活用品・文具",           "examples": ["文具", "ラベル", "シール"]},
-        "EH60": {"label": "電子レンジ対応",           "examples": ["電子レンジ", "自動蒸通"]}
+        "EH01": {
+          "label": "前もって形成されている層のみの積層",
+          "depth": 1,
+          "examples": []
+        },
+        "EH03": {
+          "label": "多段階積層",
+          "depth": 2,
+          "examples": []
+        },
+        "EH07": {
+          "label": "複数の含浸基材の積層",
+          "depth": 2,
+          "examples": []
+        },
+        "EH11": {
+          "label": "新たな層の形成を伴うもの",
+          "depth": 1,
+          "examples": []
+        },
+        "EH13": {
+          "label": "層間に新たな層の形成",
+          "depth": 2,
+          "examples": []
+        },
+        "EH15": {
+          "label": "層両面に新たな層の形成",
+          "depth": 2,
+          "examples": [
+            "押出"
+          ]
+        },
+        "EH17": {
+          "label": "押出",
+          "depth": 2,
+          "examples": []
+        },
+        "EH20": {
+          "label": "共押出",
+          "depth": 3,
+          "examples": []
+        },
+        "EH31": {
+          "label": "注型、充填",
+          "depth": 2,
+          "examples": []
+        },
+        "EH36": {
+          "label": "射出",
+          "depth": 2,
+          "examples": []
+        },
+        "EH41": {
+          "label": "抄造",
+          "depth": 2,
+          "examples": [
+            "塗布",
+            "コーティング"
+          ]
+        },
+        "EH46": {
+          "label": "塗布",
+          "depth": 2,
+          "examples": []
+        },
+        "EH51": {
+          "label": "ライニング、シート・帯状材料の巻き付け（スパイラル巻き付け）",
+          "depth": 2,
+          "examples": [
+            "ラミネート",
+            "スパイラル巻付"
+          ]
+        },
+        "EH56": {
+          "label": "溶射",
+          "depth": 2,
+          "examples": []
+        },
+        "EH61": {
+          "label": "噴霧",
+          "depth": 2,
+          "examples": []
+        },
+        "EH66": {
+          "label": "蒸着、スパッタリング",
+          "depth": 2,
+          "examples": []
+        },
+        "EH71": {
+          "label": "メッキ",
+          "depth": 2,
+          "examples": []
+        },
+        "EH76": {
+          "label": "散布",
+          "depth": 2,
+          "examples": []
+        },
+        "EH81": {
+          "label": "回転、遠心",
+          "depth": 2,
+          "examples": []
+        },
+        "EH86": {
+          "label": "分割片の組立て",
+          "depth": 2,
+          "examples": []
+        },
+        "EH90": {
+          "label": "その他の層形成手段",
+          "depth": 2,
+          "examples": []
+        }
       }
     },
-
+    "EJ": {
+      "label": "処理、手段",
+      "entries": {
+        "EJ01": {
+          "label": "化学的処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ02": {
+          "label": "発泡",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ05": {
+          "label": "架橋",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ06": {
+          "label": "加硫",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ08": {
+          "label": "硬化",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ10": {
+          "label": "変性",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ12": {
+          "label": "酸化",
+          "depth": 2,
+          "examples": [
+            "オゾン酸化"
+          ]
+        },
+        "EJ13": {
+          "label": "オゾン酸化",
+          "depth": 3,
+          "examples": [
+            "酸化"
+          ]
+        },
+        "EJ14": {
+          "label": "還元",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ15": {
+          "label": "触刻",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ16": {
+          "label": "機械的処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ17": {
+          "label": "加圧",
+          "depth": 2,
+          "examples": [
+            "加圧",
+            "プレス"
+          ]
+        },
+        "EJ18": {
+          "label": "連続的加圧（連続式製造）",
+          "depth": 3,
+          "examples": [
+            "ロールプレス"
+          ]
+        },
+        "EJ19": {
+          "label": "ローラプレス",
+          "depth": 4,
+          "examples": [
+            "連続的加圧"
+          ]
+        },
+        "EJ20": {
+          "label": "断続的加圧（バッチ式製造）",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ21": {
+          "label": "加圧気体",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ22": {
+          "label": "均圧化手段",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ24": {
+          "label": "減圧、真空",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ25": {
+          "label": "振動",
+          "depth": 2,
+          "examples": [
+            "振動"
+          ]
+        },
+        "EJ26": {
+          "label": "機械的加工",
+          "depth": 2,
+          "examples": [
+            "機械的加工"
+          ]
+        },
+        "EJ27": {
+          "label": "平面化",
+          "depth": 3,
+          "examples": [
+            "平面化"
+          ]
+        },
+        "EJ28": {
+          "label": "曲げ",
+          "depth": 3,
+          "examples": [
+            "曲げ"
+          ]
+        },
+        "EJ30": {
+          "label": "切断、除去",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ31": {
+          "label": "表面と平行",
+          "depth": 4,
+          "examples": []
+        },
+        "EJ32": {
+          "label": "端部の結合部分",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ33": {
+          "label": "実構造を有す",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ34": {
+          "label": "粗面化",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ36": {
+          "label": "バリ取り",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ37": {
+          "label": "延伸",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ38": {
+          "label": "二軸延伸",
+          "depth": 4,
+          "examples": []
+        },
+        "EJ39": {
+          "label": "型付け",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ40": {
+          "label": "型ロール",
+          "depth": 4,
+          "examples": []
+        },
+        "EJ41": {
+          "label": "熱的処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ42": {
+          "label": "加熱",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ43": {
+          "label": "輻射（赤外加熱）",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ44": {
+          "label": "摩擦",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ45": {
+          "label": "熱伝導",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ46": {
+          "label": "高周波、電磁誘導",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ47": {
+          "label": "保温、均熱",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ48": {
+          "label": "焼結",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ50": {
+          "label": "冷却",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ51": {
+          "label": "物理的処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ52": {
+          "label": "照射",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ53": {
+          "label": "電子線照射",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ54": {
+          "label": "紫外線照射",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ55": {
+          "label": "コロナ放電処理",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ58": {
+          "label": "雰囲気調整",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ59": {
+          "label": "真空",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ60": {
+          "label": "不活性ガス",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ61": {
+          "label": "電気、磁気的処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ62": {
+          "label": "角柱状のセル",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ64": {
+          "label": "表面処理",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ65": {
+          "label": "プライマー",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ67": {
+          "label": "カップリング",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ68": {
+          "label": "化成処理",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ69": {
+          "label": "クロメート",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ81": {
+          "label": "その他の処理、手段",
+          "depth": 1,
+          "examples": []
+        },
+        "EJ82": {
+          "label": "含浸",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ83": {
+          "label": "含浸量の調整",
+          "depth": 3,
+          "examples": []
+        },
+        "EJ85": {
+          "label": "洗浄、清浄",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ86": {
+          "label": "乾燥",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ88": {
+          "label": "無端ベルト上での処理、製造",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ90": {
+          "label": "展張",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ91": {
+          "label": "分離材、保護材、キャリアシート等の適用",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ93": {
+          "label": "取出し",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ94": {
+          "label": "巻取り",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ95": {
+          "label": "位置決め、耳揃え",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ96": {
+          "label": "脱泡",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ97": {
+          "label": "ボイド防止",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ98": {
+          "label": "養生",
+          "depth": 2,
+          "examples": []
+        },
+        "EJ99": {
+          "label": "補修、矯正、検査、試験",
+          "depth": 2,
+          "examples": []
+        }
+      }
+    },
+    "EK": {
+      "label": "装置",
+      "entries": {
+        "EK01": {
+          "label": "製造ライン",
+          "depth": 1,
+          "examples": []
+        },
+        "EK03": {
+          "label": "搬入、搬送",
+          "depth": 2,
+          "examples": []
+        },
+        "EK04": {
+          "label": "積重ね",
+          "depth": 2,
+          "examples": []
+        },
+        "EK06": {
+          "label": "ラミネータ",
+          "depth": 2,
+          "examples": []
+        },
+        "EK08": {
+          "label": "シングルフェーサ",
+          "depth": 2,
+          "examples": []
+        },
+        "EK09": {
+          "label": "ダブルフェーサ",
+          "depth": 2,
+          "examples": []
+        },
+        "EK11": {
+          "label": "制御",
+          "depth": 1,
+          "examples": []
+        },
+        "EK13": {
+          "label": "形の検知",
+          "depth": 2,
+          "examples": []
+        },
+        "EK15": {
+          "label": "電磁的、光学的量の検知",
+          "depth": 2,
+          "examples": []
+        },
+        "EK17": {
+          "label": "速度、温度、圧力の検知",
+          "depth": 2,
+          "examples": []
+        }
+      }
+    },
     "GB": {
-      "label": "具体的層構成",
+      "label": "用途",
       "entries": {
-        "GB01": {"label": "2層 A/B",                   "examples": ["2層", "A/B"]},
-        "GB05": {"label": "3層 A/B/A (対称)",           "examples": ["3層対称", "A/B/A"]},
-        "GB06": {"label": "3層 A/B/C (非対称)",         "examples": ["3層非対称", "A/B/C"]},
-        "GB10": {"label": "4層",                        "examples": ["4層"]},
-        "GB15": {"label": "5層以上 (多層)",              "examples": ["多層", "5層以上"]},
-        "GB20": {"label": "アルミ箔を含む積層",           "examples": ["アルミ積層", "PET/AL/PE"]},
-        "GB22": {"label": "蒸着膜を含む積層",             "examples": ["蒸着積層", "PET/VM/PE"]},
-        "GB25": {"label": "EVOHを含む多層バリア",         "examples": ["EVOH多層", "OPP/EVOH/PE"]},
-        "GB30": {"label": "紙を含む積層",                 "examples": ["紙/PE", "紙積層"]},
-        "GB35": {"label": "離型層 / セパレータ付き",       "examples": ["セパレータ", "剥離ライナー"]}
+        "GB01": {
+          "label": "農業用",
+          "depth": 1,
+          "examples": [
+            "農業用",
+            "農業フィルム"
+          ]
+        },
+        "GB04": {
+          "label": "漁業用",
+          "depth": 1,
+          "examples": [
+            "漁業用"
+          ]
+        },
+        "GB07": {
+          "label": "建材",
+          "depth": 1,
+          "examples": [
+            "建材"
+          ]
+        },
+        "GB08": {
+          "label": "内装材",
+          "depth": 2,
+          "examples": []
+        },
+        "GB09": {
+          "label": "ユニットタイル",
+          "depth": 2,
+          "examples": []
+        },
+        "GB15": {
+          "label": "包装材",
+          "depth": 1,
+          "examples": [
+            "包装材",
+            "包材",
+            "パッケージ"
+          ]
+        },
+        "GB16": {
+          "label": "容器",
+          "depth": 2,
+          "examples": [
+            "容器"
+          ]
+        },
+        "GB17": {
+          "label": "チューブ状容器",
+          "depth": 3,
+          "examples": [
+            "チューブ容器"
+          ]
+        },
+        "GB18": {
+          "label": "蓋",
+          "depth": 3,
+          "examples": [
+            "蓋",
+            "キャップ"
+          ]
+        },
+        "GB23": {
+          "label": "食品用",
+          "depth": 2,
+          "examples": [
+            "食品用"
+          ]
+        },
+        "GB27": {
+          "label": "感光材用",
+          "depth": 2,
+          "examples": [
+            "感光材用"
+          ]
+        },
+        "GB31": {
+          "label": "運輸関連",
+          "depth": 1,
+          "examples": []
+        },
+        "GB32": {
+          "label": "自動車",
+          "depth": 2,
+          "examples": [
+            "自動車"
+          ]
+        },
+        "GB33": {
+          "label": "自動車用内装材",
+          "depth": 3,
+          "examples": []
+        },
+        "GB36": {
+          "label": "モール",
+          "depth": 3,
+          "examples": []
+        },
+        "GB41": {
+          "label": "電気・電子用",
+          "depth": 1,
+          "examples": [
+            "電気用"
+          ]
+        },
+        "GB43": {
+          "label": "印刷回路",
+          "depth": 2,
+          "examples": []
+        },
+        "GB46": {
+          "label": "ケーブル",
+          "depth": 2,
+          "examples": []
+        },
+        "GB48": {
+          "label": "電気製品",
+          "depth": 2,
+          "examples": [
+            "電気装飾品"
+          ]
+        },
+        "GB51": {
+          "label": "機械部品",
+          "depth": 1,
+          "examples": [
+            "機械部品"
+          ]
+        },
+        "GB56": {
+          "label": "ろ材、フィルター",
+          "depth": 1,
+          "examples": []
+        },
+        "GB61": {
+          "label": "センサー",
+          "depth": 1,
+          "examples": [
+            "センサー"
+          ]
+        },
+        "GB66": {
+          "label": "医療用",
+          "depth": 1,
+          "examples": [
+            "医療用"
+          ]
+        },
+        "GB71": {
+          "label": "生活用材",
+          "depth": 1,
+          "examples": [
+            "生活用材"
+          ]
+        },
+        "GB72": {
+          "label": "衣料",
+          "depth": 2,
+          "examples": []
+        },
+        "GB74": {
+          "label": "履物",
+          "depth": 2,
+          "examples": []
+        },
+        "GB76": {
+          "label": "帽子、ヘルメット",
+          "depth": 2,
+          "examples": []
+        },
+        "GB81": {
+          "label": "家具",
+          "depth": 1,
+          "examples": []
+        },
+        "GB84": {
+          "label": "玩具",
+          "depth": 1,
+          "examples": []
+        },
+        "GB87": {
+          "label": "スポーツ用品",
+          "depth": 1,
+          "examples": []
+        },
+        "GB90": {
+          "label": "その他の用途",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "HB": {
+      "label": "模様、装飾",
+      "entries": {
+        "HB01": {
+          "label": "木目模様",
+          "depth": 1,
+          "examples": [
+            "木目"
+          ]
+        },
+        "HB04": {
+          "label": "象嵌模様",
+          "depth": 1,
+          "examples": [
+            "象嵌"
+          ]
+        },
+        "HB06": {
+          "label": "縞模様",
+          "depth": 1,
+          "examples": [
+            "縞模様"
+          ]
+        },
+        "HB08": {
+          "label": "回折格子、ホログラムパタン",
+          "depth": 2,
+          "examples": []
+        },
+        "HB09": {
+          "label": "ヘアライン",
+          "depth": 2,
+          "examples": []
+        },
+        "HB11": {
+          "label": "大理石模様",
+          "depth": 1,
+          "examples": []
+        },
+        "HB13": {
+          "label": "粒状模様、散布模様",
+          "depth": 1,
+          "examples": []
+        },
+        "HB15": {
+          "label": "切口模様",
+          "depth": 1,
+          "examples": []
+        },
+        "HB17": {
+          "label": "連繋模様",
+          "depth": 1,
+          "examples": []
+        },
+        "HB19": {
+          "label": "模様片を配置したもの3/4",
+          "depth": 1,
+          "examples": []
+        },
+        "HB21": {
+          "label": "凹凸模様",
+          "depth": 1,
+          "examples": []
+        },
+        "HB22": {
+          "label": "皺模様",
+          "depth": 2,
+          "examples": []
+        },
+        "HB24": {
+          "label": "レリーフ",
+          "depth": 2,
+          "examples": []
+        },
+        "HB26": {
+          "label": "凹部と凸部で模様効果の異なるもの",
+          "depth": 2,
+          "examples": []
+        },
+        "HB31": {
+          "label": "印刷",
+          "depth": 1,
+          "examples": []
+        },
+        "HB32": {
+          "label": "異なるインクの厚みの組み合わせ",
+          "depth": 2,
+          "examples": []
+        },
+        "HB35": {
+          "label": "多層印刷",
+          "depth": 2,
+          "examples": []
+        },
+        "HB37": {
+          "label": "（半）透明層を介して複数のインク",
+          "depth": 3,
+          "examples": []
+        },
+        "HB40": {
+          "label": "その他の模様、装飾",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "JA": {
-      "label": "層間接着・貼り合わせ",
+      "label": "基本的物性",
       "entries": {
-        "JA01": {"label": "接着剤 (ウレタン系)",       "examples": ["ウレタン系接着剤", "2液ウレタン"]},
-        "JA02": {"label": "接着剤 (アクリル系)",       "examples": ["アクリル系接着剤"]},
-        "JA03": {"label": "接着剤 (エポキシ系)",       "examples": ["エポキシ系接着剤"]},
-        "JA05": {"label": "ホットメルト接着剤",         "examples": ["ホットメルト", "EVA系", "オレフィン系HM"]},
-        "JA08": {"label": "水性 / エマルジョン接着剤",   "examples": ["水性接着剤", "エマルジョン"]},
-        "JA10": {"label": "自己粘着 / 粘着剤",          "examples": ["粘着剤", "アクリル粘着剤", "PSA"]},
-        "JA15": {"label": "熱融着 (接着剤なし)",         "examples": ["熱融着", "共押出", "直接接着"]}
+        "JA01": {
+          "label": "比熱",
+          "depth": 1,
+          "examples": [
+            "毛羽"
+          ]
+        },
+        "JA02": {
+          "label": "熱膨脹",
+          "depth": 1,
+          "examples": [
+            "熱膨張"
+          ]
+        },
+        "JA03": {
+          "label": "熱収縮",
+          "depth": 1,
+          "examples": []
+        },
+        "JA04": {
+          "label": "融点、軟化点",
+          "depth": 1,
+          "examples": []
+        },
+        "JA05": {
+          "label": "ガラス転移点",
+          "depth": 1,
+          "examples": []
+        },
+        "JA06": {
+          "label": "粘度（メルトインデックス）",
+          "depth": 1,
+          "examples": []
+        },
+        "JA07": {
+          "label": "重合度、分子量",
+          "depth": 1,
+          "examples": []
+        },
+        "JA08": {
+          "label": "超高分子",
+          "depth": 2,
+          "examples": []
+        },
+        "JA09": {
+          "label": "低分子",
+          "depth": 2,
+          "examples": []
+        },
+        "JA11": {
+          "label": "晶質",
+          "depth": 1,
+          "examples": []
+        },
+        "JA12": {
+          "label": "非晶質、アモルファス",
+          "depth": 1,
+          "examples": []
+        },
+        "JA13": {
+          "label": "密度、比重",
+          "depth": 1,
+          "examples": []
+        },
+        "JA14": {
+          "label": "高密度（低発泡）",
+          "depth": 2,
+          "examples": []
+        },
+        "JA15": {
+          "label": "低密度（高発泡）",
+          "depth": 2,
+          "examples": []
+        },
+        "JA20": {
+          "label": "その他の基本的物性",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
+    "JB": {
+      "label": "アルカリ化学的性質、機能",
+      "entries": {
+        "JB01": {
+          "label": "耐薬品、耐酸、耐アルカリ",
+          "depth": 1,
+          "examples": [
+            "耐薬品",
+            "耐アルカリ"
+          ]
+        },
+        "JB02": {
+          "label": "防蝕、耐蝕",
+          "depth": 1,
+          "examples": [
+            "防錆",
+            "耐食"
+          ]
+        },
+        "JB03": {
+          "label": "耐酸化",
+          "depth": 1,
+          "examples": [
+            "親和性",
+            "親水性",
+            "疎水性"
+          ]
+        },
+        "JB04": {
+          "label": "親和性",
+          "depth": 1,
+          "examples": []
+        },
+        "JB05": {
+          "label": "親水性",
+          "depth": 2,
+          "examples": []
+        },
+        "JB06": {
+          "label": "疎水性",
+          "depth": 2,
+          "examples": []
+        },
+        "JB07": {
+          "label": "対溶剤特性",
+          "depth": 1,
+          "examples": []
+        },
+        "JB08": {
+          "label": "溶解（性質）",
+          "depth": 2,
+          "examples": []
+        },
+        "JB09": {
+          "label": "水溶性（性質）",
+          "depth": 3,
+          "examples": []
+        },
+        "JB10": {
+          "label": "膨潤（性質）",
+          "depth": 2,
+          "examples": []
+        },
+        "JB11": {
+          "label": "不溶（性質）",
+          "depth": 2,
+          "examples": []
+        },
+        "JB12": {
+          "label": "硬化（性質）",
+          "depth": 1,
+          "examples": []
+        },
+        "JB13": {
+          "label": "熱硬化（性質）",
+          "depth": 2,
+          "examples": []
+        },
+        "JB14": {
+          "label": "セルの大きさ、",
+          "depth": 2,
+          "examples": []
+        },
+        "JB15": {
+          "label": "帯状片",
+          "depth": 2,
+          "examples": []
+        },
+        "JB16": {
+          "label": "熱可塑（性質）",
+          "depth": 1,
+          "examples": []
+        },
+        "JB20": {
+          "label": "その他の化学的性質・機能",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JD": {
+      "label": "物理的性質・機能能）",
+      "entries": {
+        "JD01": {
+          "label": "透過、遮蔽",
+          "depth": 1,
+          "examples": [
+            "透過",
+            "遮蔽",
+            "気体透過"
+          ]
+        },
+        "JD02": {
+          "label": "気体の透過、遮蔽",
+          "depth": 2,
+          "examples": [
+            "酸素透過"
+          ]
+        },
+        "JD03": {
+          "label": "酸素の透過、遮蔽",
+          "depth": 3,
+          "examples": [
+            "水蒸気透過",
+            "透湿"
+          ]
+        },
+        "JD04": {
+          "label": "水蒸気の透過、遮蔽",
+          "depth": 3,
+          "examples": [
+            "液体透過"
+          ]
+        },
+        "JD05": {
+          "label": "液体の透過、遮蔽",
+          "depth": 2,
+          "examples": []
+        },
+        "JD06": {
+          "label": "放射線の透過、遮蔽",
+          "depth": 2,
+          "examples": []
+        },
+        "JD07": {
+          "label": "電子線の透過、遮蔽",
+          "depth": 3,
+          "examples": []
+        },
+        "JD08": {
+          "label": "電磁波の透過、遮蔽",
+          "depth": 3,
+          "examples": []
+        },
+        "JD09": {
+          "label": "紫外線の透過、遮蔽",
+          "depth": 3,
+          "examples": []
+        },
+        "JD10": {
+          "label": "赤外線の透過、遮蔽",
+          "depth": 3,
+          "examples": []
+        },
+        "JD11": {
+          "label": "輻射（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JD12": {
+          "label": "赤外線、遠赤外線の輻射",
+          "depth": 2,
+          "examples": []
+        },
+        "JD14": {
+          "label": "吸収、吸着（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JD15": {
+          "label": "吸水、吸湿（性質・機能）",
+          "depth": 2,
+          "examples": []
+        },
+        "JD16": {
+          "label": "放出、脱着（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JD20": {
+          "label": "その他の物理的性質・機能",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JG": {
+      "label": "電気・磁気的性質・機能）能音波・振動",
+      "entries": {
+        "JG01": {
+          "label": "導電性（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JG02": {
+          "label": "超電導（性質・機能）",
+          "depth": 2,
+          "examples": []
+        },
+        "JG03": {
+          "label": "静電、帯電（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JG04": {
+          "label": "絶縁（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JG05": {
+          "label": "誘電（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JG06": {
+          "label": "磁性（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JG10": {
+          "label": "その他の電気・磁気に関する性質・機能",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JH": {
+      "label": "音波・振動に関する性質・機能）質・機能熱的性質・",
+      "entries": {
+        "JH01": {
+          "label": "吸音・防音（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JH02": {
+          "label": "制振（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JH10": {
+          "label": "その他の音波・振動に関する性質・機能",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JJ": {
+      "label": "熱的性質・機能能）機械的性",
+      "entries": {
+        "JJ01": {
+          "label": "熱伝導（性質・機能）",
+          "depth": 1,
+          "examples": [
+            "断熱"
+          ]
+        },
+        "JJ02": {
+          "label": "断熱、保温（性質・機能）",
+          "depth": 2,
+          "examples": [
+            "耐熱"
+          ]
+        },
+        "JJ03": {
+          "label": "耐熱（性質・機能）",
+          "depth": 1,
+          "examples": [
+            "耐寒"
+          ]
+        },
+        "JJ04": {
+          "label": "耐寒（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JJ05": {
+          "label": "吸熱（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JJ06": {
+          "label": "発熱（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JJ07": {
+          "label": "不燃、難燃（性質・機能）",
+          "depth": 1,
+          "examples": []
+        },
+        "JJ10": {
+          "label": "その他の熱的性質・機能",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
     "JK": {
-      "label": "製造方法 (成膜 / 積層)",
+      "label": "機械的性質・機能",
       "entries": {
-        "JK01": {"label": "共押出 (Tダイ / インフレ)",    "examples": ["共押出", "Tダイ", "インフレーション"]},
-        "JK03": {"label": "押出ラミネーション",            "examples": ["押出ラミ", "サンドイッチラミ"]},
-        "JK06": {"label": "ドライラミネーション",           "examples": ["ドライラミ", "DL"]},
-        "JK07": {"label": "ウェットラミネーション",         "examples": ["ウェットラミ", "WL"]},
-        "JK08": {"label": "ホットメルトラミネーション",      "examples": ["ホットメルトラミ", "HMラミ"]},
-        "JK10": {"label": "コーティング (一般)",            "examples": ["コーティング", "塗工"]},
-        "JK11": {"label": "グラビアコート / リバースコート", "examples": ["グラビアコート", "リバースコート"]},
-        "JK12": {"label": "真空蒸着",                      "examples": ["真空蒸着", "VM", "アルミ蒸着"]},
-        "JK13": {"label": "スパッタリング",                 "examples": ["スパッタ"]},
-        "JK14": {"label": "CVD / PECVD",                   "examples": ["CVD", "PECVD", "化学気相蒸着"]},
-        "JK15": {"label": "熱ラミネーション (熱プレス)",     "examples": ["熱ラミ", "熱プレス"]},
-        "JK18": {"label": "UV硬化 / 電子線硬化",            "examples": ["UV硬化", "EB硬化", "電子線"]},
-        "JK20": {"label": "一軸 / 二軸延伸",                "examples": ["延伸", "一軸延伸", "二軸延伸", "OPP", "OPET"]},
-        "JK22": {"label": "キャスティング / 溶液流延",       "examples": ["キャスト", "溶液流延", "キャスト法"]},
-        "JK25": {"label": "インモールドラミネーション",       "examples": ["インモールド"]},
-        "JK30": {"label": "ロール toロール製造",             "examples": ["ロールtoロール", "R2R"]}
+        "JK01": {
+          "label": "強度、剛性",
+          "depth": 1,
+          "examples": [
+            "引張強度"
+          ]
+        },
+        "JK02": {
+          "label": "引張強度",
+          "depth": 2,
+          "examples": [
+            "引裂強度"
+          ]
+        },
+        "JK03": {
+          "label": "引裂強度",
+          "depth": 2,
+          "examples": [
+            "曲げ強度"
+          ]
+        },
+        "JK04": {
+          "label": "曲げ強度",
+          "depth": 2,
+          "examples": [
+            "圧縮強度"
+          ]
+        },
+        "JK05": {
+          "label": "圧縮強度",
+          "depth": 2,
+          "examples": [
+            "剥離強度"
+          ]
+        },
+        "JK06": {
+          "label": "剥離強度",
+          "depth": 2,
+          "examples": [
+            "弾性",
+            "可撓性"
+          ]
+        },
+        "JK07": {
+          "label": "弾性",
+          "depth": 1,
+          "examples": [
+            "伸び",
+            "伸縮性"
+          ]
+        },
+        "JK08": {
+          "label": "伸び、伸縮性",
+          "depth": 1,
+          "examples": [
+            "耐摩耗"
+          ]
+        },
+        "JK09": {
+          "label": "耐摩性",
+          "depth": 1,
+          "examples": []
+        },
+        "JK10": {
+          "label": "耐衝撃",
+          "depth": 1,
+          "examples": []
+        },
+        "JK11": {
+          "label": "緩衝性",
+          "depth": 1,
+          "examples": []
+        },
+        "JK12": {
+          "label": "硬質",
+          "depth": 1,
+          "examples": []
+        },
+        "JK13": {
+          "label": "軟質",
+          "depth": 1,
+          "examples": []
+        },
+        "JK14": {
+          "label": "表面特性",
+          "depth": 1,
+          "examples": []
+        },
+        "JK15": {
+          "label": "平滑",
+          "depth": 2,
+          "examples": []
+        },
+        "JK16": {
+          "label": "摩擦",
+          "depth": 2,
+          "examples": []
+        },
+        "JK17": {
+          "label": "可撓性",
+          "depth": 1,
+          "examples": []
+        },
+        "JK20": {
+          "label": "その他の機械的性質・機能",
+          "depth": 1,
+          "examples": []
+        }
       }
     },
-
-    "YY": {
-      "label": "用途 (商品カテゴリ)",
+    "JL": {
+      "label": "その他の性質・機能",
       "entries": {
-        "YY01": {"label": "食品包装 (一般)",             "examples": ["食品包装", "食品用"]},
-        "YY02": {"label": "レトルト食品用",              "examples": ["レトルト", "レトルトパウチ"]},
-        "YY03": {"label": "冷凍食品用",                  "examples": ["冷凍食品", "冷食"]},
-        "YY04": {"label": "乾燥食品 / スナック用",        "examples": ["乾燥食品", "スナック", "菓子"]},
-        "YY05": {"label": "飲料用",                      "examples": ["飲料", "ジュース", "液体飲料"]},
-        "YY06": {"label": "液体調味料・油脂用",           "examples": ["油脂", "醤油", "調味料"]},
-        "YY08": {"label": "ラミネートチューブ (化粧品/歯磨き)","examples":["チューブ", "化粧品チューブ", "歯磨き"]},
-        "YY10": {"label": "医薬 PTP / ブリスター",        "examples": ["PTP", "ブリスター", "医薬包装"]},
-        "YY12": {"label": "輸液バッグ / 医療用",           "examples": ["輸液バッグ", "医療用"]},
-        "YY15": {"label": "化粧品容器",                   "examples": ["化粧品", "スキンケア容器"]},
-        "YY18": {"label": "農業用フィルム (マルチ / ハウス)","examples":["農業用", "マルチ", "ハウス", "トンネル"]},
-        "YY20": {"label": "光学フィルム (ディスプレイ)",    "examples": ["光学", "ディスプレイ", "LCD"]},
-        "YY22": {"label": "偏光板 / 位相差板",             "examples": ["偏光板", "位相差"]},
-        "YY25": {"label": "タッチパネル用フィルム",          "examples": ["タッチパネル"]},
-        "YY27": {"label": "太陽電池バックシート",            "examples": ["太陽電池", "PVバックシート"]},
-        "YY30": {"label": "電池外装 / 電池セパレータ",        "examples": ["電池", "セパレータ", "ラミネート電池"]},
-        "YY35": {"label": "FPC / 電子基板用",                "examples": ["FPC", "CCL", "プリント基板"]},
-        "YY40": {"label": "自動車内装 / 外装",                "examples": ["自動車", "内装", "外装"]},
-        "YY45": {"label": "建材 (壁紙 / 床材)",               "examples": ["壁紙", "床材", "化粧板"]},
-        "YY50": {"label": "土木・建築用シート",                "examples": ["土木シート", "防水シート"]},
-        "YY55": {"label": "ラベル / シール / テープ",           "examples": ["ラベル", "シール", "粘着テープ"]},
-        "YY60": {"label": "セキュリティ / 偽造防止",            "examples": ["セキュリティ", "偽造防止", "ホログラム"]},
-        "YY70": {"label": "紙おむつ / 衛生材料",                "examples": ["紙おむつ", "衛生", "ナプキン"]},
-        "YY80": {"label": "断熱 / 保温材",                      "examples": ["断熱材", "保温"]},
-        "YY90": {"label": "その他 / 汎用",                      "examples": ["汎用", "その他"]}
+        "JL01": {
+          "label": "二次加工性",
+          "depth": 1,
+          "examples": []
+        },
+        "JL02": {
+          "label": "生産性",
+          "depth": 1,
+          "examples": []
+        },
+        "JL03": {
+          "label": "軽量化",
+          "depth": 1,
+          "examples": []
+        },
+        "JL04": {
+          "label": "寸法安定性（カール防止）",
+          "depth": 1,
+          "examples": []
+        },
+        "JL05": {
+          "label": "取扱容易",
+          "depth": 1,
+          "examples": []
+        },
+        "JL06": {
+          "label": "汚れ防止",
+          "depth": 1,
+          "examples": []
+        },
+        "JL07": {
+          "label": "結露防止",
+          "depth": 1,
+          "examples": []
+        },
+        "JL08": {
+          "label": "触媒",
+          "depth": 1,
+          "examples": []
+        },
+        "JL09": {
+          "label": "耐候",
+          "depth": 1,
+          "examples": []
+        },
+        "JL10": {
+          "label": "有色",
+          "depth": 1,
+          "examples": []
+        },
+        "JL11": {
+          "label": "接着性",
+          "depth": 1,
+          "examples": []
+        },
+        "JL12": {
+          "label": "感熱接着性",
+          "depth": 2,
+          "examples": []
+        },
+        "JL13": {
+          "label": "感圧接着性",
+          "depth": 2,
+          "examples": []
+        },
+        "JL14": {
+          "label": "易剥離性",
+          "depth": 2,
+          "examples": []
+        },
+        "JL15": {
+          "label": "形状記憶",
+          "depth": 1,
+          "examples": []
+        },
+        "JL16": {
+          "label": "廃物利用",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JM": {
+      "label": "状態ル",
+      "entries": {
+        "JM01": {
+          "label": "エマルジョン、ゾル",
+          "depth": 1,
+          "examples": []
+        },
+        "JM02": {
+          "label": "薄膜",
+          "depth": 1,
+          "examples": []
+        },
+        "JM03": {
+          "label": "分子膜",
+          "depth": 2,
+          "examples": []
+        },
+        "JM10": {
+          "label": "その他の状態",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "JN": {
+      "label": "光学的性質・機能",
+      "entries": {
+        "JN01": {
+          "label": "透明",
+          "depth": 1,
+          "examples": []
+        },
+        "JN02": {
+          "label": "不透明",
+          "depth": 1,
+          "examples": []
+        },
+        "JN06": {
+          "label": "反射",
+          "depth": 1,
+          "examples": []
+        },
+        "JN08": {
+          "label": "透過調整",
+          "depth": 1,
+          "examples": []
+        },
+        "JN10": {
+          "label": "偏光",
+          "depth": 1,
+          "examples": []
+        },
+        "JN13": {
+          "label": "螢光、燐光",
+          "depth": 1,
+          "examples": []
+        },
+        "JN17": {
+          "label": "感光",
+          "depth": 1,
+          "examples": []
+        },
+        "JN18": {
+          "label": "屈折",
+          "depth": 1,
+          "examples": []
+        },
+        "JN21": {
+          "label": "光沢",
+          "depth": 1,
+          "examples": []
+        },
+        "JN22": {
+          "label": "真珠光沢",
+          "depth": 2,
+          "examples": []
+        },
+        "JN24": {
+          "label": "金属光沢、金属調",
+          "depth": 2,
+          "examples": []
+        },
+        "JN26": {
+          "label": "つや消",
+          "depth": 1,
+          "examples": []
+        },
+        "JN28": {
+          "label": "発色、変色",
+          "depth": 1,
+          "examples": []
+        },
+        "JN30": {
+          "label": "その他4/4",
+          "depth": 1,
+          "examples": []
+        }
       }
     }
   }

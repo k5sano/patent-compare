@@ -15,38 +15,61 @@ class TestGetNodesByField:
         assert "AA01" in nodes or any(c.startswith("AA") for c in nodes)
 
     def test_laminate_loads_from_structure(self):
-        """structure 形式の 4F100 辞書がツリー形式に正規化されて読まれる"""
+        """4F100 + 3E086 の structure 辞書がツリーに正規化されて読まれる"""
         nodes = get_nodes("laminate")
-        assert len(nodes) >= 20, "laminate 辞書が空か極端に少ない"
-        # 主要エントリの存在確認
+        assert len(nodes) >= 500, "laminate 辞書が公式データを読めていない"
+        # 4F100 主要エントリ (JPO 公式コード / AK は衝突しないので素のキー)
         assert "AK01" in nodes
-        assert "ポリオレフィン" in nodes["AK01"]["label"]
-        assert "ポリエチレン" in nodes["AK01"]["examples"]
-        assert nodes["AK01"]["parent"] == "AK"
-        assert nodes["AK01"]["depth"] == 2
+        assert "有機高分子" in nodes["AK01"]["label"]
+        assert "AK05" in nodes and "高密度" in nodes["AK05"]["label"]
+        # 衝突コードはテーマ接頭辞付きで格納される
+        assert "4F100:AD01" in nodes  # 粘土製品 (4F100 セラミック)
+        assert "3E086:AD01" in nodes  # 袋 (3E086 被包形態)
+        assert "袋" in nodes["3E086:AD01"]["label"]
 
     def test_laminate_group_nodes_are_depth1(self):
         """カテゴリ（AK, BA, GB...）はグループノードとして depth=1 で登録される"""
         nodes = get_nodes("laminate")
+        # AK は 4F100 にしか無いので素のキー
         assert "AK" in nodes
         assert nodes["AK"]["depth"] == 1
         assert nodes["AK"]["parent"] is None
         assert "AK01" in nodes["AK"]["children"]
+
+    def test_laminate_multiple_themes(self):
+        """laminate は 4F100 と 3E086 を統合している"""
+        tree = get_tree("laminate")
+        themes = tree.get("themes", [])
+        assert "4F100" in themes
+        assert "3E086" in themes
 
     def test_unknown_field_returns_empty(self):
         assert get_nodes("unknown_field_xyz") == {}
 
 
 class TestReverseIndex:
-    def test_laminate_reverse_index_from_examples(self):
-        """examples に登場する語から code へ逆引きできる"""
+    def test_laminate_reverse_index_common_terms(self):
+        """実務でよく使う検索語から code へ逆引きできる (examples 経由)"""
         ri = get_reverse_index("laminate")
-        assert "PE" in ri and "AK01" in ri["PE"]
-        assert "PET" in ri and "AK25" in ri["PET"]
+        # 4F100 系
+        assert "PE" in ri and "AK04" in ri["PE"]
+        assert "HDPE" in ri and "AK05" in ri["HDPE"]
+        assert "PP" in ri and "AK07" in ri["PP"]
+        # EVOH はエチレン-ビニルアルコール共重合体 = AK69 (オレフィン-酢酸ビニル共重合体加水分解物)
+        assert "EVOH" in ri and "AK69" in ri["EVOH"]
+        # PVC は AK15, PVDC は AK16
+        assert "PVC" in ri and "AK15" in ri["PVC"]
+        assert "PVDC" in ri and "AK16" in ri["PVDC"]
+        # 3E086 系 (AD01/AD07 は 4F100 と衝突するので prefixed)
+        assert "パウチ" in ri and "3E086:AD01" in ri["パウチ"]
+        assert "ブリスター" in ri and "3E086:AD07" in ri["ブリスター"]
 
     def test_laminate_reverse_index_from_label(self):
+        """label 自体からも逆引きできる (PDFから取得した公式ラベル)"""
         ri = get_reverse_index("laminate")
-        assert "EVOH" in ri and "AK51" in ri["EVOH"]
+        # 高密度ポリエチレン のラベルは AK05
+        assert "高密度ポリエチレン" in ri
+        assert "AK05" in ri["高密度ポリエチレン"]
 
 
 class TestNormalizeStructure:

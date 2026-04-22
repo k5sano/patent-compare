@@ -1,0 +1,1205 @@
+{
+  "theme_code": "3E086",
+  "theme_name": "被包体、包装体、容器",
+  "ipc": "B65D65/00-65/46",
+  "source": "J-PlatPat Fタームリスト PDF (座標ベースパース)",
+  "version": "0.3.0-official",
+  "categories": {
+    "AA": {
+      "label": "被包具としての外形を備えたもの",
+      "entries": {
+        "AA01": {
+          "label": "展開可能なもの",
+          "depth": 1,
+          "examples": [
+            "展開可能",
+            "シート状包材"
+          ]
+        },
+        "AA02": {
+          "label": "矩形の展開形状をもつもの",
+          "depth": 2,
+          "examples": [
+            "矩形"
+          ]
+        },
+        "AA12": {
+          "label": "矩形以外の展開形状をもつもの",
+          "depth": 2,
+          "examples": [
+            "非矩形"
+          ]
+        },
+        "AA13": {
+          "label": "フラップをもつもの",
+          "depth": 3,
+          "examples": [
+            "フラップ"
+          ]
+        },
+        "AA21": {
+          "label": "展開不可能なもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AA22": {
+          "label": "状のもの",
+          "depth": 0,
+          "examples": []
+        },
+        "AA23": {
+          "label": "袋状のもの",
+          "depth": 2,
+          "examples": []
+        }
+      }
+    },
+    "AB": {
+      "label": "被包素材の状態つもの",
+      "entries": {
+        "AB01": {
+          "label": "シート状",
+          "depth": 1,
+          "examples": [
+            "シート"
+          ]
+        },
+        "AB02": {
+          "label": "ウェブ状",
+          "depth": 1,
+          "examples": [
+            "ウェブ"
+          ]
+        },
+        "AB03": {
+          "label": "チューブ状",
+          "depth": 1,
+          "examples": [
+            "チューブ",
+            "筒状フィルム"
+          ]
+        },
+        "AB10": {
+          "label": "その他の素材状態",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "AC": {
+      "label": "もの被包に係る特別な構造をもつものもの",
+      "entries": {
+        "AC01": {
+          "label": "被包維持構造をもつもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AC02": {
+          "label": "固定用紐、バンドをもつもの",
+          "depth": 2,
+          "examples": [
+            "紐",
+            "バンド"
+          ]
+        },
+        "AC03": {
+          "label": "面ファスナーをもつもの",
+          "depth": 2,
+          "examples": [
+            "面ファスナー",
+            "マジックテープ"
+          ]
+        },
+        "AC04": {
+          "label": "ボタン、スナップ、ホックをもつもの",
+          "depth": 2,
+          "examples": [
+            "ボタン",
+            "スナップ",
+            "ホック"
+          ]
+        },
+        "AC05": {
+          "label": "スライドファスナーをもつもの",
+          "depth": 2,
+          "examples": [
+            "スライドファスナー",
+            "ジッパー"
+          ]
+        },
+        "AC06": {
+          "label": "接着剤が塗られたもの",
+          "depth": 2,
+          "examples": [
+            "接着剤"
+          ]
+        },
+        "AC07": {
+          "label": "溶着するもの",
+          "depth": 2,
+          "examples": [
+            "熱シール"
+          ]
+        },
+        "AC11": {
+          "label": "裂開用構造をもつもの",
+          "depth": 1,
+          "examples": [
+            "ミシン目"
+          ]
+        },
+        "AC12": {
+          "label": "ミシン目",
+          "depth": 2,
+          "examples": [
+            "切取線"
+          ]
+        },
+        "AC13": {
+          "label": "半切線",
+          "depth": 2,
+          "examples": [
+            "引裂糸"
+          ]
+        },
+        "AC14": {
+          "label": "引き裂き糸",
+          "depth": 2,
+          "examples": []
+        },
+        "AC15": {
+          "label": "開封用つまみ、ノッチをもつもの",
+          "depth": 2,
+          "examples": []
+        },
+        "AC16": {
+          "label": "素材の方向性を利用するもの",
+          "depth": 2,
+          "examples": []
+        },
+        "AC18": {
+          "label": "引き裂き案内用補強",
+          "depth": 2,
+          "examples": []
+        },
+        "AC21": {
+          "label": "内視用構造をもつもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AC22": {
+          "label": "全体または一面が透明な材料のもの",
+          "depth": 2,
+          "examples": []
+        },
+        "AC24": {
+          "label": "覗き窓を設けたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "AC25": {
+          "label": "窓が透明な材料のもの",
+          "depth": 3,
+          "examples": []
+        },
+        "AC31": {
+          "label": "折り目をもつもの・取っ手、吊り下げ",
+          "depth": 1,
+          "examples": []
+        },
+        "AC32": {
+          "label": "手段をもつもの",
+          "depth": 0,
+          "examples": []
+        },
+        "AC33": {
+          "label": "模様、記号を付したもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AC34": {
+          "label": "材料の方向性を考慮したもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AC35": {
+          "label": "内容物の固定又は安定化の構造をもつもの",
+          "depth": 1,
+          "examples": []
+        },
+        "AC36": {
+          "label": "補助ポケットをもつもの",
+          "depth": 2,
+          "examples": []
+        },
+        "AC40": {
+          "label": "その他の特別な構造",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "AD": {
+      "label": "被包形態、用途、固有名称",
+      "entries": {
+        "AD01": {
+          "label": "袋",
+          "depth": 1,
+          "examples": [
+            "袋",
+            "パウチ"
+          ]
+        },
+        "AD02": {
+          "label": "箱",
+          "depth": 1,
+          "examples": [
+            "箱"
+          ]
+        },
+        "AD03": {
+          "label": "チューブ容器",
+          "depth": 1,
+          "examples": [
+            "チューブ容器"
+          ]
+        },
+        "AD04": {
+          "label": "ボトル",
+          "depth": 1,
+          "examples": [
+            "ボトル"
+          ]
+        },
+        "AD05": {
+          "label": "トレイ",
+          "depth": 1,
+          "examples": [
+            "トレイ"
+          ]
+        },
+        "AD06": {
+          "label": "カップ容器",
+          "depth": 1,
+          "examples": [
+            "カップ"
+          ]
+        },
+        "AD07": {
+          "label": "ＰＴＰ包装、ブリスター包装",
+          "depth": 1,
+          "examples": [
+            "ＰＴＰ",
+            "ブリスター",
+            "ブリスターパック"
+          ]
+        },
+        "AD08": {
+          "label": "ピロー包装",
+          "depth": 1,
+          "examples": [
+            "ピロー包装"
+          ]
+        },
+        "AD09": {
+          "label": "部品取り付けシート、ウェブ",
+          "depth": 1,
+          "examples": [
+            "シート包装"
+          ]
+        },
+        "AD11": {
+          "label": "ゲートル巻き包装・ソーセージケーシ",
+          "depth": 1,
+          "examples": [
+            "ゲーブル",
+            "ソーセージケーシング"
+          ]
+        },
+        "AD12": {
+          "label": "ング",
+          "depth": 0,
+          "examples": [
+            "ラップ",
+            "フィルム"
+          ]
+        },
+        "AD13": {
+          "label": "ラップ包装",
+          "depth": 1,
+          "examples": [
+            "進物包装"
+          ]
+        },
+        "AD14": {
+          "label": "進物包装",
+          "depth": 1,
+          "examples": [
+            "ひねり包装"
+          ]
+        },
+        "AD15": {
+          "label": "ひねり包装",
+          "depth": 1,
+          "examples": [
+            "シュリンク包装"
+          ]
+        },
+        "AD16": {
+          "label": "シュリンク包装",
+          "depth": 1,
+          "examples": [
+            "ストレッチ包装"
+          ]
+        },
+        "AD17": {
+          "label": "ストレッチ包装",
+          "depth": 1,
+          "examples": [
+            "スキン包装"
+          ]
+        },
+        "AD18": {
+          "label": "スキン包装",
+          "depth": 1,
+          "examples": [
+            "真空包装"
+          ]
+        },
+        "AD19": {
+          "label": "真空包装",
+          "depth": 1,
+          "examples": []
+        },
+        "AD21": {
+          "label": "底敷き",
+          "depth": 1,
+          "examples": [
+            "底敷"
+          ]
+        },
+        "AD22": {
+          "label": "緩衝材",
+          "depth": 1,
+          "examples": [
+            "緩衝材"
+          ]
+        },
+        "AD23": {
+          "label": "蓋",
+          "depth": 1,
+          "examples": [
+            "蓋"
+          ]
+        },
+        "AD24": {
+          "label": "シート蓋",
+          "depth": 2,
+          "examples": []
+        },
+        "AD25": {
+          "label": "風呂敷、ふくさ",
+          "depth": 1,
+          "examples": [
+            "風呂敷"
+          ]
+        },
+        "AD26": {
+          "label": "他用途に兼用できるもの",
+          "depth": 2,
+          "examples": [
+            "仕切用途"
+          ]
+        },
+        "AD28": {
+          "label": "掛けカバー",
+          "depth": 1,
+          "examples": [
+            "掛けカバー"
+          ]
+        },
+        "AD29": {
+          "label": "雨用、屋外用",
+          "depth": 2,
+          "examples": [
+            "雨用",
+            "屋外用"
+          ]
+        },
+        "AD30": {
+          "label": "その他の用途、固有名称",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "BA": {
+      "label": "素材構造",
+      "entries": {
+        "BA01": {
+          "label": "断面視的構造",
+          "depth": 1,
+          "examples": [
+            "断面構造"
+          ]
+        },
+        "BA02": {
+          "label": "単層のもの",
+          "depth": 2,
+          "examples": [
+            "単層"
+          ]
+        },
+        "BA04": {
+          "label": "複合材または多層のもの",
+          "depth": 2,
+          "examples": [
+            "複合材",
+            "多層"
+          ]
+        },
+        "BA12": {
+          "label": "各層（単層も含む）の態様",
+          "depth": 2,
+          "examples": []
+        },
+        "BA13": {
+          "label": "金属層を含むもの",
+          "depth": 3,
+          "examples": [
+            "金属層"
+          ]
+        },
+        "BA14": {
+          "label": "紙層を含むもの",
+          "depth": 3,
+          "examples": [
+            "紙層"
+          ]
+        },
+        "BA15": {
+          "label": "樹脂層を含むもの",
+          "depth": 3,
+          "examples": [
+            "樹脂層"
+          ]
+        },
+        "BA16": {
+          "label": "発泡（用）樹脂層",
+          "depth": 4,
+          "examples": [
+            "発泡樹脂"
+          ]
+        },
+        "BA18": {
+          "label": "布帛層を含むもの",
+          "depth": 3,
+          "examples": [
+            "布帛層"
+          ]
+        },
+        "BA19": {
+          "label": "不織布のもの",
+          "depth": 4,
+          "examples": [
+            "不織布"
+          ]
+        },
+        "BA23": {
+          "label": "ネット層を含むもの",
+          "depth": 3,
+          "examples": [
+            "ネット層"
+          ]
+        },
+        "BA24": {
+          "label": "塗布層を含むもの",
+          "depth": 3,
+          "examples": [
+            "塗布層"
+          ]
+        },
+        "BA25": {
+          "label": "含浸層を含むもの",
+          "depth": 3,
+          "examples": [
+            "発泡層"
+          ]
+        },
+        "BA26": {
+          "label": "段ボール構造のもの",
+          "depth": 3,
+          "examples": [
+            "含浸層"
+          ]
+        },
+        "BA27": {
+          "label": "空気袋層を含むもの",
+          "depth": 3,
+          "examples": [
+            "段ボール"
+          ]
+        },
+        "BA28": {
+          "label": "糸・線材をいれたもの",
+          "depth": 3,
+          "examples": [
+            "空気袋"
+          ]
+        },
+        "BA29": {
+          "label": "天然素材を用いたもの",
+          "depth": 3,
+          "examples": [
+            "糸・線材"
+          ]
+        },
+        "BA33": {
+          "label": "延伸した素材を用いたもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA35": {
+          "label": "機能性粒子を存在させたもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA40": {
+          "label": "その他の層の態様",
+          "depth": 3,
+          "examples": []
+        },
+        "BA41": {
+          "label": "平面視的構造",
+          "depth": 1,
+          "examples": []
+        },
+        "BA42": {
+          "label": "網目状（空気、水が通る）",
+          "depth": 2,
+          "examples": []
+        },
+        "BA43": {
+          "label": "多数の孔、スリットを設けたもの",
+          "depth": 2,
+          "examples": []
+        },
+        "BA44": {
+          "label": "凹凸外面をもつ",
+          "depth": 2,
+          "examples": []
+        },
+        "BA45": {
+          "label": "つもの",
+          "depth": 0,
+          "examples": []
+        },
+        "BA46": {
+          "label": "突起をもつもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA47": {
+          "label": "波状のもの",
+          "depth": 3,
+          "examples": []
+        },
+        "BA50": {
+          "label": "その他の平面視的構造",
+          "depth": 2,
+          "examples": []
+        }
+      }
+    },
+    "BB": {
+      "label": "射、透過、に係るも意図、又のは、利用されている包装素材の性質",
+      "entries": {
+        "BB01": {
+          "label": "気体の透過、遮断、発散、吸収に係るもの",
+          "depth": 1,
+          "examples": [
+            "水蒸気バリア"
+          ]
+        },
+        "BB02": {
+          "label": "水蒸気",
+          "depth": 2,
+          "examples": [
+            "炭酸ガス"
+          ]
+        },
+        "BB03": {
+          "label": "炭酸ガス",
+          "depth": 2,
+          "examples": [
+            "エチレンガス"
+          ]
+        },
+        "BB04": {
+          "label": "エチレンガス",
+          "depth": 2,
+          "examples": [
+            "酸素バリア"
+          ]
+        },
+        "BB05": {
+          "label": "酸素",
+          "depth": 2,
+          "examples": [
+            "アンモニア"
+          ]
+        },
+        "BB06": {
+          "label": "アンモニアガス",
+          "depth": 2,
+          "examples": []
+        },
+        "BB12": {
+          "label": "防錆ガス",
+          "depth": 2,
+          "examples": [
+            "抗菌",
+            "殺菌性",
+            "制菌"
+          ]
+        },
+        "BB13": {
+          "label": "抗菌、抗黴性ガス",
+          "depth": 2,
+          "examples": [
+            "検物代謝生成ガス"
+          ]
+        },
+        "BB14": {
+          "label": "植物代謝生成ガス",
+          "depth": 2,
+          "examples": [
+            "臭い"
+          ]
+        },
+        "BB15": {
+          "label": "臭い、香り",
+          "depth": 2,
+          "examples": []
+        },
+        "BB20": {
+          "label": "その他の気体",
+          "depth": 2,
+          "examples": []
+        },
+        "BB21": {
+          "label": "光の透過、遮断、吸収、放射に係るもの",
+          "depth": 1,
+          "examples": [
+            "可視光線"
+          ]
+        },
+        "BB22": {
+          "label": "可視光線",
+          "depth": 2,
+          "examples": [
+            "紫外線",
+            "UV"
+          ]
+        },
+        "BB23": {
+          "label": "紫外線",
+          "depth": 2,
+          "examples": [
+            "赤外線",
+            "IR"
+          ]
+        },
+        "BB24": {
+          "label": "赤外線",
+          "depth": 2,
+          "examples": []
+        },
+        "BB25": {
+          "label": "Ｘ線",
+          "depth": 2,
+          "examples": []
+        },
+        "BB31": {
+          "label": "電磁波の吸収、反射、透過、に係るもの",
+          "depth": 1,
+          "examples": [
+            "電磁波"
+          ]
+        },
+        "BB33": {
+          "label": "磁気の遮断、透過，帯磁に係るもの",
+          "depth": 1,
+          "examples": [
+            "静電気"
+          ]
+        },
+        "BB35": {
+          "label": "電気の伝導、絶縁、帯電に係るもの",
+          "depth": 1,
+          "examples": [
+            "電気伝導"
+          ]
+        },
+        "BB37": {
+          "label": "熱の伝導、遮断に係るもの",
+          "depth": 1,
+          "examples": [
+            "熱伝導"
+          ]
+        },
+        "BB41": {
+          "label": "高温耐性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB42": {
+          "label": "低温耐性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB44": {
+          "label": "通液性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB45": {
+          "label": "吸液性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB47": {
+          "label": "通気性（風のレベル）",
+          "depth": 1,
+          "examples": []
+        },
+        "BB49": {
+          "label": "可食性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB51": {
+          "label": "熱溶着性",
+          "depth": 1,
+          "examples": [
+            "高温耐性",
+            "耐熱"
+          ]
+        },
+        "BB52": {
+          "label": "接着性",
+          "depth": 1,
+          "examples": [
+            "低温耐性",
+            "耐寒"
+          ]
+        },
+        "BB54": {
+          "label": "磨耗性",
+          "depth": 1,
+          "examples": [
+            "透湿"
+          ]
+        },
+        "BB55": {
+          "label": "滑り性／摩擦性",
+          "depth": 1,
+          "examples": [
+            "吸湿"
+          ]
+        },
+        "BB57": {
+          "label": "付着性",
+          "depth": 1,
+          "examples": [
+            "風のレベル"
+          ]
+        },
+        "BB58": {
+          "label": "包材同志の付着",
+          "depth": 2,
+          "examples": [
+            "食品適合",
+            "可食"
+          ]
+        },
+        "BB59": {
+          "label": "の付着",
+          "depth": 0,
+          "examples": [
+            "融着性"
+          ]
+        },
+        "BB61": {
+          "label": "装飾性",
+          "depth": 1,
+          "examples": [
+            "接着"
+          ]
+        },
+        "BB62": {
+          "label": "印刷性",
+          "depth": 1,
+          "examples": [
+            "防錆"
+          ]
+        },
+        "BB63": {
+          "label": "着色性",
+          "depth": 1,
+          "examples": [
+            "粘着"
+          ]
+        },
+        "BB64": {
+          "label": "筆記性",
+          "depth": 1,
+          "examples": [
+            "滑り性"
+          ]
+        },
+        "BB66": {
+          "label": "弾性伸縮性",
+          "depth": 1,
+          "examples": [
+            "付着性"
+          ]
+        },
+        "BB67": {
+          "label": "熱収縮性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB68": {
+          "label": "寸法安定性",
+          "depth": 1,
+          "examples": []
+        },
+        "BB71": {
+          "label": "耐水性",
+          "depth": 1,
+          "examples": [
+            "装飾性"
+          ]
+        },
+        "BB72": {
+          "label": "水溶性、水分解性",
+          "depth": 1,
+          "examples": [
+            "印刷性"
+          ]
+        },
+        "BB74": {
+          "label": "耐薬品（油）性",
+          "depth": 1,
+          "examples": [
+            "着色性"
+          ]
+        },
+        "BB75": {
+          "label": "耐光（候）性、光分解性",
+          "depth": 1,
+          "examples": [
+            "透明性"
+          ]
+        },
+        "BB77": {
+          "label": "包材の耐変質性",
+          "depth": 1,
+          "examples": [
+            "伸縮性"
+          ]
+        },
+        "BB81": {
+          "label": "防虫性",
+          "depth": 1,
+          "examples": [
+            "耐水",
+            "水溶性"
+          ]
+        },
+        "BB82": {
+          "label": "防鼠、防獣性",
+          "depth": 1,
+          "examples": [
+            "耐油",
+            "油分解性"
+          ]
+        },
+        "BB84": {
+          "label": "緩衝性",
+          "depth": 1,
+          "examples": [
+            "包材の耐変質"
+          ]
+        },
+        "BB85": {
+          "label": "物理強度",
+          "depth": 1,
+          "examples": []
+        },
+        "BB87": {
+          "label": "焼却性",
+          "depth": 1,
+          "examples": [
+            "防虫"
+          ]
+        },
+        "BB90": {
+          "label": "その他の包装素材の性質",
+          "depth": 1,
+          "examples": [
+            "防黴",
+            "防微"
+          ]
+        }
+      }
+    },
+    "CA": {
+      "label": "包装対象",
+      "entries": {
+        "CA01": {
+          "label": "食品",
+          "depth": 1,
+          "examples": [
+            "食品"
+          ]
+        },
+        "CA02": {
+          "label": "おにぎり、寿司",
+          "depth": 2,
+          "examples": [
+            "におい",
+            "寿司"
+          ]
+        },
+        "CA03": {
+          "label": "筒状、スリーブ",
+          "depth": 2,
+          "examples": [
+            "レトルト食品"
+          ]
+        },
+        "CA04": {
+          "label": "ハムソーセージ",
+          "depth": 2,
+          "examples": [
+            "ハムソーセージ"
+          ]
+        },
+        "CA05": {
+          "label": "多条外面をも",
+          "depth": 3,
+          "examples": [
+            "バター",
+            "チーズ"
+          ]
+        },
+        "CA06": {
+          "label": "包材と内容物と",
+          "depth": 2,
+          "examples": [
+            "ケーキ"
+          ]
+        },
+        "CA07": {
+          "label": "キャラメル、キャンデー",
+          "depth": 2,
+          "examples": [
+            "キャラメル",
+            "キャンデー"
+          ]
+        },
+        "CA11": {
+          "label": "飲料",
+          "depth": 1,
+          "examples": [
+            "飲料"
+          ]
+        },
+        "CA12": {
+          "label": "酒類",
+          "depth": 2,
+          "examples": [
+            "ジュース類"
+          ]
+        },
+        "CA13": {
+          "label": "ジュース類",
+          "depth": 2,
+          "examples": [
+            "酒類"
+          ]
+        },
+        "CA15": {
+          "label": "農業生産物",
+          "depth": 1,
+          "examples": [
+            "穀類"
+          ]
+        },
+        "CA16": {
+          "label": "穀類",
+          "depth": 2,
+          "examples": [
+            "野菜類"
+          ]
+        },
+        "CA17": {
+          "label": "野菜類",
+          "depth": 2,
+          "examples": [
+            "果物"
+          ]
+        },
+        "CA18": {
+          "label": "果物",
+          "depth": 2,
+          "examples": [
+            "花卉類"
+          ]
+        },
+        "CA19": {
+          "label": "花卉類",
+          "depth": 2,
+          "examples": []
+        },
+        "CA21": {
+          "label": "レトルト食品",
+          "depth": 2,
+          "examples": [
+            "畜産物"
+          ]
+        },
+        "CA22": {
+          "label": "バター、チーズ",
+          "depth": 2,
+          "examples": []
+        },
+        "CA23": {
+          "label": "ケーキ",
+          "depth": 2,
+          "examples": [
+            "乳製品"
+          ]
+        },
+        "CA25": {
+          "label": "",
+          "depth": 0,
+          "examples": [
+            "医薬品"
+          ]
+        },
+        "CA27": {
+          "label": "",
+          "depth": 0,
+          "examples": [
+            "化粧品"
+          ]
+        },
+        "CA28": {
+          "label": "",
+          "depth": 0,
+          "examples": [
+            "化学薬品"
+          ]
+        },
+        "CA29": {
+          "label": "",
+          "depth": 0,
+          "examples": [
+            "農薬"
+          ]
+        },
+        "CA31": {
+          "label": "電子部品",
+          "depth": 1,
+          "examples": [
+            "電子部品"
+          ]
+        },
+        "CA32": {
+          "label": "機械部品",
+          "depth": 1,
+          "examples": [
+            "機械部品"
+          ]
+        },
+        "CA33": {
+          "label": "機械、電気製品",
+          "depth": 1,
+          "examples": []
+        },
+        "CA34": {
+          "label": "事務用品",
+          "depth": 1,
+          "examples": [
+            "日用品",
+            "雑貨"
+          ]
+        },
+        "CA35": {
+          "label": "日用・雑貨・生活用品",
+          "depth": 1,
+          "examples": [
+            "砂利",
+            "土砂"
+          ]
+        },
+        "CA36": {
+          "label": "硬貨・紙幣",
+          "depth": 2,
+          "examples": []
+        },
+        "CA40": {
+          "label": "その他の包装対象",
+          "depth": 1,
+          "examples": []
+        }
+      }
+    },
+    "DA": {
+      "label": "表面処理及び製造に係のるもの",
+      "entries": {
+        "DA01": {
+          "label": "表面処理に係るもの",
+          "depth": 1,
+          "examples": [
+            "粒子状処理"
+          ]
+        },
+        "DA02": {
+          "label": "粗面化処理",
+          "depth": 2,
+          "examples": [
+            "防曇処理"
+          ]
+        },
+        "DA03": {
+          "label": "防曇処理",
+          "depth": 2,
+          "examples": []
+        },
+        "DA06": {
+          "label": "製造に係るもの",
+          "depth": 1,
+          "examples": [
+            "製造装置"
+          ]
+        },
+        "DA07": {
+          "label": "製造装置",
+          "depth": 2,
+          "examples": [
+            "製造方法"
+          ]
+        },
+        "DA08": {
+          "label": "製造方法",
+          "depth": 2,
+          "examples": []
+        }
+      }
+    }
+  }
+}
