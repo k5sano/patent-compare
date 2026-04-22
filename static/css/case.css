@@ -345,10 +345,20 @@
   .fterm-cat-section-head .src-badge.src-group { background: #422006; color: #fbbf24; }
   .fterm-cat-section-head .src-badge.src-dict { background: #3b1f4b; color: #c084fc; }
 
-  .fterm-cat-item { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: 0.6rem;
+  /* 3 カラム目 (グループ追加チップ群) は max-content 分広がってしまい
+     説明カラムが縦 1 文字に潰れることがあるため、最大幅をクランプして
+     チップ側を wrap させる。グループ数が多い場合はチップ列を折返し。 */
+  .fterm-cat-item { display: grid;
+    grid-template-columns: 7.5rem minmax(18rem, 1fr) minmax(0, 18rem); gap: 0.6rem;
     padding: 6px 8px; background: var(--surface); border: 1px solid transparent;
     border-radius: 6px; margin-bottom: 4px; align-items: start; font-size: 0.82rem;
     transition: border-color 0.15s, background 0.15s; }
+  /* 画面幅が狭いとき、または親コンテナが狭いときはチップを説明の下に改行配置 */
+  @media (max-width: 1200px) {
+    .fterm-cat-item { grid-template-columns: 6rem 1fr; }
+    .fterm-cat-actions { grid-column: 1 / -1; justify-content: flex-start;
+      margin-top: 2px; padding-top: 4px; border-top: 1px dashed var(--border); }
+  }
   .fterm-cat-item:hover { border-color: var(--border); background: var(--surface2); }
   .fterm-cat-item.hidden { display: none; }
   .fterm-cat-code { font-family: 'Consolas', monospace; color: #60a5fa; font-weight: 600; font-size: 0.82rem;
@@ -364,10 +374,11 @@
   .fterm-cat-desc .examples { display: block; color: var(--text2); font-size: 0.75rem; margin-top: 2px; }
   .fterm-cat-desc .note { display: block; color: var(--text2); font-size: 0.72rem; margin-top: 2px;
     font-style: italic; border-left: 2px solid var(--border); padding-left: 6px; opacity: 0.85; }
-  .fterm-cat-actions { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
-  .fterm-add-chip { padding: 2px 8px; border-radius: 10px; font-size: 0.72rem; font-weight: 600;
+  .fterm-cat-actions { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+    max-height: 6.5rem; overflow-y: auto; }
+  .fterm-add-chip { padding: 1px 7px; border-radius: 10px; font-size: 0.7rem; font-weight: 600;
     cursor: pointer; border: 1px solid transparent; color: #fff;
-    transition: transform 0.1s, opacity 0.15s; }
+    transition: transform 0.1s, opacity 0.15s; min-width: 1.4rem; text-align: center; }
   .fterm-add-chip:hover { transform: translateY(-1px); }
   .fterm-add-chip.already { opacity: 0.45; cursor: default; position: relative; }
   .fterm-add-chip.already:hover { transform: none; }
