@@ -118,3 +118,25 @@ class TestFtermShortCode:
 
     def test_garbage(self):
         assert _fterm_short_code("not-a-code") == "not-a-code"
+
+
+class TestFindCitationPdf:
+    def test_source_pdf_hint_finds_mismatched_filename(self, tmp_path):
+        """citations JSON の source_pdf で、文献IDと違う名前の input PDF を辿る"""
+        case_dir = tmp_path / "c"
+        input_dir = case_dir / "input"
+        cit_dir = case_dir / "citations"
+        input_dir.mkdir(parents=True)
+        cit_dir.mkdir(parents=True)
+        weird = input_dir / "browser_download.pdf"
+        weird.write_bytes(b"%PDF-1.3\n")
+        doc_id = "特開2024-999999"
+        (cit_dir / f"{doc_id}.json").write_text(
+            json.dumps(
+                {"patent_number": doc_id, "source_pdf": "browser_download.pdf"},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        found = case_service.find_citation_pdf(input_dir, doc_id)
+        assert found == weird

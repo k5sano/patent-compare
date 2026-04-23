@@ -356,6 +356,32 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
     result["role"] = role
     result["label"] = label or doc_id
 
+    # 引用文献ID と一致するファイル名に正規化（手動アップロードで download 等の名前だと
+    # find_citation_pdf / 注釈PDFがヒットしなくなるため）
+    src = Path(save_path).resolve()
+    input_dir = case_dir / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    safe_stem = re.sub(r'[<>:"/\\|?*]', "_", doc_id).strip() or re.sub(
+        r'[<>:"/\\|?*]', "_", src.stem
+    )
+    if not safe_stem:
+        safe_stem = "citation"
+    target = (input_dir / f"{safe_stem}.pdf").resolve()
+    try:
+        if src != target:
+            if target.exists() and target != src:
+                target.unlink()
+            shutil.copy2(str(src), str(target))
+            in_input = str(src).startswith(str(input_dir.resolve()))
+            if in_input and src != target and src.is_file():
+                try:
+                    src.unlink()
+                except OSError:
+                    pass
+        result["source_pdf"] = target.name
+    except OSError as e:
+        return {"error": f"PDFの保存(正規名へのコピー)に失敗: {e}"}, 500
+
     with open(case_dir / "citations" / f"{doc_id}.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -462,6 +488,23 @@ def find_citation_pdf(input_dir, citation_id):
     """input/ディレクトリから引用文献IDに対応するPDFを探す"""
     if not input_dir.exists():
         return None
+
+    # citations/{id}.json の source_pdf（アップロード時の元ファイル名など）を優先
+    try:
+        cit_json = input_dir.parent / "citations" / f"{citation_id}.json"
+        if cit_json.is_file():
+            with open(cit_json, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            for key in ("source_pdf", "canonical_pdf", "input_pdf"):
+                hint = d.get(key)
+                if not hint:
+                    continue
+                name = Path(str(hint)).name
+                cand = input_dir / name
+                if cand.is_file():
+                    return cand
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
 
     fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
 

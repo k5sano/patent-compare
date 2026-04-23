@@ -2007,6 +2007,7 @@ async function parseResponse() {
         パース成功! ${data.num_docs}件の文献の対比結果を保存しました。<br>
         保存先: ${docs.join(', ')}
       </div>`;
+      loadComparisonSummary();
     } else if (!data.errors || data.errors.length === 0) {
       result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
         パース失敗: JSONを抽出できませんでした。
@@ -2018,120 +2019,350 @@ async function parseResponse() {
   }
 }
 
-// ===== 対比サマリ読み込み =====
+// ===== 対比サマリ読み込み & 表描画（列表示/詳細・充足切替） =====
+let _compSummaryData = null;
+let _compSummaryWired = false;
+
+function _compMetaForCit(citId) {
+  const list = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.citations_meta) || [];
+  const s = String(citId);
+  return list.find((x) => x != null && String(x.id) === s) || { id: citId, label: citId, category: '' };
+}
+
+function _compCategoryForCit(citId, resp) {
+  const m = _compMetaForCit(citId);
+  if (m.category) {
+    const t = String(m.category).trim().toUpperCase();
+    if (t.startsWith('X')) return 'X';
+    if (t.startsWith('Y')) return 'Y';
+    if (t.startsWith('A')) return 'A';
+  }
+  const s = (resp && resp.category_suggestion) ? String(resp.category_suggestion) : '';
+  const u = s.trim().toUpperCase();
+  if (u.indexOf('X') === 0) return 'X';
+  if (u.indexOf('Y') === 0) return 'Y';
+  if (u.indexOf('A') === 0) return 'A';
+  if (s.includes('X') || s.includes('x')) return 'X';
+  if (s.includes('Y') || s.includes('y')) return 'Y';
+  if (s.includes('A') && !/AB|AR/i.test(s)) return 'A';
+  return '';
+}
+
+function _compCategoryBadgeHtml(cat) {
+  if (cat === 'X') return '<span class="comp-cat comp-cat-x" title="X 引例">X</span>';
+  if (cat === 'Y') return '<span class="comp-cat comp-cat-y" title="Y 引例">Y</span>';
+  if (cat === 'A') return '<span class="comp-cat comp-cat-a" title="A 文献">A</span>';
+  return '<span class="comp-cat comp-cat-na" title="分類未設定">—</span>';
+}
+
+function _compJClass(j) {
+  if (j === '○') return 'j-ok';
+  if (j === '△') return 'j-partial';
+  if (j === '×') return 'j-ng';
+  return '';
+}
+
+function wireCompSummaryIfNeeded() {
+  if (_compSummaryWired) return;
+  const root = document.getElementById('comparison-summary');
+  if (!root) return;
+  _compSummaryWired = true;
+  root.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t && ((t.classList && t.classList.contains('comp-col-toggle')) || t.name === 'comp-view')) {
+      renderCompSummaryTable();
+    }
+  });
+  root.addEventListener('click', (e) => {
+    const t = e.target && e.target.closest ? e.target.closest('.comp-colbar-quick-btn') : null;
+    if (!t) return;
+    e.preventDefault();
+    _compColbarApplyQuickSelect(t.getAttribute('data-quick') || '');
+  });
+}
+
+function _compColbarApplyQuickSelect(action) {
+  const d = _compSummaryData;
+  if (!d) return;
+  const colbar = document.getElementById('comp-summary-colbar');
+  if (!colbar) return;
+  const boxes = colbar.querySelectorAll('.comp-col-toggle');
+  boxes.forEach((cb) => {
+    const cid = cb.getAttribute('data-cit-id');
+    const cat = _compCategoryForCit(cid, d.responses[cid]);
+    let on;
+    if (action === 'ALL') on = true;
+    else if (action === 'NONE') on = false;
+    else on = (cat === action); // 'X' | 'Y' | 'A'
+    cb.checked = on;
+  });
+  renderCompSummaryTable();
+}
+
+function _buildColbarHtml(d, visMap) {
+  let cb = '<div class="comp-colbar-row1">' +
+    '<span class="comp-colbar-lbl">表示する列</span>' +
+    '<div class="comp-colbar-quick" role="group" aria-label="一発選択">' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-x" data-quick="X" title="X 引例のみ表示">X のみ</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-y" data-quick="Y" title="Y 引例のみ表示">Y のみ</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-a" data-quick="A" title="A 文献のみ表示">A のみ</button>' +
+      '<button type="button" class="comp-colbar-quick-btn" data-quick="ALL" title="全文献を表示">全選択</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-clear" data-quick="NONE" title="すべてのチェックを外す">All clear</button>' +
+    '</div>' +
+    '</div>' +
+    '<div class="comp-colbar-chips">';
+  for (const cid of d.citIds) {
+    const meta = _compMetaForCit(cid);
+    const cat = _compCategoryForCit(cid, d.responses[cid]);
+    const ch = (visMap[cid] !== false) ? ' checked' : '';
+    cb += '<label class="comp-col-chip">' +
+      '<input type="checkbox" class="comp-col-toggle" data-cit-id="' + _escapeHtml(cid) + '"' + ch + ' title="表にこの文献列を含める">' +
+      '<span class="comp-col-chip-name">' + _escapeHtml(meta.label || cid) + '</span>' +
+      '<span class="comp-cat comp-cat-' + (cat === 'X' ? 'x' : cat === 'Y' ? 'y' : cat === 'A' ? 'a' : 'na') + ' comp-cat-inline">' + (cat || '—') + '</span></label>';
+  }
+  cb += '</div>';
+  return cb;
+}
+
+function renderCompSummaryTable() {
+  const tbody = document.getElementById('summary-tbody');
+  const thead = document.getElementById('comp-summary-thead');
+  const colbar = document.getElementById('comp-summary-colbar');
+  if (!tbody) return;
+  wireCompSummaryIfNeeded();
+
+  const d = _compSummaryData;
+  if (!d) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:center; color:var(--text2);">読み込み中...</td></tr>';
+    if (thead) thead.innerHTML = '';
+    if (colbar) colbar.innerHTML = '';
+    return;
+  }
+
+  const citIds = d.citIds;
+  if (citIds.length === 0) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2">—</td></tr>';
+    return;
+  }
+
+  if (!d.hasAny) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="' + (citIds.length + 1) + '" style="text-align:center; color:var(--text2);">Step 5で回答を取り込むと、ここに対比サマリが表示されます。</td></tr>';
+    if (thead) thead.innerHTML = '';
+    if (colbar) colbar.innerHTML = '';
+    return;
+  }
+  if (!d.claim1) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2">分節データを確認してください。</td></tr>';
+    if (thead) thead.innerHTML = '';
+    if (colbar) colbar.innerHTML = '';
+    return;
+  }
+
+  const visMap = {};
+  citIds.forEach((id) => { visMap[id] = true; });
+  if (colbar) {
+    colbar.querySelectorAll('.comp-col-toggle').forEach((el) => {
+      const id = el.getAttribute('data-cit-id');
+      if (id) visMap[id] = el.checked;
+    });
+  }
+  const activeCits = citIds.filter((id) => visMap[id] !== false);
+  if (activeCits.length === 0) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:center; color:var(--text2);">少なくとも1件の「表示する列」にチェックを入れてください。</td></tr>';
+    if (thead) thead.innerHTML = '';
+    if (colbar) colbar.innerHTML = _buildColbarHtml(d, visMap);
+    return;
+  }
+
+  if (colbar) colbar.innerHTML = _buildColbarHtml(d, visMap);
+
+  const view = (document.querySelector('#comparison-summary input[name="comp-view"]:checked') || {}).value || 'detail';
+  const isCompact = view === 'compact';
+  const spanAll = activeCits.length + 1;
+
+  let h = '<tr><th class="comp-th-req" scope="col">構成要件</th>';
+  for (const citId of activeCits) {
+    const meta = _compMetaForCit(citId);
+    const cat = _compCategoryForCit(citId, d.responses[citId]);
+    h += '<th class="comp-th-cit" scope="col" data-cit-th="' + _escapeHtml(citId) + '">' +
+      '<div class="comp-th-cit-line1">' + _escapeHtml(meta.label || citId) + '</div>' +
+      '<div class="comp-th-cat">' + _compCategoryBadgeHtml(cat) + '</div></th>';
+  }
+  h += '</tr>';
+  if (thead) thead.innerHTML = h;
+
+  const segIds = d.segIds;
+  let body = '';
+  for (const segId of segIds) {
+    if (isCompact) {
+      body += '<tr>';
+      body += '<td class="comp-td-req" style="font-weight:700; white-space:nowrap;">' + _escapeHtml(segId) + '</td>';
+      for (const citId of activeCits) {
+        const resp = d.responses[citId];
+        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
+        const j = (comp && comp.judgment) ? String(comp.judgment) : '—';
+        body += '<td class="comp-td-j ' + _compJClass(j) + ' comp-td-zen">' + _escapeHtml(j) + '</td>';
+      }
+      body += '</tr>';
+    } else {
+      body += '<tr>';
+      body += '<td class="comp-td-req" rowspan="2" style="vertical-align:top; font-weight:700; white-space:nowrap;">' + _escapeHtml(segId) + '</td>';
+      for (const citId of activeCits) {
+        const resp = d.responses[citId];
+        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
+        const j = (comp && comp.judgment) ? String(comp.judgment) : '—';
+        body += '<td class="comp-td-j ' + _compJClass(j) + '">' + _escapeHtml(j) + '</td>';
+      }
+      body += '</tr><tr>';
+      for (const citId of activeCits) {
+        const resp = d.responses[citId];
+        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
+        if (comp) {
+          const reason = _escapeHtml(comp.judgment_reason || '');
+          const loc = comp.cited_location
+            ? '<br><span class="comp-cite-loc">📍 ' + _escapeHtml(comp.cited_location) + '</span>'
+            : '';
+          body += '<td class="comp-td-reason">' + reason + loc + '</td>';
+        } else {
+          body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
+        }
+      }
+      body += '</tr>';
+    }
+  }
+
+  const subClaims = d.subClaims;
+  if (subClaims && subClaims.length > 0) {
+    body += '<tr><th class="comp-section-h" colspan="' + spanAll + '" style="text-align:left; padding-top:0.8rem;">従属請求項</th></tr>';
+    for (const claim of subClaims) {
+      if (isCompact) {
+        body += '<tr><td class="comp-td-req" style="font-weight:700;">請求項' + String(claim.claim_number) + '</td>';
+        for (const citId of activeCits) {
+          const resp = d.responses[citId];
+          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
+          const j = (sub && sub.judgment) ? String(sub.judgment) : '—';
+          body += '<td class="comp-td-j ' + _compJClass(j) + ' comp-td-zen">' + _escapeHtml(j) + '</td>';
+        }
+        body += '</tr>';
+      } else {
+        body += '<tr><td class="comp-td-req" style="font-weight:700;">請求項' + String(claim.claim_number) + '</td>';
+        for (const citId of activeCits) {
+          const resp = d.responses[citId];
+          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
+          if (sub) {
+            const j = (sub.judgment) ? String(sub.judgment) : '—';
+            const jr = _escapeHtml(sub.judgment_reason || '');
+            body += '<td class="comp-td-j ' + _compJClass(j) + '" style="font-size:0.85rem;">' + _escapeHtml(j) + ' <span class="comp-sub-rationale">' + jr + '</span></td>';
+          } else {
+            body += '<td style="color:var(--text2);">—</td>';
+          }
+        }
+        body += '</tr>';
+      }
+    }
+  }
+
+  body += '<tr><th class="comp-section-h" colspan="' + spanAll + '" style="text-align:left; padding-top:0.8rem;">文献サマリ</th></tr>';
+  body += '<tr><td class="comp-td-req" style="font-weight:700;">総合評価</td>';
+  for (const citId of activeCits) {
+    const resp = d.responses[citId];
+    if (isCompact) {
+      if (resp) {
+        const cat = _escapeHtml(String(resp.category_suggestion || ''));
+        body += '<td class="comp-td-sum-compact"><div class="comp-sum-catline">' + cat + '</div></td>';
+      } else {
+        body += '<td class="comp-td-sum" style="color:var(--text2);">未回答</td>';
+      }
+    } else {
+      if (resp) {
+        const cat = _escapeHtml(String(resp.category_suggestion || ''));
+        const summary = _escapeHtml(String(resp.overall_summary || ''));
+        body += '<td class="comp-td-sum"><strong>' + cat + '</strong><br><span class="comp-sum-text">' + summary + '</span></td>';
+      } else {
+        body += '<td class="comp-td-sum" style="color:var(--text2);">未回答</td>';
+      }
+    }
+  }
+  body += '</tr>';
+  tbody.innerHTML = body;
+}
+
+function _setCompSummaryLoadError(msg) {
+  const tbody = document.getElementById('summary-tbody');
+  const thead = document.getElementById('comp-summary-thead');
+  const colbar = document.getElementById('comp-summary-colbar');
+  _compSummaryData = null;
+  if (tbody) {
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:left; color:#f87171; padding:0.75rem;">' +
+      _escapeHtml(msg) + '</td></tr>';
+  }
+  if (thead) thead.innerHTML = '';
+  if (colbar) colbar.innerHTML = '';
+}
+
 async function loadComparisonSummary() {
+  wireCompSummaryIfNeeded();
+  const tbody = document.getElementById('summary-tbody');
+  if (!tbody) return;
+
+  const citIds = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.cit_ids) || [];
+  if (citIds.length === 0) {
+    _compSummaryData = null;
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:center; color:var(--text2);">引用文献がありません。</td></tr>';
+    const thead = document.getElementById('comp-summary-thead');
+    const colbar = document.getElementById('comp-summary-colbar');
+    if (thead) thead.innerHTML = '';
+    if (colbar) colbar.innerHTML = '';
+    return;
+  }
+
   try {
-    const segResp = await fetch(`/case/${CASE_ID}/segments`);
-    if (!segResp.ok) return;
+    const segResp = await fetch('/case/' + CASE_ID + '/segments');
+    if (!segResp.ok) {
+      let detail = '分節データを取得できませんでした。';
+      try {
+        const err = await segResp.json();
+        if (err && err.error) detail = String(err.error);
+      } catch (e) { /* */ }
+      _setCompSummaryLoadError('対比表: ' + detail + ' (HTTP ' + segResp.status + ')');
+      return;
+    }
     const segs = await segResp.json();
 
-    const tbody = document.getElementById('summary-tbody');
-    if (!tbody) return;
+    const claim1 = segs.find((c) => c.claim_number === 1);
+    const segIds = claim1 ? claim1.segments.map((s) => s.id) : [];
+    const subClaims = segs.filter((c) => c.claim_number !== 1);
 
-    const citIds = window.CASE_BOOTSTRAP.cit_ids || [];
-    if (citIds.length === 0) return;
-
-    // 各文献の回答を取得
     const responses = {};
     let hasAny = false;
     for (const citId of citIds) {
       try {
-        const r = await fetch(`/case/${CASE_ID}/response/${citId}`);
+        const r = await fetch('/case/' + CASE_ID + '/response/' + encodeURIComponent(citId));
         if (r.ok) {
           responses[citId] = await r.json();
           hasAny = true;
         }
-      } catch(e) {}
+      } catch (e) { /* */ }
     }
 
-    if (!hasAny) {
-      tbody.innerHTML = '<tr><td colspan="' + (citIds.length + 1) + '" style="text-align:center; color:var(--text2);">Step 5で回答を取り込むと、ここに対比サマリが表示されます。</td></tr>';
-      return;
-    }
-
-    // 請求項1の構成要件IDリストを取得
-    const claim1 = segs.find(c => c.claim_number === 1);
-    if (!claim1) return;
-    const segIds = claim1.segments.map(s => s.id);
-
-    // judgmentの表示クラス
-    function jClass(j) {
-      if (j === '○') return 'j-ok';
-      if (j === '△') return 'j-partial';
-      if (j === '×') return 'j-ng';
-      return '';
-    }
-
-    // テーブル構築
-    let html = '';
-    for (const segId of segIds) {
-      const segText = claim1.segments.find(s => s.id === segId)?.text || '';
-      // 判定行
-      html += '<tr>';
-      html += `<td rowspan="2" style="vertical-align:top; font-weight:700; white-space:nowrap;">${segId}</td>`;
-      for (const citId of citIds) {
-        const resp = responses[citId];
-        const comp = resp?.comparisons?.find(c => c.requirement_id === segId);
-        const j = comp?.judgment || '—';
-        html += `<td class="${jClass(j)}">${j}</td>`;
-      }
-      html += '</tr>';
-      // 理由行
-      html += '<tr>';
-      for (const citId of citIds) {
-        const resp = responses[citId];
-        const comp = resp?.comparisons?.find(c => c.requirement_id === segId);
-        if (comp) {
-          const reason = comp.judgment_reason || '';
-          const loc = comp.cited_location ? `<br><span style="color:var(--text2); font-size:0.75rem;">📍 ${comp.cited_location}</span>` : '';
-          html += `<td style="font-size:0.8rem;">${reason}${loc}</td>`;
-        } else {
-          html += '<td style="color:var(--text2);">—</td>';
-        }
-      }
-      html += '</tr>';
-    }
-
-    // 従属請求項サマリ
-    const subClaims = segs.filter(c => c.claim_number !== 1);
-    if (subClaims.length > 0) {
-      html += `<tr><th colspan="${citIds.length + 1}" style="text-align:left; padding-top:1rem;">従属請求項</th></tr>`;
-      for (const claim of subClaims) {
-        html += '<tr>';
-        html += `<td style="font-weight:700;">請求項${claim.claim_number}</td>`;
-        for (const citId of citIds) {
-          const resp = responses[citId];
-          const sub = resp?.sub_claims?.find(sc => sc.claim_number === claim.claim_number);
-          if (sub) {
-            const j = sub.judgment || '—';
-            html += `<td class="${jClass(j)}" style="font-size:0.85rem;">${j} <span style="font-size:0.75rem; font-weight:normal;">${sub.judgment_reason || ''}</span></td>`;
-          } else {
-            html += '<td style="color:var(--text2);">—</td>';
-          }
-        }
-        html += '</tr>';
-      }
-    }
-
-    // 文献サマリ
-    html += `<tr><th colspan="${citIds.length + 1}" style="text-align:left; padding-top:1rem;">文献サマリ</th></tr>`;
-    html += '<tr><td style="font-weight:700;">総合評価</td>';
-    for (const citId of citIds) {
-      const resp = responses[citId];
-      if (resp) {
-        const cat = resp.category_suggestion || '';
-        const summary = resp.overall_summary || '';
-        html += `<td style="font-size:0.8rem;"><strong>${cat}</strong><br>${summary}</td>`;
-      } else {
-        html += '<td style="color:var(--text2);">未回答</td>';
-      }
-    }
-    html += '</tr>';
-
-    tbody.innerHTML = html;
-  } catch(e) {
+    _compSummaryData = {
+      segs,
+      claim1,
+      segIds,
+      citIds,
+      responses,
+      subClaims,
+      hasAny: hasAny
+    };
+    renderCompSummaryTable();
+  } catch (e) {
     console.error('loadComparisonSummary error:', e);
+    _setCompSummaryLoadError('対比表の読み込みに失敗しました: ' + (e && e.message ? e.message : String(e)));
   }
+}
+
+if (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.has_citations) {
+  loadComparisonSummary();
 }
 
 // ===== 案件情報編集 =====
@@ -2184,6 +2415,16 @@ async function exportExcel() {
 }
 
 // ===== 注釈PDF =====
+/** 対比回答が未取り込みのとき（responses/{id}.json なし）の注釈ボタン用 */
+function srAnnotateNeedStep5() {
+  alert(
+    '注釈PDFを作るには、当該文献について Step 5（対比）の「回答をパース」まで完了している必要があります。\n\n' +
+    '手順: 上のステップから「5 対比」を開く → 対象文献にチェック → プロンプト生成 → ' +
+    'Claude 等で実行 → 回答を貼り付け →「回答をパース」。\n\n' +
+    '完了後にこの画面を再読み込みすると、注釈PDFボタンが有効になります。'
+  );
+}
+
 async function annotateCitation(citId, btn) {
   const origText = btn.textContent;
   btn.textContent = '生成中...';
@@ -2700,8 +2941,12 @@ async function loadCitationFullTexts() {
 
       // 対比結果から cited_text / cited_location を表示
       if (respData.comparisons) {
-        html += `<details class="citation-fulltext" style="margin-bottom:1rem;" data-citation-text="${citId}">`;
-        html += `<summary>${citId} の対比結果テキスト</summary>`;
+        const jpUrl = buildJplatpatUrl(citId);
+        const jpLink = jpUrl
+          ? ` <a href="${jpUrl}" target="_blank" rel="noopener noreferrer" class="cit-jplatpat-link" onclick="event.stopPropagation();">J-PlatPat（経過情報）</a>`
+          : '';
+        html += `<details class="citation-fulltext" style="margin-bottom:1rem;" data-citation-text="${String(citId).replace(/"/g, '&quot;')}">`;
+        html += `<summary style="cursor:pointer; align-items:center; gap:0.5rem;">${_escapeHtml(citId)} の対比結果テキスト${jpLink}</summary>`;
         html += '<div style="padding:0.5rem;">';
         for (const comp of respData.comparisons) {
           const j = comp.judgment || '—';

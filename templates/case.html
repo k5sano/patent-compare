@@ -473,9 +473,14 @@
             </p>
           </div>
           <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
-            {% if cit._has_response and cit._has_pdf %}
+            {% if cit._has_pdf and cit._has_response %}
             <button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+                    type="button"
                     onclick="annotateCitation('{{ cit.id }}', this)">注釈PDF</button>
+            {% elif cit._has_pdf and not cit._has_response %}
+            <button class="btn btn-outline" type="button" style="padding:0.3rem 0.8rem; font-size:0.8rem; opacity:0.8;"
+                    title="先に Step 5 で当該文献の対比回答を取り込んでください"
+                    onclick="srAnnotateNeedStep5()">注釈PDF</button>
             {% endif %}
             {% if not cit._has_pdf %}
             <a href="javascript:void(0)" onclick="window.open(buildJplatpatUrl('{{ cit.id }}'),'_blank')"
@@ -794,24 +799,34 @@
     <div class="card">
       <h2>Step 6: 対比表Excel出力</h2>
 
-      <!-- 対比結果サマリ -->
-      <div id="comparison-summary">
+      <!-- 対比結果サマリ（表は case.js の renderCompSummaryTable で描画） -->
+      <div id="comparison-summary" class="comp-summary-outer">
         {% if citations %}
-        <table style="margin-bottom:1.5rem;">
-          <thead>
-            <tr>
-              <th>構成要件</th>
-              {% for cit in citations %}
-              <th>{{ cit.label }}</th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody id="summary-tbody">
-            <tr><td colspan="{{ citations|length + 1 }}" style="text-align:center; color:var(--text2);">
-              回答データ読み込み中...
-            </td></tr>
-          </tbody>
-        </table>
+        <div id="comp-summary-toolbar" class="comp-summary-toolbar">
+          <div class="comp-toolbar-views" role="radiogroup" aria-label="対比表の表示タイプ">
+            <span class="comp-toolbar-lbl">表示タイプ</span>
+            <label class="comp-radio-lbl">
+              <input type="radio" name="comp-view" value="detail" checked> 詳細（項目全部表示）
+            </label>
+            <label class="comp-radio-lbl">
+              <input type="radio" name="comp-view" value="compact"> 充足（〇・×・△のみ）
+            </label>
+          </div>
+          <p class="comp-toolbar-hint" style="font-size:0.8rem; color:var(--text2); margin:0.5rem 0 0.25rem; line-height:1.4;">
+            下の <strong>表示する列</strong>のチェックで、表の文献列を出し分けします（他の表記は文献名行の下に X/Y/A を表示します）。
+          </p>
+          <div id="comp-summary-colbar" class="comp-summary-colbar" role="group" aria-label="表示する文献列"></div>
+        </div>
+        <div class="comp-summary-scroll">
+          <table class="comp-summary-table" id="comp-summary-table">
+            <thead id="comp-summary-thead"></thead>
+            <tbody id="summary-tbody">
+              <tr><td class="comp-loading-cell" colspan="99" style="text-align:center; color:var(--text2);">回答データ読み込み中...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="muted" style="font-size:0.9rem;">引用文献がないと対比表は表示されません。</p>
         {% endif %}
       </div>
 
@@ -931,7 +946,13 @@ window.CASE_BOOTSTRAP = {
   segments: {{ segments | tojson if segments else '[]' }},
   keywords: {{ keywords | tojson if keywords else '[]' }},
   related_paragraphs: {{ related_paragraphs | tojson if related_paragraphs else '{}' }},
-  cit_ids: [{% for cit in citations %}{{ cit.id | tojson }}{% if not loop.last %},{% endif %}{% endfor %}]
+  cit_ids: [{% for cit in citations %}{{ cit.id | tojson }}{% if not loop.last %},{% endif %}{% endfor %}],
+  citations_meta: [
+    {% for cit in citations %}
+    { "id": {{ cit.id | tojson }}, "label": {{ (cit.label or cit.id) | tojson }},
+      "category": {{ (cit._category or "") | tojson }} }{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ]
 };
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>
