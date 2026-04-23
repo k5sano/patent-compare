@@ -45,7 +45,7 @@ function showPanel(idx) {
       s.classList.toggle('active', i === idx);
     }
   });
-  if (idx === 4) loadSearchRuns();
+  if (idx === 4) { loadSearchRuns(); srJppCheckStatus(); srEnsureSnippetsLoaded(); }
   if (idx === 6) loadComparisonSummary();
 }
 
@@ -3368,6 +3368,205 @@ function srAutoFixFormula() {
   _srShowToast(`検索式を自動修正しました (${before.length}→${after.length}字)`);
 }
 
+// ========== J-PlatPat メタ情報 (出願日/優先日/テーマコード) ==========
+
+// 汎用クリップボードコピー + ボタン点灯
+async function srCopyText(text, btn) {
+  const t = (text || '').trim();
+  if (!t || t === '未設定') {
+    _srShowToast('コピーする内容がありません');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(t);
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✅';
+      setTimeout(() => { btn.textContent = orig; }, 900);
+    }
+    _srShowToast('コピーしました: ' + (t.length > 30 ? t.slice(0, 30) + '…' : t));
+  } catch (e) {
+    _srShowToast('コピー失敗: ' + e.message);
+  }
+}
+
+// 出願日/優先日の編集 (YYYY-MM-DD)
+async function srEditDate(field) {
+  const label = field === 'filing_date' ? '出願日' : '優先日';
+  const el = document.getElementById(field === 'filing_date' ? 'sr-filing-date' : 'sr-priority-date');
+  const cur = (el.textContent || '').trim();
+  const curVal = (cur === '未設定') ? '' : cur;
+  const v = prompt(`${label} を YYYY-MM-DD 形式で入力してください (空にすると削除)`, curVal);
+  if (v === null) return;
+  const trimmed = v.trim();
+  if (trimmed && !/^\d{4}-\d{1,2}-\d{1,2}$/.test(trimmed)) {
+    if (!confirm('形式が YYYY-MM-DD ではありません。このまま保存しますか?')) return;
+  }
+  try {
+    const r = await fetch(`/case/${CASE_ID}/meta`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({[field]: trimmed}),
+    });
+    const d = await r.json();
+    if (d.success) {
+      el.textContent = trimmed || '未設定';
+      _srShowToast(`${label}を更新しました`);
+    } else {
+      _srShowToast('保存失敗: ' + (d.error || '不明'));
+    }
+  } catch (e) {
+    _srShowToast('通信エラー: ' + e.message);
+  }
+}
+
+// テーマコード chips 描画
+function srRenderThemeChips(themeCodes) {
+  const el = document.getElementById('sr-theme-chips');
+  if (!el) return;
+  if (!themeCodes || !themeCodes.length) {
+    el.innerHTML = '<span class="sr-theme-empty">(抽出できませんでした)</span>';
+    return;
+  }
+  el.innerHTML = themeCodes.map(code =>
+    `<button class="sr-theme-chip" title="クリックでコピー" onclick="srCopyText('${code}', this)">${code}</button>`
+  ).join('');
+}
+
+// ========== J-PlatPat 半自動化フロー ==========
+
+function _srJppSetBadge(state, text) {
+  const el = document.getElementById('sr-jpp-session-badge');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'sr-jpp-badge ' +
+    (state === 'on' ? 'sr-jpp-badge-on' :
+     state === 'busy' ? 'sr-jpp-badge-busy' : 'sr-jpp-badge-off');
+}
+
+function _srJppSetStatus(html, cls) {
+  const el = document.getElementById('sr-jpp-status');
+  if (!el) return;
+  el.innerHTML = html || '';
+  el.className = 'sr-jpp-status ' + (cls || '');
+}
+
+async function srJppOpen() {
+  const btn = document.getElementById('btn-jpp-open');
+  if (btn) btn.disabled = true;
+  _srJppSetBadge('busy', '🟡 起動中…');
+  _srJppSetStatus('ブラウザを起動しています…', 'info');
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/jplatpat/open`, {method: 'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      _srJppSetBadge('on', '🟢 起動中');
+      _srJppSetStatus(
+        '<strong>J-PlatPat を開きました。</strong> ' +
+        '次に J-PlatPat 側で「<b>論理式入力</b>」タブに切り替えてから、<b>②</b> を押してください。',
+        'success');
+    } else {
+      _srJppSetBadge('off', '🔴 失敗');
+      _srJppSetStatus('起動失敗: ' + (d.error || '不明なエラー'), 'error');
+    }
+  } catch (e) {
+    _srJppSetBadge('off', '🔴 失敗');
+    _srJppSetStatus('通信エラー: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function srJppFill() {
+  const formula = (document.getElementById('sr-formula').value || '').trim();
+  if (!formula) { alert('検索式を入力してください'); return; }
+  const btn = document.getElementById('btn-jpp-fill');
+  if (btn) btn.disabled = true;
+  _srJppSetStatus('式を入力中…', 'info');
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/jplatpat/fill`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({formula}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      _srJppSetStatus(
+        `<strong>式を入力しました (${d.filled_chars}文字)</strong>。 ` +
+        'J-PlatPat 画面で「<b>検索</b>」ボタンを押して結果を表示させた後、<b>③</b> を押してください。',
+        'success');
+    } else {
+      _srJppSetStatus('入力失敗: ' + (d.error || '不明なエラー'), 'error');
+    }
+  } catch (e) {
+    _srJppSetStatus('通信エラー: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function srJppScrape() {
+  const formula = (document.getElementById('sr-formula').value || '').trim();
+  if (!formula) { alert('検索式を入力してください (ラン保存に必要)'); return; }
+  const level = document.getElementById('sr-level').value;
+  const maxResults = parseInt(document.getElementById('sr-max').value || '50', 10);
+  const btn = document.getElementById('btn-jpp-scrape');
+  if (btn) btn.disabled = true;
+  _srJppSetStatus('結果を読み取り中…', 'info');
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/jplatpat/scrape`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        formula, formula_level: level,
+        max_results: maxResults,
+        parent_run_id: _srParentRunId || null,
+        save_run: true,
+      }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const n = d.count ?? 0;
+      let msg = `<strong>${n} 件取り込みました</strong> (ラン ID: ${d.run?.run_id || '?'})`;
+      if (d.diff_summary) {
+        const ds = d.diff_summary;
+        msg += ` / 親ラン比: 共通${ds.common} 新規${ds.added} 消失${ds.removed}`;
+      }
+      _srJppSetStatus(msg, 'success');
+      srClearParent();
+      await loadSearchRuns();
+      if (d.run?.run_id) srOpenRun(d.run.run_id);
+    } else {
+      _srJppSetStatus('取り込み失敗: ' + (d.error || '不明なエラー'), 'error');
+    }
+  } catch (e) {
+    _srJppSetStatus('通信エラー: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function srJppClose() {
+  try {
+    await fetch(`/case/${CASE_ID}/search-run/jplatpat/close`, {method: 'POST'});
+  } catch (e) {}
+  _srJppSetBadge('off', '🔴 未起動');
+  _srJppSetStatus('セッションを閉じました。', 'info');
+}
+
+// 起動時にセッション状態を反映
+async function srJppCheckStatus() {
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/jplatpat/status`);
+    const d = await r.json();
+    if (d.alive) {
+      _srJppSetBadge('on', '🟢 起動中');
+    } else {
+      _srJppSetBadge('off', '🔴 未起動');
+    }
+  } catch (e) {}
+}
+
 // 現在のメインエディタの式をクリップボードへコピー
 function srCopyMainFormula() {
   const ta = document.getElementById('sr-formula');
@@ -3972,12 +4171,22 @@ async function srToggleKwHelper() {
   }
 }
 
+// Step 4 を開いたとき、snippets がまだ読み込まれていなければ取得してテーマ chips を描画
+async function srEnsureSnippetsLoaded() {
+  if (_srKwSnippets === null) {
+    await srLoadKwSnippets();
+  } else {
+    srRenderThemeChips(_srKwSnippets.theme_codes || []);
+  }
+}
+
 async function srLoadKwSnippets() {
   try {
     const r = await fetch(`/case/${CASE_ID}/search-run/snippets`);
     _srKwSnippets = await r.json();
-  } catch (e) { _srKwSnippets = {groups: [], fi_codes: [], fterm_codes: []}; }
+  } catch (e) { _srKwSnippets = {groups: [], fi_codes: [], fterm_codes: [], theme_codes: []}; }
   srRenderKwSnippets();
+  srRenderThemeChips(_srKwSnippets.theme_codes || []);
 }
 
 function srRenderKwSnippets() {

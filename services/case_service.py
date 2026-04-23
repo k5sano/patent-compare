@@ -423,9 +423,16 @@ def update_case_meta(case_id, data):
     if not meta:
         return {"error": "案件が見つかりません"}, 404
 
-    for key in ["patent_number", "patent_title", "title", "field", "year", "month"]:
+    for key in [
+        "patent_number", "patent_title", "title", "field", "year", "month",
+        "filing_date", "priority_date",
+    ]:
         if key in data:
-            meta[key] = data[key]
+            val = data[key]
+            if val is None or (isinstance(val, str) and val.strip() == ""):
+                meta.pop(key, None)
+            else:
+                meta[key] = val
     save_case_meta(case_id, meta)
     return {"success": True}, 200
 

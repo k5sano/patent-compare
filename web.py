@@ -32,6 +32,21 @@ app = Flask(__name__, template_folder=str(PROJECT_ROOT / "templates"))
 app.secret_key = _app_cfg.secret_key
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100MB
 app.json.ensure_ascii = False
+# 開発用: static (case.js/case.css) と template の編集を即反映
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
+
+
+@app.after_request
+def _no_cache_for_html(resp):
+    """動的 HTML レスポンスのブラウザキャッシュも抑止。"""
+    ct = resp.headers.get("Content-Type", "")
+    if ct.startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
 
 
 # ===== ヘルパー =====
@@ -812,6 +827,98 @@ def search_run_execute(case_id):
             diff = None
 
     return jsonify({"success": True, "run": data, "diff_summary": diff})
+
+
+# ==== J-PlatPat 半自動化セッション ====
+
+@app.route("/case/<case_id>/search-run/jplatpat/open", methods=["POST"])
+def jplatpat_session_open(case_id):
+    """J-PlatPat を可視ブラウザで開き、セッションを維持する。"""
+    from services.jplatpat_session import get_session
+    sess = get_session()
+    try:
+        r = sess.open(timeout=45)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"起動エラー: {e}"}), 500
+    return jsonify(r)
+
+
+@app.route("/case/<case_id>/search-run/jplatpat/fill", methods=["POST"])
+def jplatpat_session_fill(case_id):
+    """現在の J-PlatPat ページ (論理式入力タブ) に式をフィル。"""
+    from services.jplatpat_session import get_session
+    body = request.get_json() or {}
+    formula = (body.get("formula") or "").strip()
+    if not formula:
+        return jsonify({"ok": False, "error": "formula が必要です"}), 400
+    sess = get_session()
+    r = sess.fill(formula, timeout=25)
+    return jsonify(r)
+
+
+@app.route("/case/<case_id>/search-run/jplatpat/scrape", methods=["POST"])
+def jplatpat_session_scrape(case_id):
+    """J-PlatPat の現在の検索結果を取り込み、run として保存。"""
+    from services.jplatpat_session import get_session
+    from services.search_run_service import create_run_from_hits
+    body = request.get_json() or {}
+    formula = (body.get("formula") or "").strip()
+    level = body.get("formula_level") or "custom"
+    max_results = int(body.get("max_results") or 50)
+    parent_run_id = body.get("parent_run_id") or None
+    save_run = bool(body.get("save_run", True))
+
+    sess = get_session()
+    r = sess.scrape(max_results=max_results, timeout=40)
+    if not r.get("ok"):
+        return jsonify(r), 400
+
+    hits = r.get("hits") or []
+
+    if not save_run:
+        return jsonify({"ok": True, "hits": hits, "count": len(hits)})
+
+    if not formula:
+        return jsonify({"ok": False, "error": "formula が必要です (ラン保存時)"}), 400
+
+    try:
+        data = create_run_from_hits(
+            case_id,
+            formula=formula,
+            formula_level=level,
+            source="jplatpat_manual",
+            hits=hits,
+            search_url="https://www.j-platpat.inpit.go.jp/s0100",
+            parent_run_id=parent_run_id,
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"ラン保存エラー: {e}"}), 500
+
+    diff = None
+    if parent_run_id:
+        from services.search_run_service import compute_run_diff
+        try:
+            diff_full = compute_run_diff(case_id, data["run_id"], parent_run_id)
+            if diff_full:
+                diff = diff_full.get("summary")
+        except Exception:
+            diff = None
+
+    return jsonify({"ok": True, "run": data, "count": len(hits), "diff_summary": diff})
+
+
+@app.route("/case/<case_id>/search-run/jplatpat/status", methods=["GET"])
+def jplatpat_session_status(case_id):
+    from services.jplatpat_session import get_session
+    sess = get_session()
+    return jsonify(sess.status())
+
+
+@app.route("/case/<case_id>/search-run/jplatpat/close", methods=["POST"])
+def jplatpat_session_close(case_id):
+    from services.jplatpat_session import reset_session
+    reset_session()
+    return jsonify({"ok": True})
 
 
 @app.route("/case/<case_id>/search-run/<run_id>/screening", methods=["POST"])

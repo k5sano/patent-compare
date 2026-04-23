@@ -572,14 +572,66 @@
           <div id="sr-kw-codes" class="sr-kw-codes"></div>
         </div>
 
+        <!-- J-PlatPat 半自動化フロー -->
+        <div class="sr-jpp-panel">
+          <div class="sr-jpp-title">
+            <strong>J-PlatPat で検索</strong>
+            <span class="sr-jpp-hint">① → 論理式入力タブへ手動切替 → ② → J-PlatPat 側で「検索」→ ③</span>
+            <span id="sr-jpp-session-badge" class="sr-jpp-badge sr-jpp-badge-off">🔴 未起動</span>
+          </div>
+
+          <!-- 本願メタ情報 (出願日・優先日・テーマコード) -->
+          <div class="sr-jpp-meta">
+            <div class="sr-jpp-meta-row">
+              <span class="sr-jpp-meta-label">本願の出願日（または優先日）:</span>
+              <span class="sr-jpp-date-box">
+                <span class="sr-jpp-date-sub">出願日</span>
+                <code id="sr-filing-date" class="sr-jpp-date-val">{{ meta.filing_date if meta.filing_date else '未設定' }}</code>
+                <button class="btn-icon" title="コピー" onclick="srCopyText(document.getElementById('sr-filing-date').textContent, this)">📋</button>
+                <button class="btn-icon" title="編集" onclick="srEditDate('filing_date')">✏</button>
+              </span>
+              <span class="sr-jpp-date-box">
+                <span class="sr-jpp-date-sub">優先日</span>
+                <code id="sr-priority-date" class="sr-jpp-date-val">{{ meta.priority_date if meta.priority_date else '未設定' }}</code>
+                <button class="btn-icon" title="コピー" onclick="srCopyText(document.getElementById('sr-priority-date').textContent, this)">📋</button>
+                <button class="btn-icon" title="編集" onclick="srEditDate('priority_date')">✏</button>
+              </span>
+            </div>
+            <div class="sr-jpp-meta-row" id="sr-theme-row">
+              <span class="sr-jpp-meta-label">テーマコード:</span>
+              <span id="sr-theme-chips" class="sr-theme-chips"><span class="sr-theme-empty">(Step 3 の分類データから自動抽出)</span></span>
+            </div>
+          </div>
+          <div class="sr-jpp-steps">
+            <button class="btn btn-secondary" id="btn-jpp-open" onclick="srJppOpen()"
+              title="J-PlatPat を新しいブラウザで開きます">① J-PlatPat を開く</button>
+            <span class="sr-jpp-arrow">→</span>
+            <button class="btn btn-primary" id="btn-jpp-fill" onclick="srJppFill()"
+              title="現在の J-PlatPat ページの論理式欄に式を入力します (先に『論理式入力』タブを開いておいてください)">② 式を入力</button>
+            <span class="sr-jpp-arrow">→</span>
+            <button class="btn btn-success" id="btn-jpp-scrape" onclick="srJppScrape()"
+              title="J-PlatPat の検索結果テーブルを読み取り、ランとして保存します">③ 結果を取り込む</button>
+            <button class="btn btn-ghost" onclick="srJppClose()" title="ブラウザを閉じてセッションをリセット">⏹ 閉じる</button>
+          </div>
+          <div id="sr-jpp-status" class="sr-jpp-status"></div>
+        </div>
+
+        <hr class="sr-minor-divider">
+
         <div class="btn-row" style="margin-top:0.5rem; align-items:center; gap:0.6rem;">
-          <button class="btn btn-primary" id="btn-sr-execute" onclick="searchRunExecute()">検索を実行</button>
-          <label style="font-size:0.82rem; display:inline-flex; align-items:center; gap:4px;" title="OFF の場合: J-PlatPat を自動で開かず、検索式だけ保存します (ラン作成、ヒット0件)">
-            <input type="checkbox" id="sr-enable-jplatpat-auto">
-            J-PlatPat 自動遷移
-          </label>
           <button class="btn btn-secondary" onclick="srSaveFormulaOnly()" title="検索を実行せず、式だけラン登録して保存">💾 式だけ保存</button>
           <button class="btn btn-secondary" onclick="srCopyMainFormula()" title="現在の式をクリップボードへ">📋 コピー</button>
+          <details style="font-size:0.82rem;">
+            <summary style="cursor:pointer; color:var(--text2);">詳細オプション</summary>
+            <div style="padding:6px 0; display:flex; flex-direction:column; gap:4px;">
+              <label style="display:inline-flex; align-items:center; gap:4px;" title="OFF の場合: J-PlatPat を自動で開かず、検索式だけ保存します">
+                <input type="checkbox" id="sr-enable-jplatpat-auto">
+                J-PlatPat 旧自動遷移モード (全自動スクレイピング)
+              </label>
+              <button class="btn btn-ghost" id="btn-sr-execute" onclick="searchRunExecute()"
+                style="font-size:0.8rem;">旧方式で実行 (source= sr-source)</button>
+            </div>
+          </details>
           <span id="sr-exec-status" style="font-size:0.8rem; color:var(--text2);"></span>
         </div>
         <div class="loading-msg" id="loading-sr-exec">
@@ -659,17 +711,34 @@
       <!-- 文献選択（複数選択対応） -->
       <div style="margin-bottom:1rem;">
         <label style="font-size:0.9rem; color:var(--text2);">対象文献（複数選択可）:</label>
-        <div id="citation-checkboxes" style="margin-top:0.5rem;">
+        <p class="step5-jp-hint" style="font-size:0.8rem; color:var(--text2); margin:0.4rem 0 0.5rem; line-height:1.4;">
+          <strong>☑の直後</strong>の <strong>「J-PlatPat 経過」</strong>を押すと特許庫（固定表示）に別タブで開きます。長い説明文があっても、ボタンは常に行の先頭（左）に出ます。☑は対比プロンプト用の選択だけです。
+        </p>
+        <div id="citation-checkboxes" class="step5-citation-list" style="margin-top:0.5rem;">
           {% for cit in citations %}
-          <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.4rem; cursor:pointer;">
-            <input type="checkbox" class="cit-checkbox" value="{{ cit.id }}" checked
-                   style="width:18px; height:18px; accent-color:var(--accent);">
-            <span>{{ cit.label }} ({{ cit.id }}) - {{ cit.role }}</span>
-            {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
-            {% if cit._category == 'X' %}<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>
-            {% elif cit._category == 'Y' %}<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>
-            {% elif cit._category == 'A' %}<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>{% endif %}
-          </label>
+          <div class="step5-cit-row">
+            <input type="checkbox" class="cit-checkbox" id="step5-cb-{{ loop.index0 }}"
+                   value="{{ cit.id|e }}" checked
+                   style="width:18px; height:18px; margin-top:0.25rem; flex-shrink:0; accent-color:var(--accent);"
+                   title="この文献を対比プロンプトに含める">
+            <a href="#" class="btn step5-jp-btn" data-pid="{{ cit.id|e }}" title="J-PlatPat 経過情報（固定表示）"
+               onclick="event.preventDefault(); event.stopPropagation();
+                 var u=buildJplatpatUrl((this.getAttribute('data-pid')||'').trim());
+                 if(u) window.open(u,'_blank');
+                 else alert('この文献IDではJ-PlatPatの固定URLを生成できません（例: 特開・JP・WO・US 形式の番号）');
+                 return false;">J-PlatPat 経過</a>
+            <div class="step5-cit-main">
+              <label for="step5-cb-{{ loop.index0 }}" class="step5-cit-label" title="文献をクリックでチェック切替">
+                <span class="step5-cit-line1">{{ cit.label }} ({{ cit.id }}) — <span class="step5-cit-role">{{ cit.role }}</span></span>
+              </label>
+              <span class="step5-cit-badges">
+                {% if cit._has_response %}<span class="badge badge-green">回答済</span>{% endif %}
+                {% if cit._category == 'X' %}<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>
+                {% elif cit._category == 'Y' %}<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>
+                {% elif cit._category == 'A' %}<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>{% endif %}
+              </span>
+            </div>
+          </div>
           {% endfor %}
         </div>
         {% if citations|length > 1 %}
@@ -678,6 +747,10 @@
           <a href="#" onclick="toggleAllCitations(false); return false;">全解除</a>
         </div>
         {% endif %}
+        <p style="margin-top:0.6rem; font-size:0.82rem; color:var(--text2); line-height:1.5;">
+          <strong>後から文献を足しただけのとき:</strong>「全解除」→ 追加した文献<strong>だけ</strong>にチェックを付けてからプロンプト生成してください。
+          既存の対比回答（<code>responses/</code>）は、貼り付けた回答に含まれない限りそのまま残り、一括でやり直す必要はありません。
+        </p>
       </div>
 
       <!-- プロンプト生成 -->

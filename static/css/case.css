@@ -429,6 +429,82 @@
   #sr-formula { min-height: 90px; resize: vertical;
     white-space: pre-wrap; word-break: break-all; overflow: hidden; }
 
+  /* J-PlatPat 半自動化パネル */
+  .sr-jpp-panel { background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .sr-jpp-title { display: flex; align-items: center; gap: 10px;
+    margin-bottom: 8px; flex-wrap: wrap; }
+  .sr-jpp-hint { font-size: 0.75rem; color: var(--text2); }
+  .sr-jpp-badge { font-size: 0.72rem; padding: 2px 8px; border-radius: 10px;
+    font-family: monospace; margin-left: auto; }
+  .sr-jpp-badge-on { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+  .sr-jpp-badge-off { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+  .sr-jpp-badge-busy { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+  .sr-jpp-steps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .sr-jpp-arrow { color: var(--text2); font-size: 1rem; }
+  .sr-jpp-status { margin-top: 8px; font-size: 0.82rem; padding: 6px 10px;
+    border-radius: 4px; min-height: 18px; }
+  .sr-jpp-status.info { background: rgba(56, 189, 248, 0.08); color: #38bdf8;
+    border-left: 3px solid #38bdf8; }
+  .sr-jpp-status.success { background: rgba(74, 222, 128, 0.08); color: #4ade80;
+    border-left: 3px solid #4ade80; }
+  .sr-jpp-status.error { background: rgba(248, 113, 113, 0.08); color: #f87171;
+    border-left: 3px solid #f87171; }
+  .sr-jpp-status:empty { display: none; }
+  .sr-minor-divider { border: none; border-top: 1px dashed var(--border);
+    margin: 12px 0 8px 0; }
+
+  /* J-PlatPat メタ情報 */
+  .sr-jpp-meta { background: var(--bg); border: 1px dashed var(--border);
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+  .sr-jpp-meta-row { display: flex; align-items: center; flex-wrap: wrap;
+    gap: 8px; margin: 4px 0; font-size: 0.85rem; }
+  .sr-jpp-meta-label { color: var(--text2); font-weight: 500; flex-shrink: 0; }
+  .sr-jpp-date-box { display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; }
+  .sr-jpp-date-sub { font-size: 0.72rem; color: var(--text2); margin-right: 2px; }
+  .sr-jpp-date-val { font-family: monospace; font-size: 0.88rem; color: var(--text);
+    background: none; padding: 0 2px; }
+  .btn-icon { background: none; border: none; cursor: pointer;
+    font-size: 0.9rem; padding: 0 3px; color: var(--text2); border-radius: 3px;
+    transition: background 0.15s; }
+  .btn-icon:hover { background: rgba(255,255,255,0.08); color: var(--text); }
+  .sr-theme-chips { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .sr-theme-chip { font-family: monospace; font-size: 0.82rem; padding: 3px 10px;
+    background: rgba(168, 85, 247, 0.12); color: #c084fc;
+    border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 12px;
+    cursor: pointer; transition: all 0.15s; }
+  .sr-theme-chip:hover { background: rgba(168, 85, 247, 0.22);
+    border-color: rgba(168, 85, 247, 0.5); transform: translateY(-1px); }
+  .sr-theme-empty { font-size: 0.78rem; color: var(--text2); font-style: italic; }
+
+  /* 引用文献 J-PlatPat 短リンク */
+  a.cit-jplatpat-inline, a.cit-jplatpat-link {
+    font-size: 0.78rem; margin-left: 0.35rem; white-space: nowrap;
+    color: #60a5fa; text-decoration: underline; text-underline-offset: 2px;
+  }
+  a.cit-jplatpat-inline:hover, a.cit-jplatpat-link:hover { color: #93c5fd; }
+  .citation-fulltext summary a.cit-jplatpat-link { text-decoration: underline; }
+
+  /* Step 5: 文献行（☑直後=J-PlatPat → 右に本文。長文でも先頭列は常に見える） */
+  .step5-cit-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: start; column-gap: 0.5rem; row-gap: 0.2rem;
+    margin-bottom: 0.6rem; padding: 0.4rem 0.15rem; border-bottom: 1px dashed var(--border);
+  }
+  .step5-cit-row:last-child { border-bottom: none; }
+  .step5-cit-row .step5-jp-btn { align-self: start; margin-top: 0.1rem; }
+  .step5-cit-main { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; }
+  .step5-cit-label { cursor: pointer; color: var(--text); line-height: 1.45; display: block; margin: 0; flex: 1; min-width: 8rem; }
+  .step5-cit-line1 { font-size: 0.9rem; word-break: break-word; }
+  .step5-cit-role { color: var(--text2); font-size: 0.86rem; }
+  .step5-cit-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; flex-shrink: 0; }
+  .step5-jp-btn { font-size: 0.78rem; padding: 0.25rem 0.5rem; border-radius: 6px;
+    border: 1px solid #3b82f6; color: #93c5fd; text-decoration: none; white-space: nowrap;
+    background: rgba(59, 130, 246, 0.15); line-height: 1.2; }
+  .step5-jp-btn:hover { background: rgba(59, 130, 246, 0.28); color: #bfdbfe; }
+  .step5-jp-hint strong { color: var(--text); }
+
   .sr-runs-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
   .sr-run-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
   .sr-run-head { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; }

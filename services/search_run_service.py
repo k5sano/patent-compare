@@ -697,7 +697,7 @@ def get_keyword_snippets(case_id: str) -> dict:
     """
     case_dir = get_case_dir(case_id)
     p = case_dir / "search" / "keyword_dictionary.json"
-    snippets: dict = {"groups": [], "fi_codes": [], "fterm_codes": []}
+    snippets: dict = {"groups": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
     if not p.exists():
         return snippets
     try:
@@ -742,12 +742,62 @@ def get_keyword_snippets(case_id: str) -> dict:
             "jplatpat_group": raw + "/TX",
         })
 
-    fi = data.get("fi") or data.get("fi_codes") or []
-    if isinstance(fi, list):
-        snippets["fi_codes"] = [str(c).strip() for c in fi if str(c).strip()]
+    def _collect_codes(val):
+        """入力が list[str] / list[{code:..}] / str のいずれでもコード文字列一覧を返す。"""
+        out: list[str] = []
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    c = item.get("code") or item.get("id") or ""
+                elif isinstance(item, str):
+                    c = item
+                else:
+                    c = ""
+                c = str(c).strip()
+                if c:
+                    out.append(c)
+        elif isinstance(val, str) and val.strip():
+            out.append(val.strip())
+        return out
 
-    fterm = data.get("fterm") or data.get("fterm_codes") or []
-    if isinstance(fterm, list):
-        snippets["fterm_codes"] = [str(c).strip() for c in fterm if str(c).strip()]
+    fi_codes = _collect_codes(data.get("fi") or data.get("fi_codes"))
+    fterm_codes = _collect_codes(data.get("fterm") or data.get("fterm_codes"))
+
+    # Stage 3 の classification.json もマージ (fi/fterm が構造化され別ファイルの場合)
+    cl = case_dir / "search" / "classification.json"
+    if cl.exists():
+        try:
+            with open(cl, "r", encoding="utf-8") as f:
+                cdata = json.load(f)
+            fi_codes += _collect_codes(cdata.get("fi"))
+            fterm_codes += _collect_codes(cdata.get("fterm"))
+        except Exception:
+            pass
+
+    # 重複除去 (順序保持)
+    def _uniq(xs: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for x in xs:
+            if x and x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    snippets["fi_codes"] = _uniq(fi_codes)
+    snippets["fterm_codes"] = _uniq(fterm_codes)
+
+    # テーマコード (F-term コード先頭 5 文字のユニーク集合, 例: "4C083AB13" → "4C083")
+    theme_pat = re.compile(r"^([0-9][A-Z][0-9]{3})")
+    theme_set: list[str] = []
+    seen: set[str] = set()
+    for code in snippets["fterm_codes"]:
+        m = theme_pat.match(code.replace(" ", ""))
+        if m:
+            th = m.group(1)
+            if th not in seen:
+                seen.add(th)
+                theme_set.append(th)
+    snippets["theme_codes"] = theme_set
 
     return snippets

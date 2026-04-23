@@ -433,7 +433,35 @@ def test_validate_formula_no_warn_hyphen_between_brackets():
 
 def test_get_keyword_snippets_empty(case_dir):
     snip = srs.get_keyword_snippets("TEST-CASE")
-    assert snip == {"groups": [], "fi_codes": [], "fterm_codes": []}
+    assert snip == {"groups": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
+
+
+def test_get_keyword_snippets_theme_codes_extracted(case_dir):
+    """F-term コードからテーマコード (先頭5文字) を一意に抽出"""
+    search_dir = case_dir / "search"
+    search_dir.mkdir()
+    (search_dir / "keyword_dictionary.json").write_text(json.dumps({
+        "fterm_codes": ["4C083AB13", "4C083AC01", "4F100AA01", "4F100BB02"],
+    }, ensure_ascii=False), encoding="utf-8")
+    snip = srs.get_keyword_snippets("TEST-CASE")
+    assert snip["theme_codes"] == ["4C083", "4F100"]
+
+
+def test_get_keyword_snippets_merges_classification_json(case_dir):
+    """classification.json に格納された fterm (構造化) もテーマコード抽出対象"""
+    search_dir = case_dir / "search"
+    search_dir.mkdir()
+    (search_dir / "keyword_dictionary.json").write_text(json.dumps({
+        "keyword_groups": [],
+    }, ensure_ascii=False), encoding="utf-8")
+    (search_dir / "classification.json").write_text(json.dumps({
+        "fi": [{"code": "A61K 8/02"}, {"code": "A61K 8/06"}],
+        "fterm": [{"code": "4C083AB13"}, {"code": "4C083AC01"}, {"code": "5H050CA99"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    snip = srs.get_keyword_snippets("TEST-CASE")
+    assert "A61K 8/02" in snip["fi_codes"]
+    assert "4C083AB13" in snip["fterm_codes"]
+    assert sorted(snip["theme_codes"]) == ["4C083", "5H050"]
 
 
 def test_get_keyword_snippets_groups(case_dir):
