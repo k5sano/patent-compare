@@ -1,7 +1,21 @@
 const CASE_ID = window.CASE_BOOTSTRAP.case_id;
 
+function _jppNormalize(s) {
+  if (!s) return '';
+  // 全角数字・各種ハイフン・スラッシュ / 括弧 / 余分な「号公報/号/公報/平成/令和」などを除去して正規化
+  let t = String(s).replace(/[０-９]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30));
+  t = t.replace(/[－−―—]/g, '-').replace(/[／]/g, '/');
+  // 装飾や注記
+  t = t.replace(/[()（）「」【】『』]/g, ' ');
+  t = t.replace(/(号公報|号|公報|明細書)/g, ' ');
+  // 先頭・末尾の空白除去、内部の空白はそのまま (後段の正規表現が \s* を許容)
+  return t.trim();
+}
+
 function buildJplatpatUrl(pid) {
   if (!pid) return '';
+  pid = _jppNormalize(pid);
   const B = 'https://www.j-platpat.inpit.go.jp/c1801/PU';
   let m;
   // 特開yyyy-nnnnnn
@@ -10,8 +24,8 @@ function buildJplatpatUrl(pid) {
   if ((m = pid.match(/特願\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/10/ja`;
   // 特表yyyy-nnnnnn
   if ((m = pid.match(/特表\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
-  // 再表yyyy-nnnnnn
-  if ((m = pid.match(/再(?:公)?表\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/19/ja`;
+  // 再公表yyyy-nnnnnn / 再表yyyy/nnnnnn (スラッシュ区切りも許容)
+  if ((m = pid.match(/再(?:公)?表\s*(\d{4})\s*[-\/]\s*(\d+)/))) return `${B}/WO-A-${m[1]}-${m[2].padStart(6,'0')}/50/ja`;
   // 特許nnnnnnn
   if ((m = pid.match(/特許(?:第)?\s*(\d+)/))) return `${B}/JP-${m[1]}/15/ja`;
   // JP2023-123456A / JP2023123456A
@@ -31,6 +45,40 @@ function buildJplatpatUrl(pid) {
   return '';
 }
 
+// 特許番号入力 → J-PlatPat 固定URLを別タブで開く (拒絶理由からコピペ想定)
+function jumpToJplatpatByQuery(q) {
+  const src = (q || '').trim();
+  const input = document.getElementById('jpp-quick-input');
+  const msg = document.getElementById('jpp-quick-msg');
+  const setMsg = (t, kind) => {
+    if (!msg) return;
+    msg.textContent = t || '';
+    msg.className = 'jpp-quick-msg ' + (kind || '');
+  };
+  if (!src) {
+    setMsg('番号が空です。例: 特開2014-141302号公報', 'err');
+    return;
+  }
+  const url = buildJplatpatUrl(src);
+  if (!url) {
+    setMsg('対応形式で解釈できませんでした: ' + src, 'err');
+    return;
+  }
+  const norm = _jppNormalize(src);
+  setMsg('開きました: ' + norm, 'ok');
+  window.open(url, '_blank', 'noopener');
+  if (input) {
+    input.select();
+  }
+}
+
+function _jppQuickOnEnter(e) {
+  if (e && e.key === 'Enter') {
+    const v = document.getElementById('jpp-quick-input');
+    jumpToJplatpatByQuery(v ? v.value : '');
+  }
+}
+
 const panels = document.querySelectorAll('.panel');
 const steps = document.querySelectorAll('.step');
 let currentPanel = 0;
@@ -45,7 +93,9 @@ function showPanel(idx) {
       s.classList.toggle('active', i === idx);
     }
   });
+  if (idx === 3) { if (typeof refreshCitationBadges === 'function') refreshCitationBadges(); }
   if (idx === 4) { loadSearchRuns(); srJppCheckStatus(); srEnsureSnippetsLoaded(); }
+  if (idx === 5) { if (typeof refreshCitationBadges === 'function') refreshCitationBadges(); }
   if (idx === 6) loadComparisonSummary();
 }
 
@@ -1086,10 +1136,10 @@ function renderGroup(g) {
     <div style="display:flex; gap:4px; margin-left:auto; flex-shrink:0;">
       <button class="kw-group-btn" title="このグループのキーワードを他のグループにコピー"
               onclick="openCopyModal(${g.group_id})">コピー</button>
-      <button class="kw-group-btn" title="このグループ内のチェックをすべて外す"
-              onclick="clearSelection(${g.group_id})">選択解除</button>
-      <button class="kw-group-btn kw-group-btn-del" title="チェックが入っていないキーワード・Ftermを削除。チェック中のものは残ります。"
-              onclick="deleteUnselected(${g.group_id})">未選択を削除</button>
+      <button class="kw-group-btn" title="このグループ内のハイライトをすべて外す"
+              onclick="clearSelection(${g.group_id})">ハイライト解除</button>
+      <button class="kw-group-btn kw-group-btn-del" title="赤字でハイライトしていない語を削除。ハイライト（赤字）した語は残ります。"
+              onclick="deleteUnselected(${g.group_id})">ハイライト外を削除</button>
       <button class="kw-group-btn kw-group-btn-del" title="グループ削除"
               onclick="deleteGroup(${g.group_id})">グループ削除</button>
     </div>
@@ -1121,24 +1171,19 @@ function renderGroup(g) {
 function renderKwTag(gid, kw) {
   const typeLabel = kw.type || '';
   const badgeClass = typeToBadgeClass(typeLabel);
-  return `<span class="kw-tag" style="background:var(--surface2); display:inline-flex; align-items:center;
-    gap:4px; padding:2px 8px; margin:2px; border-radius:12px; font-size:0.8rem;" data-term="${escAttr(kw.term)}" data-gid="${gid}">
-    <input type="checkbox" class="kw-sel" data-gid="${gid}" data-term="${escAttr(kw.term)}"
-      style="margin:0; cursor:pointer; accent-color:#22c55e;">
+  return `<span class="kw-tag" data-term="${escAttr(kw.term)}" data-gid="${gid}"
+    title="クリック: 残す/外すを切替（赤=残す） / ダブルクリック: 編集">
     <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
-    <span class="kw-term-text" title="ダブルクリックで編集"
-      style="cursor:text;">${escHtml(kw.term)}</span>
+    <span class="kw-term-text">${escHtml(kw.term)}</span>
   </span>`;
 }
 
 function renderFterms(g) {
   const fterms = g.search_codes && g.search_codes.fterm ? g.search_codes.fterm : [];
   const items = fterms.map(ft =>
-    `<span style="font-size:0.75rem; padding:1px 6px; background:#1e3a5f; color:#60a5fa;
-      border-radius:4px; margin:1px; display:inline-flex; align-items:center; gap:3px;">
-      <input type="checkbox" class="fterm-sel" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
-        style="margin:0; cursor:pointer; accent-color:#22c55e; width:12px; height:12px;">
-      ${escHtml(ft.code)} <span style="color:var(--text2);">${escHtml(ft.desc || '')}</span>
+    `<span class="fterm-tag" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
+      title="クリックで残す/外すを切替（赤=残す）">
+      ${escHtml(ft.code)} <span class="fterm-desc">${escHtml(ft.desc || '')}</span>
     </span>`
   ).join('');
   return `<div style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px;">
@@ -1244,7 +1289,7 @@ async function deleteGroup(gid) {
 function clearSelection(gid) {
   const groupEl = document.getElementById('kw-group-' + gid);
   if (!groupEl) return;
-  groupEl.querySelectorAll('.kw-sel, .fterm-sel').forEach(cb => { cb.checked = false; });
+  groupEl.querySelectorAll('.kw-tag.kw-marked, .fterm-tag.kw-marked').forEach(el => el.classList.remove('kw-marked'));
 }
 
 async function deleteUnselected(gid) {
@@ -1253,9 +1298,9 @@ async function deleteUnselected(gid) {
   const g = kwGroups.find(g => g.group_id === gid);
   if (!g) return;
 
-  // チェックされていない = 削除対象（チェック = 残す）
-  const delKws = Array.from(groupEl.querySelectorAll('.kw-sel:not(:checked)')).map(cb => cb.dataset.term);
-  const delFts = Array.from(groupEl.querySelectorAll('.fterm-sel:not(:checked)')).map(cb => cb.dataset.code);
+  // 赤字ハイライト = 残す。ハイライトされていないものを削除対象とする。
+  const delKws = Array.from(groupEl.querySelectorAll('.kw-tag:not(.kw-marked)')).map(el => el.dataset.term).filter(Boolean);
+  const delFts = Array.from(groupEl.querySelectorAll('.fterm-tag:not(.kw-marked)')).map(el => el.dataset.code).filter(Boolean);
 
   if (delKws.length === 0 && delFts.length === 0) {
     alert('チェックを外した項目がありません（すべて選択中のため削除対象なし）');
@@ -1925,17 +1970,27 @@ function showKwToast(msg) {
 document.addEventListener('DOMContentLoaded', () => {
   renderGroups();  // renderGroups() 内で renderFtermCatalog() も呼ばれる
 
-  // イベントデリゲーション: キーワードタグの編集・削除
+  // イベントデリゲーション: キーワードタグの編集・選択
   const kwContainer = document.getElementById('kw-groups-container');
   if (kwContainer) {
-    // ダブルクリックで編集
+    // クリックで選択（赤字）トグル。dblclick が来れば取り消して編集モードに入る。
+    let _kwClickTimer = null;
+    kwContainer.addEventListener('click', (e) => {
+      // 編集中の input や追加用 input は無視
+      if (e.target.closest('input, button')) return;
+      const tag = e.target.closest('.kw-tag, .fterm-tag');
+      if (!tag) return;
+      e.preventDefault();
+      if (_kwClickTimer) clearTimeout(_kwClickTimer);
+      _kwClickTimer = setTimeout(() => {
+        tag.classList.toggle('kw-marked');
+        _kwClickTimer = null;
+      }, 220);
+    });
     kwContainer.addEventListener('dblclick', (e) => {
+      if (_kwClickTimer) { clearTimeout(_kwClickTimer); _kwClickTimer = null; }
       const termSpan = e.target.closest('.kw-term-text');
       if (termSpan) { startEditKeyword(termSpan); }
-    });
-    // チェックボックスのクリックがバブルアップしてdblclick等に干渉しないようにする
-    kwContainer.addEventListener('click', (e) => {
-      // チェックボックス自体はデフォルト動作に任せる
     });
   }
 });
@@ -1946,7 +2001,91 @@ function getSelectedCitationIds() {
 }
 function toggleAllCitations(checked) {
   document.querySelectorAll('.cit-checkbox').forEach(cb => cb.checked = checked);
+  _updateStep5SelectedCount();
 }
+
+// Step 4/5 文献バッジ（回答済 / X / Y / A）を /response/<id> から拾い直して再描画。
+// パース直後や Step を開いたときに stale な表示を更新するためのもの。
+async function refreshCitationBadges() {
+  const ids = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.cit_ids) || [];
+  if (ids.length === 0) return;
+  for (const cid of ids) {
+    let respData = null;
+    let hasResp = false;
+    try {
+      const r = await fetch('/case/' + encodeURIComponent(CASE_ID) +
+                            '/response/' + encodeURIComponent(cid));
+      if (r.ok) {
+        respData = await r.json();
+        hasResp = true;
+      }
+    } catch (e) { /* 404 は通常ケース（未回答） */ }
+    const cat = (() => {
+      if (!respData) return '';
+      const s = String(respData.category_suggestion || '').trim().toUpperCase();
+      if (s.startsWith('X')) return 'X';
+      if (s.startsWith('Y')) return 'Y';
+      if (s.startsWith('A')) return 'A';
+      return '';
+    })();
+    _setCitBadgesHtml(cid, hasResp, cat);
+    _updateBootstrapCategory(cid, cat);
+  }
+  // 既に開いている Step 6 対比表のヘッダも巻き直し
+  if (typeof renderCompSummaryTable === 'function' && _compSummaryData) {
+    renderCompSummaryTable();
+  }
+}
+
+function _setCitBadgesHtml(citId, hasResp, cat) {
+  const respHtml = hasResp ? '<span class="badge badge-green">回答済</span>' : '';
+  let catHtml = '';
+  if (cat === 'X') catHtml = '<span class="badge" style="background:#7f1d1d; color:#fca5a5;">X</span>';
+  else if (cat === 'Y') catHtml = '<span class="badge" style="background:#422006; color:#fbbf24;">Y</span>';
+  else if (cat === 'A') catHtml = '<span class="badge" style="background:var(--surface2); color:var(--text2);">A</span>';
+  // Step 5: .step5-cit-row の .step5-cit-badges
+  document.querySelectorAll('.step5-cit-row .cit-checkbox').forEach((cb) => {
+    if (cb.value !== citId) return;
+    const row = cb.closest('.step5-cit-row');
+    const badges = row && row.querySelector('.step5-cit-badges');
+    if (badges) badges.innerHTML = respHtml + catHtml;
+  });
+  // Step 4: cit-card-{citId} の .cit-info p 内のバッジ
+  const card = document.getElementById('cit-card-' + citId);
+  if (card) {
+    const info = card.querySelector('.cit-info p');
+    if (info) {
+      // role テキストを残し、バッジ部分だけ差し替える: 既存 .badge を全削除して末尾に追加
+      info.querySelectorAll('.badge').forEach((b) => b.remove());
+      if (respHtml || catHtml) {
+        info.insertAdjacentHTML('beforeend', ' ' + respHtml + catHtml);
+      }
+    }
+  }
+}
+
+function _updateBootstrapCategory(citId, cat) {
+  const list = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.citations_meta) || [];
+  for (const m of list) {
+    if (m && String(m.id) === String(citId)) {
+      m.category = cat;
+      break;
+    }
+  }
+}
+function _updateStep5SelectedCount() {
+  const el = document.getElementById('step5-selected-count');
+  if (!el) return;
+  const all = document.querySelectorAll('.cit-checkbox');
+  const sel = document.querySelectorAll('.cit-checkbox:checked');
+  el.textContent = `${sel.length} / ${all.length} 件選択中`;
+}
+document.addEventListener('DOMContentLoaded', () => {
+  _updateStep5SelectedCount();
+  document.querySelectorAll('.cit-checkbox').forEach(cb => {
+    cb.addEventListener('change', _updateStep5SelectedCount);
+  });
+});
 
 async function generatePrompt() {
   const citIds = getSelectedCitationIds();
@@ -2008,6 +2147,7 @@ async function parseResponse() {
         保存先: ${docs.join(', ')}
       </div>`;
       loadComparisonSummary();
+      refreshCitationBadges();
     } else if (!data.errors || data.errors.length === 0) {
       result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
         パース失敗: JSONを抽出できませんでした。
@@ -2081,31 +2221,153 @@ function wireCompSummaryIfNeeded() {
   });
 }
 
+// 対比サマリ表の外（引例テキスト全文エリアなど）からの段落リンクも拾う
+(function _wireGlobalParaRef() {
+  if (typeof document === 'undefined') return;
+  document.addEventListener('click', (e) => {
+    const ref = e.target && e.target.closest ? e.target.closest('.comp-para-ref') : null;
+    if (!ref) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _compShowParagraphPopup(
+      ref.getAttribute('data-cit-id') || '',
+      ref.getAttribute('data-para-id') || '',
+      ref,
+    );
+  }, true);
+})();
+
+// 判定理由テキスト内の 【0053】 / 【００５３】 を段落リンクに変換。
+// 入力は _escapeHtml 済みテキストを想定。
+function _compLinkifyParaRefs(escaped, citId) {
+  if (!escaped || !citId) return escaped || '';
+  const cidAttr = _escapeHtml(citId);
+  return escaped.replace(/【([０-９0-9]{1,6})】/g, (_m, num) => {
+    const norm = String(num).replace(/[０-９]/g, (c) =>
+      String.fromCharCode(c.charCodeAt(0) - 0xFF10 + 0x30));
+    return '<a href="#" class="comp-para-ref" data-cit-id="' + cidAttr +
+      '" data-para-id="' + norm + '" title="段落 【' + norm + '】 を表示">【' +
+      num + '】</a>';
+  });
+}
+
+async function _compShowParagraphPopup(citId, paraId, anchorEl) {
+  _compClosePopup();
+  if (!citId || !paraId) return;
+  const pop = document.createElement('div');
+  pop.id = 'comp-para-popup';
+  pop.className = 'comp-para-popup';
+  pop.innerHTML =
+    '<div class="comp-para-popup-hdr">' +
+      '<span class="comp-para-popup-title">' + _escapeHtml(citId) +
+        ' <span class="comp-para-popup-pid">【' + _escapeHtml(paraId) + '】</span></span>' +
+      '<button class="comp-para-popup-close" type="button" title="閉じる">×</button>' +
+    '</div>' +
+    '<div class="comp-para-popup-body">' +
+      '<div class="comp-para-popup-loading">読み込み中...</div>' +
+    '</div>';
+  document.body.appendChild(pop);
+  _compPositionPopup(pop, anchorEl);
+  pop.querySelector('.comp-para-popup-close').addEventListener('click', _compClosePopup);
+  setTimeout(() => { document.addEventListener('click', _compPopupOutsideClick, true); }, 0);
+
+  const body = pop.querySelector('.comp-para-popup-body');
+  try {
+    const url = '/case/' + encodeURIComponent(CASE_ID) +
+      '/citation/' + encodeURIComponent(citId) +
+      '/paragraph/' + encodeURIComponent(paraId);
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      body.innerHTML = '<div class="comp-para-popup-err">' +
+        _escapeHtml(err.error || ('HTTP ' + resp.status)) + '</div>';
+      return;
+    }
+    const data = await resp.json();
+    let html = '';
+    if (data.section || data.page) {
+      html += '<div class="comp-para-popup-sec">' +
+        _escapeHtml(String(data.section || '')) +
+        (data.page ? ' <span class="comp-para-popup-page">p.' + _escapeHtml(String(data.page)) + '</span>' : '') +
+        '</div>';
+    }
+    html += '<div class="comp-para-popup-text">' + _escapeHtml(String(data.text || '')) + '</div>';
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = '<div class="comp-para-popup-err">読み込み失敗: ' +
+      _escapeHtml(String(e && e.message ? e.message : e)) + '</div>';
+  }
+}
+
+function _compPositionPopup(pop, anchorEl) {
+  pop.style.position = 'fixed';
+  pop.style.zIndex = '10050';
+  const maxW = Math.min(560, Math.round(window.innerWidth * 0.9));
+  const maxH = 340;
+  pop.style.maxWidth = maxW + 'px';
+  pop.style.maxHeight = maxH + 'px';
+  const rect = anchorEl && anchorEl.getBoundingClientRect
+    ? anchorEl.getBoundingClientRect()
+    : { top: 100, bottom: 120, left: 100, right: 200 };
+  let top = rect.bottom + 6;
+  let left = rect.left;
+  if (top + maxH > window.innerHeight - 8) {
+    top = Math.max(8, rect.top - maxH - 6);
+  }
+  if (left + maxW > window.innerWidth - 8) {
+    left = Math.max(8, window.innerWidth - maxW - 8);
+  }
+  pop.style.top = top + 'px';
+  pop.style.left = left + 'px';
+}
+
+function _compPopupOutsideClick(e) {
+  const pop = document.getElementById('comp-para-popup');
+  if (!pop) return;
+  if (pop.contains(e.target)) return;
+  if (e.target && e.target.closest && e.target.closest('.comp-para-ref')) return;
+  _compClosePopup();
+}
+
+function _compClosePopup() {
+  const pop = document.getElementById('comp-para-popup');
+  if (pop) pop.remove();
+  document.removeEventListener('click', _compPopupOutsideClick, true);
+}
+
 function _compColbarApplyQuickSelect(action) {
   const d = _compSummaryData;
   if (!d) return;
   const colbar = document.getElementById('comp-summary-colbar');
   if (!colbar) return;
-  const boxes = colbar.querySelectorAll('.comp-col-toggle');
-  boxes.forEach((cb) => {
+  const boxes = Array.from(colbar.querySelectorAll('.comp-col-toggle'));
+
+  if (action === 'ALL' || action === 'NONE') {
+    const on = (action === 'ALL');
+    boxes.forEach((cb) => { cb.checked = on; });
+    renderCompSummaryTable();
+    return;
+  }
+
+  // X / Y / A: そのカテゴリだけトグル（他は触らない）。
+  // 一つでも OFF があれば全 ON、全部 ON なら全 OFF にする。
+  const matching = boxes.filter((cb) => {
     const cid = cb.getAttribute('data-cit-id');
-    const cat = _compCategoryForCit(cid, d.responses[cid]);
-    let on;
-    if (action === 'ALL') on = true;
-    else if (action === 'NONE') on = false;
-    else on = (cat === action); // 'X' | 'Y' | 'A'
-    cb.checked = on;
+    return _compCategoryForCit(cid, d.responses[cid]) === action;
   });
+  if (matching.length === 0) return;
+  const anyOff = matching.some((cb) => !cb.checked);
+  matching.forEach((cb) => { cb.checked = anyOff; });
   renderCompSummaryTable();
 }
 
 function _buildColbarHtml(d, visMap) {
   let cb = '<div class="comp-colbar-row1">' +
     '<span class="comp-colbar-lbl">表示する列</span>' +
-    '<div class="comp-colbar-quick" role="group" aria-label="一発選択">' +
-      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-x" data-quick="X" title="X 引例のみ表示">X のみ</button>' +
-      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-y" data-quick="Y" title="Y 引例のみ表示">Y のみ</button>' +
-      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-a" data-quick="A" title="A 文献のみ表示">A のみ</button>' +
+    '<div class="comp-colbar-quick" role="group" aria-label="カテゴリ別トグル">' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-x" data-quick="X" title="X 引例の表示 ON/OFF">X</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-y" data-quick="Y" title="Y 引例の表示 ON/OFF">Y</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-a" data-quick="A" title="A 文献の表示 ON/OFF">A</button>' +
       '<button type="button" class="comp-colbar-quick-btn" data-quick="ALL" title="全文献を表示">全選択</button>' +
       '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-clear" data-quick="NONE" title="すべてのチェックを外す">All clear</button>' +
     '</div>' +
@@ -2192,11 +2454,15 @@ function renderCompSummaryTable() {
   if (thead) thead.innerHTML = h;
 
   const segIds = d.segIds;
+  const segTextMap = d.segTextMap || {};
   let body = '';
   for (const segId of segIds) {
+    const segText = segTextMap[segId] || '';
+    const reqCellHtml = '<span class="comp-req-id">' + _escapeHtml(segId) + '</span>' +
+      (segText ? '<span class="comp-req-text">' + _escapeHtml(segText) + '</span>' : '');
     if (isCompact) {
       body += '<tr>';
-      body += '<td class="comp-td-req" style="font-weight:700; white-space:nowrap;">' + _escapeHtml(segId) + '</td>';
+      body += '<td class="comp-td-req">' + reqCellHtml + '</td>';
       for (const citId of activeCits) {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
@@ -2206,7 +2472,7 @@ function renderCompSummaryTable() {
       body += '</tr>';
     } else {
       body += '<tr>';
-      body += '<td class="comp-td-req" rowspan="2" style="vertical-align:top; font-weight:700; white-space:nowrap;">' + _escapeHtml(segId) + '</td>';
+      body += '<td class="comp-td-req" rowspan="2" style="vertical-align:top;">' + reqCellHtml + '</td>';
       for (const citId of activeCits) {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
@@ -2218,9 +2484,9 @@ function renderCompSummaryTable() {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
         if (comp) {
-          const reason = _escapeHtml(comp.judgment_reason || '');
+          const reason = _compLinkifyParaRefs(_escapeHtml(comp.judgment_reason || ''), citId);
           const loc = comp.cited_location
-            ? '<br><span class="comp-cite-loc">📍 ' + _escapeHtml(comp.cited_location) + '</span>'
+            ? '<br><span class="comp-cite-loc">📍 ' + _compLinkifyParaRefs(_escapeHtml(comp.cited_location), citId) + '</span>'
             : '';
           body += '<td class="comp-td-reason">' + reason + loc + '</td>';
         } else {
@@ -2235,8 +2501,11 @@ function renderCompSummaryTable() {
   if (subClaims && subClaims.length > 0) {
     body += '<tr><th class="comp-section-h" colspan="' + spanAll + '" style="text-align:left; padding-top:0.8rem;">従属請求項</th></tr>';
     for (const claim of subClaims) {
+      const claimText = claim.full_text || (Array.isArray(claim.segments) ? claim.segments.map((s) => s.text || '').join('') : '');
+      const subReqHtml = '<span class="comp-req-id">請求項' + String(claim.claim_number) + '</span>' +
+        (claimText ? '<span class="comp-req-text">' + _escapeHtml(claimText) + '</span>' : '');
       if (isCompact) {
-        body += '<tr><td class="comp-td-req" style="font-weight:700;">請求項' + String(claim.claim_number) + '</td>';
+        body += '<tr><td class="comp-td-req">' + subReqHtml + '</td>';
         for (const citId of activeCits) {
           const resp = d.responses[citId];
           const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
@@ -2245,13 +2514,13 @@ function renderCompSummaryTable() {
         }
         body += '</tr>';
       } else {
-        body += '<tr><td class="comp-td-req" style="font-weight:700;">請求項' + String(claim.claim_number) + '</td>';
+        body += '<tr><td class="comp-td-req" style="vertical-align:top;">' + subReqHtml + '</td>';
         for (const citId of activeCits) {
           const resp = d.responses[citId];
           const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
           if (sub) {
             const j = (sub.judgment) ? String(sub.judgment) : '—';
-            const jr = _escapeHtml(sub.judgment_reason || '');
+            const jr = _compLinkifyParaRefs(_escapeHtml(sub.judgment_reason || ''), citId);
             body += '<td class="comp-td-j ' + _compJClass(j) + '" style="font-size:0.85rem;">' + _escapeHtml(j) + ' <span class="comp-sub-rationale">' + jr + '</span></td>';
           } else {
             body += '<td style="color:var(--text2);">—</td>';
@@ -2345,10 +2614,15 @@ async function loadComparisonSummary() {
       } catch (e) { /* */ }
     }
 
+    const segTextMap = {};
+    if (claim1 && Array.isArray(claim1.segments)) {
+      claim1.segments.forEach((s) => { if (s && s.id) segTextMap[s.id] = s.text || ''; });
+    }
     _compSummaryData = {
       segs,
       claim1,
       segIds,
+      segTextMap,
       citIds,
       responses,
       subClaims,
@@ -2954,10 +3228,10 @@ async function loadCitationFullTexts() {
           html += `<div style="margin-bottom:0.5rem; padding:0.4rem 0.6rem; border-left:3px solid ${jColor}; background:var(--surface2); border-radius:0 4px 4px 0;">`;
           html += `<div style="font-size:0.8rem;"><strong>${comp.requirement_id}</strong> <span style="color:${jColor};">${j}</span></div>`;
           if (comp.cited_location) {
-            html += `<div class="para-text" style="margin-top:2px;">📍 ${comp.cited_location}</div>`;
+            html += `<div class="para-text" style="margin-top:2px;">📍 ${_compLinkifyParaRefs(_escapeHtml(comp.cited_location), citId)}</div>`;
           }
           if (comp.judgment_reason) {
-            html += `<div class="para-text" style="margin-top:2px;">${comp.judgment_reason}</div>`;
+            html += `<div class="para-text" style="margin-top:2px;">${_compLinkifyParaRefs(_escapeHtml(comp.judgment_reason), citId)}</div>`;
           }
           html += '</div>';
         }

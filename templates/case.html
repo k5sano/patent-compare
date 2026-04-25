@@ -241,6 +241,27 @@
     <div class="card">
       <h2>Step 4: 引用文献</h2>
 
+      <!-- 特許番号 → J-PlatPat 固定URL を開く (拒絶理由からコピペ想定) -->
+      <div class="jpp-quick-jump">
+        <div class="jpp-quick-head">
+          <strong>特許番号から J-PlatPat を開く</strong>
+          <span class="jpp-quick-hint">拒絶理由通知書からそのままコピペ可 (全角/半角・号公報・号 すべて OK)</span>
+        </div>
+        <div class="jpp-quick-row">
+          <input type="text" id="jpp-quick-input" class="jpp-quick-input"
+                 placeholder="例: 特開２０１４－１４１３０２号公報 / JP6719258B2 / WO2022/030405 / US8,123,456 B2"
+                 onkeydown="_jppQuickOnEnter(event)">
+          <button class="btn btn-primary" type="button"
+                  onclick="jumpToJplatpatByQuery(document.getElementById('jpp-quick-input').value)">
+            開く
+          </button>
+          <button class="btn btn-outline" type="button"
+                  onclick="(function(){var i=document.getElementById('jpp-quick-input');i.value='';i.focus();document.getElementById('jpp-quick-msg').textContent='';})()"
+                  title="入力欄をクリア">クリア</button>
+        </div>
+        <div id="jpp-quick-msg" class="jpp-quick-msg"></div>
+      </div>
+
       <!-- 3段階検索ワークフロー -->
       <div class="stage-workflow" id="stage-workflow">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.8rem;">
@@ -746,10 +767,11 @@
           </div>
           {% endfor %}
         </div>
-        {% if citations|length > 1 %}
-        <div style="margin-top:0.3rem; font-size:0.8rem;">
-          <a href="#" onclick="toggleAllCitations(true); return false;">全選択</a> /
-          <a href="#" onclick="toggleAllCitations(false); return false;">全解除</a>
+        {% if citations %}
+        <div class="step5-toggle-row">
+          <span class="step5-toggle-count" id="step5-selected-count"></span>
+          <button type="button" class="btn btn-outline btn-sm-tight" onclick="toggleAllCitations(true)">全選択</button>
+          <button type="button" class="btn btn-outline btn-sm-tight" onclick="toggleAllCitations(false)">全解除</button>
         </div>
         {% endif %}
         <p style="margin-top:0.6rem; font-size:0.82rem; color:var(--text2); line-height:1.5;">

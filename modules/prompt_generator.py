@@ -60,9 +60,12 @@ def _build_citation_priority_rules():
     return """## 引用箇所の優先順位
 引用文献から該当記載を探す際は、以下の優先順位で引用してください：
 1. **実施例**（具体的な配合例、実験データ、数値データ）— 最も証拠力が強い
-2. **詳細な定義が書かれた箇所**（「本発明において○○とは」等の定義段落）
-3. **請求項（クレーム）** — 権利範囲として明確
-4. **一言でも言及がある箇所** — 最低限の開示"""
+2. **検出された表（配合表・比較例データ等）** — 本文とは別に冒頭の「### 【検出された表】」セクションにまとめて提示します。**表中の成分・配合量・物性値は最も信頼性の高い証拠**なので必ず検討対象に含めてください
+3. **詳細な定義が書かれた箇所**（「本発明において○○とは」等の定義段落）
+4. **請求項（クレーム）** — 権利範囲として明確
+5. **一言でも言及がある箇所** — 最低限の開示
+
+**重要**: 「### 【検出された表】」セクションの内容は段落本文と同じ出典（【XXXX】で段落番号を記載）ですが、実施例・比較例の数値表としてはここから引用することを推奨します。cited_location には「表X（段落【XXXX】）」の形で表番号と段落番号を併記してください。"""
 
 
 def _build_judgment_criteria():
@@ -126,9 +129,18 @@ def _build_keywords_section(keywords):
 
 
 def _trim_citation_text(citation, max_chars):
-    """引用文献テキストをセクション優先順位に基づいてトリミング"""
+    """引用文献テキストをセクション優先順位に基づいてトリミング。
+
+    順序:
+      1. 請求の範囲（claims）
+      2. 検出された表（tables）— 実施例の配合表は最重要証拠なので常に優先
+      3. セクション優先順位に基づく段落（SECTION_PRIORITY）
+      4. 残りの段落
+    表として既に含めた段落は 3/4 で重複させない。
+    """
     paragraphs = citation.get("paragraphs", [])
     claims = citation.get("claims", [])
+    tables = citation.get("tables", []) or []
 
     by_section = {}
     for para in paragraphs:
@@ -146,18 +158,54 @@ def _trim_citation_text(citation, max_chars):
         claims_text = "\n".join(claims_lines)
         total_chars += len(claims_text)
 
+    # 表（実施例の配合表など）を最優先で含める
+    tables_lines = []
+    table_para_ids = set()
+    if tables:
+        tables_lines.append("### 【検出された表（実施例の配合表・比較例データ等）】")
+        for t in tables:
+            pid = str(t.get("paragraph_id", "")).strip()
+            tid = t.get("id", "表?")
+            page = t.get("page", "?")
+            section = t.get("section", "")
+            content = t.get("content", "") or ""
+            if not content:
+                continue
+            header = f"#### {tid}（段落【{pid}】 p.{page}"
+            if section:
+                header += f" / {section}"
+            header += "）"
+            entry = f"{header}\n{content}"
+            if total_chars + len(entry) > max_chars:
+                # 予算オーバーでも最低 1 つは入れる（claims を削ってでも）
+                if not table_para_ids:
+                    tables_lines.append(entry)
+                    total_chars += len(entry)
+                    if pid:
+                        table_para_ids.add(pid)
+                break
+            tables_lines.append(entry)
+            total_chars += len(entry)
+            if pid:
+                table_para_ids.add(pid)
+        if len(tables_lines) == 1:
+            # ヘッダだけ残ったらリセット
+            tables_lines = []
+
     for section_name in SECTION_PRIORITY:
         if section_name == "請求項":
             continue
         paras = by_section.get(section_name, [])
         for para in paras:
+            if para["id"] in table_para_ids:
+                continue  # 表で既に含めた段落はスキップ
             para_text = f"【{para['id']}】{para['text']}"
             if total_chars + len(para_text) > max_chars:
                 break
             selected.append(para)
             total_chars += len(para_text)
 
-    included_ids = {p["id"] for p in selected}
+    included_ids = {p["id"] for p in selected} | table_para_ids
     for para in paragraphs:
         if para["id"] not in included_ids:
             para_text = f"【{para['id']}】{para['text']}"
@@ -171,6 +219,8 @@ def _trim_citation_text(citation, max_chars):
     lines = []
     if claims_text:
         lines.append(claims_text)
+    if tables_lines:
+        lines.append("\n".join(tables_lines))
     current_section = None
     for para in selected:
         section = para.get("section", "")

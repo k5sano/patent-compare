@@ -188,8 +188,97 @@ def compute_segments(case_id):
     }, 200
 
 
-def create_case(case_number, year="", month="", field="cosmetics"):
-    """新規案件を作成。PDF自動DL・抽出を含む。
+def _parse_patent_input(raw):
+    """ユーザ入力 (特願/特開/特許など) を分類して正規化する。
+
+    Returns: dict with keys:
+      - kind: 'application' | 'publication' | 'unknown'
+      - case_id: case_id として使う文字列
+      - patent_number: 特開/特許 番号 (publication の場合のみ)
+      - application_number: 特願番号 (application の場合のみ)
+      - jp_id: Google Patents 用 ID (publication の場合のみ、DL 試行用)
+    """
+    s = (raw or "").strip()
+    if not s:
+        return {"kind": "unknown", "case_id": "", "patent_number": "",
+                "application_number": "", "jp_id": ""}
+    # 全角数字・各種ハイフン・装飾除去 (frontend の _jppNormalize と同じ)
+    t = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    t = t.replace("－", "-").replace("−", "-").replace("―", "-").replace("—", "-")
+    t = t.replace("／", "/")
+    for noise in ("号公報", "号", "公報", "明細書"):
+        t = t.replace(noise, " ")
+    for b in "()（）「」【】『』":
+        t = t.replace(b, " ")
+    t = t.strip()
+
+    # 特願 (application number)
+    m = re.search(r'特願\s*(\d{4})\s*-\s*(\d+)', t)
+    if m:
+        y, n = m.group(1), m.group(2).zfill(6)
+        return {
+            "kind": "application",
+            "case_id": f"wa-{y}-{n}",
+            "patent_number": "",
+            "application_number": f"特願{y}-{n}",
+            "jp_id": "",
+        }
+
+    # 特開 (unexamined publication)
+    m = re.search(r'特開\s*(\d{4})\s*-\s*(\d+)', t)
+    if m:
+        y, n = m.group(1), m.group(2).zfill(6)
+        return {
+            "kind": "publication",
+            "case_id": f"{y}-{n}",
+            "patent_number": f"特開{y}-{n}",
+            "application_number": "",
+            "jp_id": f"JP{y}{n}A",
+        }
+
+    # 特許 (granted)
+    m = re.search(r'特許(?:第)?\s*(\d+)', t)
+    if m:
+        num = m.group(1)
+        return {
+            "kind": "publication",
+            "case_id": f"jp-{num}",
+            "patent_number": f"特許第{num}号",
+            "application_number": "",
+            "jp_id": f"JP{num}B2",
+        }
+
+    # JP2024-073024A 等
+    m = re.search(r'JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A', t, re.I)
+    if m:
+        y, n = m.group(1), m.group(2).zfill(6)
+        return {
+            "kind": "publication",
+            "case_id": f"{y}-{n}",
+            "patent_number": f"特開{y}-{n}",
+            "application_number": "",
+            "jp_id": f"JP{y}{n}A",
+        }
+
+    # 素の yyyy-nnnnnn (従来の公開番号運用)
+    m = re.match(r'^\s*(\d{4})-(\d+)\s*$', t)
+    if m:
+        y, n = m.group(1), m.group(2)  # zfill しない (従来互換)
+        return {
+            "kind": "publication",
+            "case_id": f"{y}-{n}",
+            "patent_number": f"特開{y}-{n.zfill(6)}",
+            "application_number": "",
+            "jp_id": f"JP{y}{n.zfill(6)}A",
+        }
+
+    return {"kind": "unknown", "case_id": s,
+            "patent_number": "", "application_number": "", "jp_id": s}
+
+
+def create_case(case_number, year="", month="", field="cosmetics",
+                application_number=""):
+    """新規案件を作成。特開入力時は PDF 自動 DL・抽出まで、特願入力時はフォルダ作成のみ。
 
     Returns:
         dict: 結果情報
@@ -198,38 +287,57 @@ def create_case(case_number, year="", month="", field="cosmetics"):
     from modules.pdf_extractor import extract_patent_pdf
     from modules.claim_segmenter import segment_claims
 
-    case_id = case_number
+    parsed = _parse_patent_input(case_number)
+    # 明示された application_number があれば上書き
+    app_num = (application_number or "").strip()
+    if app_num and parsed["kind"] != "application":
+        app_parsed = _parse_patent_input(app_num)
+        if app_parsed["kind"] == "application":
+            parsed["application_number"] = app_parsed["application_number"]
+
+    case_id = parsed["case_id"] or case_number
+    kind = parsed["kind"]
+
     case_dir = get_case_dir(case_id)
     if case_dir.exists():
         return {"error": f"案件 '{case_id}' は既に存在します", "case_id": case_id}
-
-    # 公開番号 → Google Patents用ID
-    m = re.match(r'(\d{4})-(\d+)', case_number)
-    if m:
-        year_part, serial = m.group(1), m.group(2)
-        jp_id = f"JP{year_part}{serial.zfill(6)}A"
-    else:
-        jp_id = case_number
 
     for sub in ["input", "citations", "prompts", "responses", "output"]:
         (case_dir / sub).mkdir(parents=True, exist_ok=True)
 
     meta = {
         "case_id": case_id,
-        "jp_id": jp_id,
+        "jp_id": parsed["jp_id"],
         "title": "",
         "field": field,
         "year": year,
         "month": month,
         "citations": [],
     }
+    if parsed["application_number"]:
+        meta["application_number"] = parsed["application_number"]
+    if parsed["patent_number"]:
+        meta["patent_number"] = parsed["patent_number"]
     save_case_meta(case_id, meta)
 
+    # 特願のみ入力の場合は PDF DL をスキップ (J-PlatPat で後日確認して追記する運用)
+    if kind == "application" and not parsed["jp_id"]:
+        return {
+            "success": True,
+            "case_id": case_id,
+            "kind": "application",
+            "pdf_downloaded": False,
+            "application_number": parsed["application_number"],
+            "note": "特願のみの案件を作成しました。後で公開番号を追記するか、本願PDFを手動アップロードしてください。",
+        }
+
+    jp_id = parsed["jp_id"] or case_number
     dl_result = download_patent_pdf(jp_id, case_dir / "input", timeout=60)
     if not dl_result["success"]:
         return {
             "success": True,
             "case_id": case_id,
+            "kind": kind,
             "pdf_downloaded": False,
             "error": dl_result.get("error", "PDFダウンロード失敗"),
             "google_patents_url": dl_result.get("google_patents_url", ""),
@@ -451,7 +559,7 @@ def update_case_meta(case_id, data):
 
     for key in [
         "patent_number", "patent_title", "title", "field", "year", "month",
-        "filing_date", "priority_date",
+        "filing_date", "priority_date", "application_number",
     ]:
         if key in data:
             val = data[key]

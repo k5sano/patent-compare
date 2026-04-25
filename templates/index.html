@@ -78,6 +78,42 @@
   #auto-bar label { cursor:pointer; user-select:none; }
   #btn-auto-run:disabled { opacity:0.4; cursor:not-allowed; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* バッチ入力 */
+  .batch-panel { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1rem 1.2rem; }
+  .batch-panel[open] { background: var(--surface); }
+  .batch-panel textarea { background: var(--bg); border: 1px solid var(--border);
+    color: var(--text); padding: 0.6rem 0.8rem; border-radius: 8px; line-height: 1.5; }
+  .batch-panel textarea:focus { outline: none; border-color: var(--accent); }
+  .batch-row { display: grid; grid-template-columns: auto auto 1fr auto auto auto;
+    gap: 0.5rem; align-items: center; padding: 0.45rem 0.6rem; margin-bottom: 0.35rem;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    font-size: 0.85rem; }
+  .batch-row[data-kind="application"] { border-left: 3px solid #fbbf24; }
+  .batch-row[data-kind="publication"] { border-left: 3px solid #4ade80; }
+  .batch-row[data-kind="unknown"] { border-left: 3px solid #f87171; opacity: 0.75; }
+  .batch-row[data-exists="true"] { opacity: 0.55; background: var(--surface2); }
+  .batch-kind-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 10px;
+    font-weight: 700; white-space: nowrap; }
+  .batch-kind-app { background: #422006; color: #fbbf24; }
+  .batch-kind-pub { background: #14532d; color: #4ade80; }
+  .batch-kind-unk { background: #450a0a; color: #fca5a5; }
+  .batch-num { font-family: monospace; font-size: 0.88rem; color: var(--text); }
+  .batch-status { font-size: 0.78rem; color: var(--text2); min-width: 6rem; text-align: right; }
+  .batch-status.ok { color: #4ade80; }
+  .batch-status.err { color: #fca5a5; }
+  .batch-status.pending { color: #94a3b8; }
+  .batch-action-btn { padding: 0.25rem 0.7rem; font-size: 0.78rem;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text); border-radius: 6px; cursor: pointer;
+    white-space: nowrap; }
+  .batch-action-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .batch-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .batch-jp-link { color: #60a5fa; font-size: 0.78rem; text-decoration: none; white-space: nowrap; }
+  .batch-jp-link:hover { text-decoration: underline; }
+  .batch-toolbar { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.6rem;
+    padding-top: 0.6rem; border-top: 1px dashed var(--border); flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -108,6 +144,13 @@
     <div class="modal-field">
       <label>発明の名称</label>
       <input type="text" id="edit-title">
+    </div>
+    <div class="modal-field">
+      <label>分野 (Field)</label>
+      <select id="edit-field">
+        <option value="cosmetics">化粧品 (cosmetics)</option>
+        <option value="laminate">積層体 (laminate)</option>
+      </select>
     </div>
     <div class="modal-btns">
       <button class="btn" style="background:var(--surface2); color:var(--text);" onclick="closeEditModal()">キャンセル</button>
@@ -174,6 +217,7 @@
         <h3 class="case-title-display">{{ c.patent_number or c.case_id }} &mdash; {{ c.patent_title or c.title }}</h3>
         <div class="meta">
           <span class="badge badge-blue">{{ c.field }}</span>
+          {% if c.application_number %}<span class="badge" style="background:#422006; color:#fbbf24;" title="出願番号">{{ c.application_number }}</span>{% endif %}
           {% if c.year or c.month %}<span class="badge badge-gray case-ym-display">{{ c.year|default('', true) }}{% if c.year and c.month %}/{% endif %}{{ (c.month ~ '月') if c.month else '' }}</span>{% endif %}
           {% if not c.year and not c.month %}<span class="badge badge-gray case-ym-display" style="display:none;"></span>{% endif %}
           {% if c._has_excel %}<span class="badge badge-green">Excel出力済</span>{% endif %}
@@ -201,7 +245,7 @@
       </div>
     </a>
     <button class="btn-edit-case" title="編集"
-            onclick="event.stopPropagation(); openEditModal('{{ c.case_id }}', '{{ c.year|default('', true) }}', '{{ c.month|default('', true) }}', this.closest('.case-item').dataset.title)">&#9998;</button>
+            onclick="event.stopPropagation(); openEditModal('{{ c.case_id }}', '{{ c.year|default('', true) }}', '{{ c.month|default('', true) }}', this.closest('.case-item').dataset.title, '{{ c.field|default('cosmetics', true) }}')">&#9998;</button>
   </div>
   {% endfor %}
   {% else %}
@@ -213,6 +257,11 @@
 
   <div class="new-case">
     <h2>新規案件作成</h2>
+    <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
+      <strong>特開</strong>（公開番号）でも <strong>特願</strong>（出願番号）でも OK。
+      全角・ハイフン・「号公報」は自動で正規化します。まとめて流し込みたいときは
+      <a href="#" onclick="document.getElementById('batch-details').open=true;document.getElementById('batch-input').focus();return false;" style="color:var(--accent);">↓ 月次バッチ入力</a>を使ってください。
+    </p>
     <div class="form-row">
       <select id="new-year" style="width:100px;">
         <option value="">年度</option>
@@ -226,7 +275,7 @@
         <option value="9">9月</option><option value="10">10月</option>
         <option value="11">11月</option><option value="12">12月</option>
       </select>
-      <input type="text" id="new-case-number" placeholder="公開番号（例: 2025-47348）" required>
+      <input type="text" id="new-case-number" placeholder="例: 特開2025-47348 / 特願2022-184000 / 特許第6719258号" required>
       <select id="new-field">
         <option value="cosmetics">化粧品</option>
         <option value="laminate">積層体</option>
@@ -238,6 +287,43 @@
       <span id="create-status" style="color:var(--text2); font-size:0.9rem;">Google PatentsからPDFを取得中...</span>
     </div>
     <div id="create-result" style="margin-top:0.8rem;"></div>
+
+    <!-- 月次バッチ入力 (5-6件まとめて貼る用) -->
+    <details id="batch-details" class="batch-panel" style="margin-top:1.3rem;">
+      <summary style="cursor:pointer; font-size:0.95rem; font-weight:600; color:#93c5fd;">
+        📋 月次バッチ入力（リストをまとめて貼付 → 順次作成）
+      </summary>
+      <div style="margin-top:0.8rem;">
+        <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.4rem;">
+          1行1件で貼ってください。特願・特開・特許番号いずれも認識。全角・号公報などは無視します。
+        </p>
+        <textarea id="batch-input" rows="6"
+                  style="width:100%; font-family:'Yu Gothic UI', monospace; font-size:0.88rem;"
+                  placeholder="例:&#10;特願2022-184000&#10;特開2025-47348号公報&#10;特許第6719258号&#10;特願２０２４－１０００００"></textarea>
+        <div style="display:flex; gap:0.5rem; margin-top:0.5rem; align-items:center; flex-wrap:wrap;">
+          <select id="batch-field" style="padding:0.35rem 0.6rem; font-size:0.85rem;">
+            <option value="cosmetics">化粧品</option>
+            <option value="laminate">積層体</option>
+          </select>
+          <select id="batch-year" style="width:100px; padding:0.35rem 0.6rem; font-size:0.85rem;">
+            <option value="">年度</option>
+          </select>
+          <select id="batch-month" style="width:80px; padding:0.35rem 0.6rem; font-size:0.85rem;">
+            <option value="">月</option>
+            <option value="1">1月</option><option value="2">2月</option>
+            <option value="3">3月</option><option value="4">4月</option>
+            <option value="5">5月</option><option value="6">6月</option>
+            <option value="7">7月</option><option value="8">8月</option>
+            <option value="9">9月</option><option value="10">10月</option>
+            <option value="11">11月</option><option value="12">12月</option>
+          </select>
+          <button class="btn btn-outline" type="button" onclick="parseBatchInput()"
+                  style="padding:0.35rem 0.9rem; font-size:0.85rem;">パース & プレビュー</button>
+          <span id="batch-parse-msg" style="font-size:0.82rem; color:var(--text2);"></span>
+        </div>
+        <div id="batch-preview" style="margin-top:0.8rem;"></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -334,12 +420,203 @@ document.getElementById('new-case-number').addEventListener('keydown', function(
   if (e.key === 'Enter') { e.preventDefault(); createCase(); }
 });
 
+// ================================================================
+// バッチ入力: リストまとめ貼付 → 順次作成
+// ================================================================
+function buildJplatpatAppUrl(appNum) {
+  if (!appNum) return '';
+  const m = String(appNum).match(/(\d{4})-(\d+)/);
+  if (!m) return '';
+  return `https://www.j-platpat.inpit.go.jp/c1801/PU/JP-${m[1]}-${m[2].padStart(6,'0')}/10/ja`;
+}
+function buildJplatpatPubUrl(pubNum) {
+  if (!pubNum) return '';
+  // 特開yyyy-nnnnnn
+  let m = String(pubNum).match(/特開\s*(\d{4})\s*-?\s*(\d+)/);
+  if (m) return `https://www.j-platpat.inpit.go.jp/c1801/PU/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
+  // 特許第nnnn号
+  m = String(pubNum).match(/特許(?:第)?\s*(\d+)/);
+  if (m) return `https://www.j-platpat.inpit.go.jp/c1801/PU/JP-${m[1]}/15/ja`;
+  return '';
+}
+
+async function parseBatchInput() {
+  const ta = document.getElementById('batch-input');
+  const msg = document.getElementById('batch-parse-msg');
+  const preview = document.getElementById('batch-preview');
+  const text = ta.value || '';
+  if (!text.trim()) {
+    msg.textContent = '空です。1 行 1 件で貼ってください。';
+    msg.style.color = '#fca5a5';
+    preview.innerHTML = '';
+    return;
+  }
+  try {
+    const resp = await fetch('/case/parse-batch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text}),
+    });
+    const data = await resp.json();
+    const entries = data.entries || [];
+    if (entries.length === 0) {
+      msg.textContent = '有効な番号が見つかりませんでした。';
+      msg.style.color = '#fca5a5';
+      preview.innerHTML = '';
+      return;
+    }
+    const valid = entries.filter(e => e.kind !== 'unknown');
+    const news = valid.filter(e => !e.exists);
+    msg.innerHTML = `${entries.length} 件パース (有効 ${valid.length} / 新規 <strong style="color:#4ade80;">${news.length}</strong>${entries.length - valid.length > 0 ? ` / 未解釈 <span style="color:#fca5a5;">${entries.length - valid.length}</span>` : ''})`;
+    msg.style.color = 'var(--text2)';
+    renderBatchPreview(entries);
+  } catch(e) {
+    msg.textContent = 'パースエラー: ' + e.message;
+    msg.style.color = '#fca5a5';
+  }
+}
+
+function renderBatchPreview(entries) {
+  const preview = document.getElementById('batch-preview');
+  window._batchEntries = entries;
+  let html = '';
+  entries.forEach((e, i) => {
+    const kindClass = e.kind === 'application' ? 'batch-kind-app'
+                    : e.kind === 'publication' ? 'batch-kind-pub'
+                    : 'batch-kind-unk';
+    const kindLabel = e.kind === 'application' ? '特願'
+                    : e.kind === 'publication' ? '特開/特許'
+                    : '?';
+    const num = e.application_number || e.patent_number || e.original;
+    const jppUrl = e.kind === 'application' ? buildJplatpatAppUrl(e.application_number)
+                  : e.kind === 'publication' ? buildJplatpatPubUrl(e.patent_number)
+                  : '';
+    const jppLink = jppUrl ? `<a href="${jppUrl}" target="_blank" rel="noopener" class="batch-jp-link">J-PlatPat ↗</a>` : '<span></span>';
+    const chkDisabled = e.exists || e.kind === 'unknown';
+    const existsBadge = e.exists
+      ? `<span class="batch-status" style="color:#fbbf24;">既存 <a href="/case/${encodeURIComponent(e.case_id)}" class="batch-jp-link" style="margin-left:4px;">開く ↗</a></span>`
+      : '<span class="batch-status pending" data-idx="'+i+'">未作成</span>';
+    html += `<div class="batch-row" data-idx="${i}" data-kind="${e.kind}" data-exists="${e.exists}">
+      <input type="checkbox" class="batch-check" data-idx="${i}" ${chkDisabled ? 'disabled' : 'checked'}>
+      <span class="batch-kind-badge ${kindClass}">${kindLabel}</span>
+      <span class="batch-num">${_htmlEscape(num || e.original)}</span>
+      ${jppLink}
+      <button class="batch-action-btn" onclick="createOneBatch(${i})" ${chkDisabled ? 'disabled' : ''}>作成</button>
+      ${existsBadge}
+    </div>`;
+  });
+  const selectable = entries.filter(e => !e.exists && e.kind !== 'unknown').length;
+  html += `<div class="batch-toolbar">
+    <button class="btn btn-primary" onclick="createSelectedBatch()" ${selectable === 0 ? 'disabled' : ''}>
+      選択した案件を作成 <span id="batch-selected-count">(${selectable}件)</span>
+    </button>
+    <button class="batch-action-btn" onclick="batchSelectAll(true)">全選択</button>
+    <button class="batch-action-btn" onclick="batchSelectAll(false)">全解除</button>
+    <span style="flex:1"></span>
+    <span style="font-size:0.78rem; color:var(--text2);">
+      <span class="batch-kind-badge batch-kind-app" style="margin-right:4px;">特願</span>のみは PDF 自動 DL をスキップ
+    </span>
+  </div>`;
+  preview.innerHTML = html;
+  if (!preview._batchWired) {
+    preview.addEventListener('change', (ev) => {
+      if (ev.target && ev.target.classList.contains('batch-check')) _batchUpdateCount();
+    });
+    preview._batchWired = true;
+  }
+}
+
+function _htmlEscape(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function batchSelectAll(on) {
+  document.querySelectorAll('.batch-check:not(:disabled)').forEach(cb => cb.checked = on);
+  _batchUpdateCount();
+}
+
+function _batchUpdateCount() {
+  const n = document.querySelectorAll('.batch-check:checked').length;
+  const el = document.getElementById('batch-selected-count');
+  if (el) el.textContent = `(${n}件)`;
+}
+
+async function createOneBatch(idx) {
+  const entries = window._batchEntries || [];
+  const e = entries[idx];
+  if (!e) return;
+  const statusEl = document.querySelector(`.batch-status[data-idx="${idx}"]`);
+  const rowBtn = document.querySelector(`.batch-row[data-idx="${idx}"] .batch-action-btn`);
+  return _createSingleFromBatch(e, statusEl, rowBtn);
+}
+
+async function _createSingleFromBatch(e, statusEl, btn) {
+  if (!e) return { success: false };
+  const field = document.getElementById('batch-field').value || 'cosmetics';
+  const year = document.getElementById('batch-year').value || '';
+  const month = document.getElementById('batch-month').value || '';
+  if (statusEl) { statusEl.textContent = '作成中...'; statusEl.className = 'batch-status pending'; }
+  if (btn) btn.disabled = true;
+  try {
+    const body = {
+      case_number: e.application_number || e.patent_number || e.original,
+      application_number: e.kind === 'application' ? e.application_number : '',
+      year, month, field,
+    };
+    const resp = await fetch('/case/new', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (resp.status === 409) {
+      if (statusEl) { statusEl.textContent = '既存: ' + data.case_id; statusEl.className = 'batch-status err'; }
+      return { success: false, case_id: data.case_id };
+    }
+    if (!data.success) {
+      if (statusEl) { statusEl.textContent = 'エラー: ' + (data.error || '?').slice(0, 30); statusEl.className = 'batch-status err'; }
+      return { success: false };
+    }
+    const label = data.pdf_downloaded ? `✓ 作成 (PDF取得済)` : `✓ 作成 (PDF未取得)`;
+    if (statusEl) {
+      statusEl.innerHTML = label + ` <a href="/case/${data.case_id}" style="color:var(--accent);">開く</a>`;
+      statusEl.className = 'batch-status ok';
+    }
+    return { success: true, case_id: data.case_id };
+  } catch(ex) {
+    if (statusEl) { statusEl.textContent = 'エラー: ' + ex.message; statusEl.className = 'batch-status err'; }
+    return { success: false };
+  } finally {
+    if (btn) btn.disabled = true; // 作成後は押せないまま
+  }
+}
+
+async function createSelectedBatch() {
+  const checks = Array.from(document.querySelectorAll('.batch-check:checked'));
+  if (checks.length === 0) { alert('選択してください'); return; }
+  const entries = window._batchEntries || [];
+  let okCount = 0, errCount = 0;
+  for (const cb of checks) {
+    const idx = parseInt(cb.dataset.idx, 10);
+    const e = entries[idx];
+    const statusEl = document.querySelector(`.batch-status[data-idx="${idx}"]`);
+    const rowBtn = document.querySelector(`.batch-row[data-idx="${idx}"] .batch-action-btn`);
+    const r = await _createSingleFromBatch(e, statusEl, rowBtn);
+    if (r && r.success) okCount++; else errCount++;
+    cb.disabled = true;
+  }
+  const msg = document.getElementById('batch-parse-msg');
+  if (msg) {
+    msg.innerHTML = `完了: 成功 <strong style="color:#4ade80;">${okCount}</strong> / 失敗 <strong style="color:#fca5a5;">${errCount}</strong> — <a href="#" onclick="location.reload();return false;" style="color:var(--accent);">ページを更新して案件一覧に反映</a>`;
+  }
+}
+
 // ===== 案件編集モーダル =====
-function openEditModal(caseId, year, month, title) {
+function openEditModal(caseId, year, month, title, field) {
   document.getElementById('edit-case-id').value = caseId;
   document.getElementById('edit-year').value = year;
   document.getElementById('edit-month').value = month;
   document.getElementById('edit-title').value = title;
+  const fieldSel = document.getElementById('edit-field');
+  if (fieldSel) fieldSel.value = field || 'cosmetics';
   document.getElementById('edit-modal').classList.add('show');
   document.getElementById('edit-title').focus();
 }
@@ -351,10 +628,11 @@ async function saveEditModal() {
   const year = document.getElementById('edit-year').value;
   const month = document.getElementById('edit-month').value;
   const title = document.getElementById('edit-title').value.trim();
+  const field = (document.getElementById('edit-field') || {}).value || 'cosmetics';
   try {
     const resp = await fetch(`/case/${caseId}/meta`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ year: year, month: month, patent_title: title, title: title })
+      body: JSON.stringify({ year: year, month: month, patent_title: title, title: title, field: field })
     });
     const data = await resp.json();
     if (data.success) {
@@ -363,6 +641,9 @@ async function saveEditModal() {
         item.dataset.year = year;
         item.dataset.month = month;
         item.dataset.title = title;
+        item.dataset.field = field;
+        const fieldBadge = item.querySelector('.badge.badge-blue');
+        if (fieldBadge) fieldBadge.textContent = field;
         const h3 = item.querySelector('.case-title-display');
         if (h3) {
           const num = h3.textContent.split(' \u2014 ')[0];
@@ -422,6 +703,21 @@ document.addEventListener('keydown', function(e) {
     newYear.appendChild(opt);
   });
 
+  const batchYear = document.getElementById('batch-year');
+  if (batchYear) {
+    sorted.forEach(y => {
+      const opt = document.createElement('option');
+      opt.value = y; opt.textContent = y + '年';
+      if (y === String(currentYear)) opt.selected = true;
+      batchYear.appendChild(opt);
+    });
+  }
+  // バッチ月: 今月をデフォルト選択（月を空で作成してフィルタから消える事故防止）
+  const batchMonth = document.getElementById('batch-month');
+  if (batchMonth) {
+    batchMonth.value = String(now.getMonth() + 1);
+  }
+
   const editYear = document.getElementById('edit-year');
   const editOptBlank = document.createElement('option');
   editOptBlank.value = ''; editOptBlank.textContent = '未設定';
@@ -459,10 +755,20 @@ function filterCases() {
   const total = items.length;
   const countEl = document.getElementById('filter-count');
   if (year || month) {
-    countEl.textContent = `${shown} / ${total}件`;
+    const hidden = total - shown;
+    countEl.innerHTML = `${shown} / ${total}件` +
+      (hidden > 0 ? ` <a href="#" onclick="clearFilter();return false;" style="color:#fbbf24; text-decoration:underline; margin-left:4px;">(${hidden}件が非表示 / フィルタ解除)</a>` : '');
   } else {
     countEl.textContent = total > 0 ? `${total}件` : '';
   }
+}
+
+function clearFilter() {
+  document.getElementById('filter-year').value = '';
+  document.getElementById('filter-month').value = '';
+  sessionStorage.removeItem('filter-year');
+  sessionStorage.removeItem('filter-month');
+  filterCases();
 }
 
 function toggleSelectAll() {

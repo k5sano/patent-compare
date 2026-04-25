@@ -81,10 +81,35 @@ def new_case():
         year=data.get("year", ""),
         month=data.get("month", ""),
         field=data.get("field", "cosmetics"),
+        application_number=(data.get("application_number") or "").strip(),
     )
     if "error" in result and "case_id" in result and result.get("error") and not result.get("success"):
         return jsonify(result), 409
     return jsonify(result)
+
+
+@app.route("/case/parse-batch", methods=["POST"])
+def parse_batch_input():
+    """複数行の特許番号入力をパースしてプレビュー用リストを返す。"""
+    from services.case_service import _parse_patent_input, get_case_dir
+    data = request.get_json() or {}
+    text = data.get("text", "") or ""
+    entries = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        p = _parse_patent_input(s)
+        exists = p.get("case_id") and get_case_dir(p["case_id"]).exists()
+        entries.append({
+            "original": s,
+            "kind": p["kind"],
+            "case_id": p["case_id"],
+            "patent_number": p["patent_number"],
+            "application_number": p["application_number"],
+            "exists": bool(exists),
+        })
+    return jsonify({"entries": entries})
 
 
 @app.route("/case/<case_id>")
@@ -359,6 +384,33 @@ def save_response_single(case_id, citation_id):
 def get_response(case_id, citation_id):
     from services.comparison_service import get_response
     return _svc_response(get_response(case_id, citation_id))
+
+
+@app.route("/case/<case_id>/citation/<citation_id>/paragraph/<para_id>", methods=["GET"])
+def get_citation_paragraph(case_id, citation_id, para_id):
+    """対比結果で参照された段落 (例: 【0053】) の本文を返す。"""
+    case_dir = get_case_dir(case_id)
+    p = case_dir / "citations" / f"{citation_id}.json"
+    if not p.is_file():
+        return jsonify({"error": f"文献データが見つかりません: {citation_id}"}), 404
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.loads(f.read().replace("\x00", ""), strict=False)
+    except (OSError, ValueError) as e:
+        return jsonify({"error": f"文献データ読込エラー: {e}"}), 500
+
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+    wanted = (para_id or "").translate(fw2hw).strip().lstrip("0") or "0"
+    for para in data.get("paragraphs", []) or []:
+        pid = str(para.get("id", "")).translate(fw2hw).strip().lstrip("0") or "0"
+        if pid == wanted:
+            return jsonify({
+                "id": str(para.get("id", "")),
+                "page": para.get("page"),
+                "section": para.get("section"),
+                "text": para.get("text", ""),
+            })
+    return jsonify({"error": f"段落【{para_id}】は {citation_id} に存在しません"}), 404
 
 
 @app.route("/case/<case_id>/export/excel", methods=["POST"])

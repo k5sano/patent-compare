@@ -111,7 +111,26 @@
   /* キーワードグループ */
   .kw-group { margin-bottom: 1rem; padding: 1rem; border-radius: 8px; border: 1px solid var(--border); }
   .kw-header { font-weight: 700; margin-bottom: 0.5rem; }
-  .kw-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; margin: 2px; border-radius: 12px; font-size: 0.8rem; }
+  .kw-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;
+    margin: 2px; border-radius: 12px; font-size: 0.8rem;
+    background: var(--surface2); cursor: pointer;
+    transition: background 0.12s, box-shadow 0.12s; user-select: none; }
+  .kw-tag:hover { background: var(--surface); }
+  .kw-tag .kw-term-text { cursor: pointer; padding: 0 1px; }
+  .kw-tag.kw-marked { background: rgba(239, 68, 68, 0.18);
+    box-shadow: inset 0 0 0 1px #ef4444; }
+  .kw-tag.kw-marked .kw-term-text { color: #fca5a5; font-weight: 700; }
+  .kw-tag.kw-marked .badge { filter: brightness(1.1); }
+
+  .fterm-tag { font-size: 0.75rem; padding: 1px 6px; background: #1e3a5f;
+    color: #60a5fa; border-radius: 4px; margin: 1px; display: inline-flex;
+    align-items: center; gap: 3px; cursor: pointer; user-select: none;
+    transition: background 0.12s, box-shadow 0.12s; }
+  .fterm-tag .fterm-desc { color: var(--text2); }
+  .fterm-tag:hover { background: #1e4a7f; }
+  .fterm-tag.kw-marked { background: rgba(239, 68, 68, 0.22);
+    color: #fecaca; box-shadow: inset 0 0 0 1px #ef4444; }
+  .fterm-tag.kw-marked .fterm-desc { color: #fca5a5; }
   .kw-del { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 0.85rem;
             padding: 0 2px; line-height: 1; border-radius: 50%; transition: all 0.15s; }
   .kw-del:hover { color: var(--red); background: rgba(239,68,68,0.15); }
@@ -504,6 +523,12 @@
     background: rgba(59, 130, 246, 0.15); line-height: 1.2; }
   .step5-jp-btn:hover { background: rgba(59, 130, 246, 0.28); color: #bfdbfe; }
   .step5-jp-hint strong { color: var(--text); }
+  .step5-toggle-row { display: flex; gap: 0.5rem; align-items: center;
+    margin-top: 0.6rem; padding: 0.5rem 0.7rem; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: 8px; flex-wrap: wrap; }
+  .step5-toggle-count { font-size: 0.85rem; color: var(--text2); flex: 1;
+    font-weight: 500; }
+  .btn-sm-tight { padding: 0.3rem 0.9rem; font-size: 0.82rem; }
 
   .sr-runs-list { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
   .sr-run-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
@@ -668,7 +693,7 @@
   .comp-cat.comp-cat-inline { font-size: 0.7rem; padding: 1px 5px; border-radius: 4px; min-width: 1.1rem; text-align: center; }
   .comp-summary-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .comp-summary-table { width: 100%; min-width: 400px; border-collapse: collapse; }
-  .comp-summary-table th, .comp-summary-table td { border: 1px solid var(--border); padding: 0.4rem 0.5rem; }
+  .comp-summary-table th, .comp-summary-table td { border: 1px solid var(--border); padding: 0.4rem 0.5rem; vertical-align: top; }
   .comp-summary-table thead th { background: var(--surface2); font-weight: 600; vertical-align: top; }
   .comp-th-cit { min-width: 6rem; text-align: center; }
   .comp-th-cit-line1 { font-size: 0.86rem; font-weight: 600; line-height: 1.3; text-align: center; word-break: break-word; }
@@ -682,7 +707,63 @@
   .comp-td-zen { text-align: center; font-size: 1.05em; }
   .comp-cite-loc { color: var(--text2); font-size: 0.75rem; }
   .comp-td-reason { font-size: 0.8rem; }
+  .comp-td-req { min-width: 9rem; max-width: 22rem; vertical-align: top; }
+  .comp-req-id { display: inline-block; font-weight: 700; font-size: 0.88rem;
+    color: var(--text); background: var(--surface2); padding: 1px 6px;
+    border-radius: 4px; margin-bottom: 0.25rem; }
+  .comp-req-text { display: block; font-size: 0.78rem; font-weight: 400;
+    color: var(--text2); line-height: 1.45; white-space: pre-wrap;
+    word-break: break-word; }
   .comp-section-h { background: var(--bg); }
   .comp-td-sum-compact, .comp-sum-catline { text-align: center; font-size: 0.85rem; }
   .comp-sum-text { font-size: 0.78rem; color: var(--text2); }
   .comp-sub-rationale { font-size: 0.75rem; color: var(--text2); font-weight: normal; }
+
+  /* 段落リンク【0053】 → ポップアップ */
+  a.comp-para-ref { color: #93c5fd; text-decoration: underline dotted;
+    cursor: pointer; padding: 0 1px; border-radius: 3px; }
+  a.comp-para-ref:hover { color: #bfdbfe; background: rgba(59, 130, 246, 0.18); }
+  a.comp-para-ref:active { background: rgba(59, 130, 246, 0.28); }
+
+  .comp-para-popup { background: var(--surface); border: 1px solid var(--accent);
+    border-radius: 8px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+    display: flex; flex-direction: column; overflow: hidden;
+    min-width: 260px; animation: compParaPopIn 0.12s ease-out; }
+  @keyframes compParaPopIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .comp-para-popup-hdr { background: var(--surface2); padding: 0.4rem 0.7rem;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.5rem; border-bottom: 1px solid var(--border);
+    font-size: 0.82rem; font-weight: 600; color: var(--text); flex-shrink: 0; }
+  .comp-para-popup-pid { color: #93c5fd; font-family: monospace; }
+  .comp-para-popup-close { background: none; border: none; color: var(--text2);
+    font-size: 1.2rem; cursor: pointer; padding: 0 4px; line-height: 1;
+    border-radius: 4px; }
+  .comp-para-popup-close:hover { background: var(--bg); color: var(--text); }
+  .comp-para-popup-body { padding: 0.6rem 0.8rem; overflow-y: auto; flex: 1; min-height: 0; }
+  .comp-para-popup-sec { font-size: 0.72rem; color: var(--text2); margin-bottom: 0.35rem;
+    padding-bottom: 0.3rem; border-bottom: 1px dashed var(--border); }
+  .comp-para-popup-page { color: #94a3b8; font-family: monospace; }
+  .comp-para-popup-text { font-size: 0.85rem; line-height: 1.6; color: var(--text);
+    white-space: pre-wrap; word-break: break-word; }
+  .comp-para-popup-loading { color: var(--text2); font-size: 0.82rem; font-style: italic; }
+  .comp-para-popup-err { color: #fca5a5; font-size: 0.85rem; }
+
+  /* Step 4: 特許番号から J-PlatPat を開くクイックジャンプ */
+  .jpp-quick-jump { background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.7rem 0.9rem; margin-bottom: 1rem; }
+  .jpp-quick-head { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+    margin-bottom: 0.5rem; }
+  .jpp-quick-head strong { font-size: 0.92rem; color: #93c5fd; }
+  .jpp-quick-hint { font-size: 0.75rem; color: var(--text2); }
+  .jpp-quick-row { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .jpp-quick-input { flex: 1; min-width: 18rem; padding: 0.45rem 0.7rem;
+    font-size: 0.88rem; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); }
+  .jpp-quick-input:focus { outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25); }
+  .jpp-quick-msg { margin-top: 0.45rem; font-size: 0.8rem; min-height: 1em; }
+  .jpp-quick-msg.ok { color: #4ade80; }
+  .jpp-quick-msg.err { color: #fca5a5; }
