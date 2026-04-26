@@ -243,7 +243,7 @@ def _add_movable_label_annot(page, anchor_rect, label, rgb):
 
 
 def _draw_label(page, anchor_rect, label, rgb, *, style="filled",
-                  text_alpha=1.0, stroke_alpha=1.0):
+                  text_alpha=1.0, stroke_alpha=1.0, slot=0):
     """ラベルを描画する。
 
     Args:
@@ -251,14 +251,22 @@ def _draw_label(page, anchor_rect, label, rgb, *, style="filled",
                "outline" (枠線のみ＋同色文字) — 請求項側、本文と重なる場合用。
         text_alpha: 文字の不透明度 (style='outline' の場合に効く)。
         stroke_alpha: 枠線の不透明度。
+        slot: 同一 anchor に複数ラベルを並べる時の通し番号 (0,1,2,...)。
+              優先して左方向に積み、左マージンが足りなくなったら下方向にずらす。
     """
     fs = 9
     w = max(22.0, 5.5 * len(label) + 8)
     h = 13.0
-    x0 = anchor_rect.x0 - w - 2
-    if x0 < 5:
-        x0 = min(anchor_rect.x1 + 2, page.rect.width - w - 2)
+    gap = 2
+    base_x0 = anchor_rect.x0 - w - gap
+    x0 = base_x0 - slot * (w + gap)
     y0 = max(5, anchor_rect.y0)
+    if x0 < 5:
+        # 左マージンを使い切ったら、slot=0 と同じ x に戻して下方向に積む
+        x0 = base_x0
+        if x0 < 5:
+            x0 = min(anchor_rect.x1 + gap, page.rect.width - w - 2)
+        y0 = max(5, anchor_rect.y0) + slot * (h + gap)
     box = fitz.Rect(x0, y0, x0 + w, y0 + h)
 
     if style == "outline":
@@ -325,18 +333,28 @@ def apply_hongan_annotations(doc, claim_items, para_items):
         last_y = rect.y0
 
     # 関連段落側
+    # 同じ (page, para_id) に複数の分節 ID が紐づくと、_search_para_marker が
+    # 同じ rect を返してラベルが上書きされる。para_slots で配置済みの個数を
+    # 数えて _draw_label に slot 番号を渡し、左方向 (足りなければ下方向) に
+    # ずらして積む。
     fallback_slots = {}
+    para_slots = {}
     for item in para_items:
         page_num = int(item.get("page") or 1)
         if not (1 <= page_num <= doc.page_count):
             continue
         page = doc[page_num - 1]
-        rect = _search_para_marker(page, item.get("para_id", ""))
+        para_id = item.get("para_id", "")
+        rect = _search_para_marker(page, para_id)
+        slot = 0
         if rect is None:
-            slot = fallback_slots.get(page_num, 0)
-            y = 18 + slot * 15
+            fb = fallback_slots.get(page_num, 0)
+            y = 18 + fb * 15
             rect = fitz.Rect(10, y, 40, y + 12)
-            fallback_slots[page_num] = slot + 1
-        _draw_label(page, rect, item["seg_id"], PARA_COLOR)
+            fallback_slots[page_num] = fb + 1
+        else:
+            slot = para_slots.get((page_num, para_id), 0)
+            para_slots[(page_num, para_id)] = slot + 1
+        _draw_label(page, rect, item["seg_id"], PARA_COLOR, slot=slot)
         n += 1
     return n
