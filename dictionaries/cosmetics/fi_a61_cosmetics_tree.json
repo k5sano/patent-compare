@@ -2,17 +2,19 @@
   "theme": "FI:A61",
   "name": "化粧品関連 FI 分類 (A61K8 + A61Q)",
   "generated_at": "2026-04-27",
-  "source": "https://www.j-platpat.inpit.go.jp/cache/classify/patent/PMGS_HTML/jpp/FI/ja/",
+  "source": "https://www.j-platpat.inpit.go.jp/p1102/HANDBOOK/{CODE}/ja/FI/{SELECT}",
   "select_version": "202601",
   "nodes": {
     "A61K": {
       "label": "医薬用，歯科用又は化粧用製剤",
       "definition": "",
+      "related": "",
+      "theme_code": "",
       "depth": 0,
       "parent": null,
       "children": [
-        "A61K6/00",
         "A61K8/00",
+        "A61K6/00",
         "A61K9/00",
         "A61K31/00",
         "A61K33/00",
@@ -31,965 +33,11 @@
       ],
       "examples": []
     },
-    "A61K6/00": {
-      "label": "歯科用製剤［２０２０．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/00": {
-      "label": "化粧品あるいは類似化粧品製剤［２００６．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [
-        "A61K8/02",
-        "A61K8/03",
-        "A61K8/04",
-        "A61K8/06",
-        "A61K8/11",
-        "A61K8/14",
-        "A61K8/18",
-        "A61K8/19",
-        "A61K8/20",
-        "A61K8/21",
-        "A61K8/22",
-        "A61K8/23",
-        "A61K8/24",
-        "A61K8/25",
-        "A61K8/26",
-        "A61K8/27",
-        "A61K8/28",
-        "A61K8/29",
-        "A61K8/30",
-        "A61K8/31",
-        "A61K8/33",
-        "A61K8/34",
-        "A61K8/35",
-        "A61K8/36",
-        "A61K8/362",
-        "A61K8/365",
-        "A61K8/368",
-        "A61K8/37",
-        "A61K8/38",
-        "A61K8/39",
-        "A61K8/40",
-        "A61K8/41",
-        "A61K8/42",
-        "A61K8/43",
-        "A61K8/44",
-        "A61K8/45",
-        "A61K8/46",
-        "A61K8/49",
-        "A61K8/55",
-        "A61K8/58",
-        "A61K8/60",
-        "A61K8/63",
-        "A61K8/64",
-        "A61K8/65",
-        "A61K8/66",
-        "A61K8/67",
-        "A61K8/68",
-        "A61K8/69",
-        "A61K8/70",
-        "A61K8/72",
-        "A61K8/73",
-        "A61K8/81",
-        "A61K8/84",
-        "A61K8/85",
-        "A61K8/86",
-        "A61K8/87",
-        "A61K8/88",
-        "A61K8/89",
-        "A61K8/891",
-        "A61K8/892",
-        "A61K8/893",
-        "A61K8/894",
-        "A61K8/895",
-        "A61K8/896",
-        "A61K8/897",
-        "A61K8/898",
-        "A61K8/899",
-        "A61K8/90",
-        "A61K8/91",
-        "A61K8/92",
-        "A61K8/96",
-        "A61K8/97",
-        "A61K8/9706",
-        "A61K8/9711",
-        "A61K8/9717",
-        "A61K8/9722",
-        "A61K8/9728",
-        "A61K8/9733",
-        "A61K8/9739",
-        "A61K8/9741",
-        "A61K8/9749",
-        "A61K8/9755",
-        "A61K8/9761",
-        "A61K8/9767",
-        "A61K8/9771",
-        "A61K8/9778",
-        "A61K8/9783",
-        "A61K8/9789",
-        "A61K8/9794",
-        "A61K8/98",
-        "A61K8/99"
-      ],
-      "examples": []
-    },
-    "A61K9/00": {
-      "label": "特別な物理的形態によって特徴づけられた医薬品の製剤",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K31/00": {
-      "label": "有機活性成分を含有する医薬品製剤［２］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K33/00": {
-      "label": "無機活性成分を含有する医薬品製剤［２００６．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K35/00": {
-      "label": "構造未知の物質またはその反応生成物を含有する医薬品製剤［２］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K36/00": {
-      "label": "藻類，地衣類，菌類もしくは植物またはそれらの派生物からの物質を含有する構造未知の医薬品製剤，例．伝統的生薬［８］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K38/00": {
-      "label": "ペプチドを含有する医療製剤（β－ラクタム環含有ペプチドＡ６１Ｋ３１／００；環状ジペプチドであって，その分子中にその環を形成するペプチド結合以外のペプチド結合を有しないもの，例．ピペラジン－２，５－ジオンＡ６１Ｋ３１／００；エルゴリンに基づくペプチドＡ６１Ｋ３１／４８；分子中に統計学的に分布されているアミノ酸単位を有する高分子化合物を含有するものＡ６１Ｋ３１／７４；抗原または抗体を含有する医療製剤Ａ６１Ｋ３９／００；不活性成分に特徴のある医療製剤，例．薬剤担体としてのペプチド，Ａ６１Ｋ４７／００）［２００６．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K39/00": {
-      "label": "抗原または抗体を含有する医薬品製剤（免疫分析用物質Ｇ０１Ｎ３３／５３）［２］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K40/00": {
-      "label": "細胞免疫療法（抗原または抗体を含有する医薬品製剤Ａ６１Ｋ３９／００）［２０２５．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K41/00": {
-      "label": "波動エネルギーまたは粒子線で物質を処理することによって得られる医薬品製剤［２０２０．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K45/00": {
-      "label": "Ａ６１Ｋ３１／００～Ａ６１Ｋ４１／００に属さない活性成分を含有する医薬品製剤［２，６］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K47/00": {
-      "label": "使用する不活性成分，例．担体または不活性添加剤，に特徴のある医薬品製剤；活性成分と化学結合した標的剤または修飾剤［２］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K48/00": {
-      "label": "遺伝子疾病を治療するために生体の細胞内に挿入する遺伝子物質を含有する医療用製剤；遺伝子治療［５］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K49/00": {
-      "label": "生体内試験のための製剤［３］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K50/00": {
-      "label": "生体内での治療または検査で使用する導電剤，例．心電計［ＥＣＧ］または経皮薬投与のために電極と共に使用される導電性接着剤またはゲル［２００６．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K51/00": {
-      "label": "生体内での治療または検査に用いる放射性物質を含有する製剤［２００６．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61K",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/02": {
-      "label": "特別な物理的形態に特徴があるもの［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/03": {
-      "label": "２またはそれ以上の異なる層を有する液状組成物［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/04": {
-      "label": "分散，乳化［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/06": {
-      "label": "乳化［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/11": {
-      "label": "カプセル化された組成物［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/14": {
-      "label": "リポソーム［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/18": {
-      "label": "組成に特徴があるもの［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/19": {
-      "label": "無機配合成分を含むもの［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/20": {
-      "label": "ハロゲン；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/21": {
-      "label": "ふっ化物；その誘導体［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/22": {
-      "label": "過酸化物；酸素；オゾン［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/23": {
-      "label": "硫黄；セレン；テルル；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/24": {
-      "label": "リン；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/25": {
-      "label": "シリコン；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/26": {
-      "label": "アルミニウム；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/27": {
-      "label": "亜鉛；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/28": {
-      "label": "ジルコニウム；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/29": {
-      "label": "チタン；その化合物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/30": {
-      "label": "有機化合物を含むもの［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/31": {
-      "label": "炭化水素［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/33": {
-      "label": "酸素を含むもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/34": {
-      "label": "アルコール［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/35": {
-      "label": "ケトン，例．キノン，ベンゾフェノン［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/36": {
-      "label": "カルボン酸；その塩または無水物［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/362": {
-      "label": "ポリカルボン酸［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/365": {
-      "label": "ヒドロキシカルボン酸；ケトカルボン酸［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/368": {
-      "label": "芳香族環の炭素原子に直接結合したカルボン基を有するもの［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/37": {
-      "label": "カルボン酸エステル［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/38": {
-      "label": "過酸化物，例．過酸［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/39": {
-      "label": "２から１０のオキシアルキレン基を含む誘導体［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/40": {
-      "label": "窒素を含むもの（窒素を含むキノンＡ６１Ｋ８／３５）［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/41": {
-      "label": "アミン［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/42": {
-      "label": "アミド［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/43": {
-      "label": "グアニジン［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/44": {
-      "label": "アミノカルボン酸またはその誘導体，例．硫黄を含むアミノカルボン酸；塩，エステルまたはそのＮアシル化誘導体［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/45": {
-      "label": "２から１０のオキシアルキレン基を含む誘導体［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/46": {
-      "label": "硫黄を含むもの（Ａ６１Ｋ８／４４が優先）［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/49": {
-      "label": "複素環式化合物を含むもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/55": {
-      "label": "りんを含むもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/58": {
-      "label": "炭素，水素，ハロゲン，酸素，窒素，硫黄またはりん以外の原子を含むもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/60": {
-      "label": "糖類；その誘導体［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/63": {
-      "label": "ステロイド；その誘導体［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/64": {
-      "label": "蛋白質；ペプチド；その誘導体または分解生成物［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/65": {
-      "label": "コラーゲン；ゼラチン；ケラチン；その誘導体または分解生成物［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/66": {
-      "label": "酵素［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/67": {
-      "label": "ビタミン［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/68": {
-      "label": "スフィンゴリピド，例．セラミド，セレブロシド，ガングリオシド［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/69": {
-      "label": "フッ素を含むもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/70": {
-      "label": "パーフルオロ基を含むもの，例．パーフルオロエーテル［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/72": {
-      "label": "有機高分子化合物を含むもの［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/73": {
-      "label": "多糖類［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/81": {
-      "label": "炭素－炭素不飽和結合のみが関与する反応によって得られるもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/84": {
-      "label": "炭素－炭素不飽和結合のみが関与する反応以外の反応によって得られるもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/85": {
-      "label": "ポリエステル［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/86": {
-      "label": "ポリエーテル［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/87": {
-      "label": "ポリウレタン［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/88": {
-      "label": "ポリアミド［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/89": {
-      "label": "ポリシロキサン［８］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/891": {
-      "label": "飽和状態にあるもの，例．ジメチコン，フェニルトリメチコン，Ｃ２４－Ｃ２８メチコン又はステアリル・ジメチコン［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/892": {
-      "label": "ヒドロキシ基により修飾されているもの，例．ジメチコノール［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/893": {
-      "label": "アルコキシ又はアリルオキシ基により修飾されているもの，例．ベヘノキシジメチコン又はステアロキシジメチコン［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/894": {
-      "label": "ポリオキシアルキレン基により修飾されているもの，例．セチルジメチコンコポリオール［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/895": {
-      "label": "不飽和の脂肪族基に結合したシリコンを含むもの，例．ビニルジメチコン［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/896": {
-      "label": "シリコン，炭素，酸素および水素以外の原子を含むもの，例．リン酸ジメチコンコポリオール［８］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/897": {
-      "label": "ハロゲンを含むもの，例．フルオロシリコン［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/898": {
-      "label": "窒素を含むもの，例．アモジメチコン，トリメチルシリルアモジメチコン又はジメチコンプロピルＰＧベタイン［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/899": {
-      "label": "硫黄を含むもの，例．ＰＧプロピルジメチコンチオ硫酸Ｎａコポリオール［８］",
-      "definition": "",
-      "depth": 8,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/90": {
-      "label": "ブロック共重合体（Ａ６１Ｋ８／８９が優先）［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/91": {
-      "label": "グラフト共重合体（Ａ６１Ｋ８／８９が優先）［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/92": {
-      "label": "油，脂肪またはろう；その誘導体，例．水素化物［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/96": {
-      "label": "構造不明の物質またはその誘導体を含むもの［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/97": {
-      "label": "藻類，菌類，地衣類または植物由来のもの；それらの派生物由来のもの［２０１７．０１］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9706": {
-      "label": "藻類［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9711": {
-      "label": "褐藻植物［褐藻類］，例．ヒバマタ［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9717": {
-      "label": "紅藻植物［紅藻類］，例．ノリ［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9722": {
-      "label": "緑藻植物［緑藻類］，例．クロレラ［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9728": {
-      "label": "菌類，例．酵母［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9733": {
-      "label": "地衣類［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9739": {
-      "label": "コケ植物門［コケ類］［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9741": {
-      "label": "シダ植物門［シダ類］［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9749": {
-      "label": "シダ綱［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9755": {
-      "label": "裸子植物門［球果植物門］［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9761": {
-      "label": "ヒノキ科［イトスギ科］，例．ビャクシンまたはイトスギ［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9767": {
-      "label": "マツ科，例．マツまたはヒマラヤスギ［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9771": {
-      "label": "イチョウ門，例．イチョウ科［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9778": {
-      "label": "マオウ門，例．マオウ科［モルモンティー科］［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9783": {
-      "label": "被子植物門［２０１７．０１］",
-      "definition": "",
-      "depth": 6,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9789": {
-      "label": "モクレン綱［双子葉植物］［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/9794": {
-      "label": "ユリ綱［単子葉植物］［２０１７．０１］",
-      "definition": "",
-      "depth": 7,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/98": {
-      "label": "動物由来のもの［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
-    "A61K8/99": {
-      "label": "藻類または菌類以外の微生物由来のもの，例．原生動物またはバクテリア［２０１７．０１］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61K8/00",
-      "children": [],
-      "examples": []
-    },
     "A61Q": {
       "label": "化粧品または類似化粧品製剤の特定の用途",
       "definition": "",
+      "related": "",
+      "theme_code": "",
       "depth": 0,
       "parent": null,
       "children": [
@@ -1007,25 +55,1295 @@
       ],
       "examples": []
     },
+    "A61K8/00": {
+      "label": "化粧品あるいは類似化粧品製剤［２００６．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [
+        "A61K8/02",
+        "A61K8/18"
+      ],
+      "examples": []
+    },
+    "A61K8/02": {
+      "label": "特別な物理的形態に特徴があるもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61K8/00",
+      "children": [
+        "A61K8/03",
+        "A61K8/04",
+        "A61K8/11",
+        "A61K8/14"
+      ],
+      "examples": []
+    },
+    "A61K8/03": {
+      "label": "２またはそれ以上の異なる層を有する液状組成物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/02",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/04": {
+      "label": "分散，乳化［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/02",
+      "children": [
+        "A61K8/06"
+      ],
+      "examples": []
+    },
+    "A61K8/06": {
+      "label": "乳化［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/04",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/11": {
+      "label": "カプセル化された組成物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/02",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/14": {
+      "label": "リポソーム［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/02",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/18": {
+      "label": "組成に特徴があるもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61K8/00",
+      "children": [
+        "A61K8/19",
+        "A61K8/30",
+        "A61K8/72",
+        "A61K8/92",
+        "A61K8/96"
+      ],
+      "examples": []
+    },
+    "A61K8/19": {
+      "label": "無機配合成分を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/18",
+      "children": [
+        "A61K8/20",
+        "A61K8/22",
+        "A61K8/23",
+        "A61K8/24",
+        "A61K8/25",
+        "A61K8/26",
+        "A61K8/27",
+        "A61K8/28",
+        "A61K8/29"
+      ],
+      "examples": []
+    },
+    "A61K8/20": {
+      "label": "ハロゲン；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [
+        "A61K8/21"
+      ],
+      "examples": []
+    },
+    "A61K8/21": {
+      "label": "ふっ化物；その誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/20",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/22": {
+      "label": "過酸化物；酸素；オゾン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/23": {
+      "label": "硫黄；セレン；テルル；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/24": {
+      "label": "リン；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/25": {
+      "label": "シリコン；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/26": {
+      "label": "アルミニウム；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/27": {
+      "label": "亜鉛；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/28": {
+      "label": "ジルコニウム；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/29": {
+      "label": "チタン；その化合物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/19",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/30": {
+      "label": "有機化合物を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/18",
+      "children": [
+        "A61K8/31",
+        "A61K8/33",
+        "A61K8/40",
+        "A61K8/46",
+        "A61K8/49",
+        "A61K8/55",
+        "A61K8/58",
+        "A61K8/60",
+        "A61K8/63",
+        "A61K8/64",
+        "A61K8/67",
+        "A61K8/68",
+        "A61K8/69"
+      ],
+      "examples": []
+    },
+    "A61K8/31": {
+      "label": "炭化水素［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/33": {
+      "label": "酸素を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [
+        "A61K8/34",
+        "A61K8/35",
+        "A61K8/36",
+        "A61K8/37",
+        "A61K8/38",
+        "A61K8/39"
+      ],
+      "examples": []
+    },
+    "A61K8/34": {
+      "label": "アルコール［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/35": {
+      "label": "ケトン，例．キノン，ベンゾフェノン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/36": {
+      "label": "カルボン酸；その塩または無水物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [
+        "A61K8/362",
+        "A61K8/365",
+        "A61K8/368"
+      ],
+      "examples": []
+    },
+    "A61K8/362": {
+      "label": "ポリカルボン酸［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/36",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/365": {
+      "label": "ヒドロキシカルボン酸；ケトカルボン酸［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/36",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/368": {
+      "label": "芳香族環の炭素原子に直接結合したカルボン基を有するもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/36",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/37": {
+      "label": "カルボン酸エステル［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/38": {
+      "label": "過酸化物，例．過酸［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/39": {
+      "label": "２から１０のオキシアルキレン基を含む誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/33",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/40": {
+      "label": "窒素を含むもの（窒素を含むキノンＡ６１Ｋ８／３５）［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [
+        "A61K8/41",
+        "A61K8/42",
+        "A61K8/43",
+        "A61K8/44",
+        "A61K8/45"
+      ],
+      "examples": []
+    },
+    "A61K8/41": {
+      "label": "アミン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/40",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/42": {
+      "label": "アミド［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/40",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/43": {
+      "label": "グアニジン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/40",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/44": {
+      "label": "アミノカルボン酸またはその誘導体，例．硫黄を含むアミノカルボン酸；塩，エステルまたはそのＮアシル化誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/40",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/45": {
+      "label": "２から１０のオキシアルキレン基を含む誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/40",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/46": {
+      "label": "硫黄を含むもの（Ａ６１Ｋ８／４４が優先）［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/49": {
+      "label": "複素環式化合物を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/55": {
+      "label": "りんを含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/58": {
+      "label": "炭素，水素，ハロゲン，酸素，窒素，硫黄またはりん以外の原子を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/60": {
+      "label": "糖類；その誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/63": {
+      "label": "ステロイド；その誘導体［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/64": {
+      "label": "蛋白質；ペプチド；その誘導体または分解生成物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [
+        "A61K8/65",
+        "A61K8/66"
+      ],
+      "examples": []
+    },
+    "A61K8/65": {
+      "label": "コラーゲン；ゼラチン；ケラチン；その誘導体または分解生成物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/64",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/66": {
+      "label": "酵素［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/64",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/67": {
+      "label": "ビタミン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/68": {
+      "label": "スフィンゴリピド，例．セラミド，セレブロシド，ガングリオシド［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/69": {
+      "label": "フッ素を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/30",
+      "children": [
+        "A61K8/70"
+      ],
+      "examples": []
+    },
+    "A61K8/70": {
+      "label": "パーフルオロ基を含むもの，例．パーフルオロエーテル［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/69",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/72": {
+      "label": "有機高分子化合物を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/18",
+      "children": [
+        "A61K8/73",
+        "A61K8/81",
+        "A61K8/84",
+        "A61K8/90",
+        "A61K8/91"
+      ],
+      "examples": []
+    },
+    "A61K8/73": {
+      "label": "多糖類［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/72",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/81": {
+      "label": "炭素－炭素不飽和結合のみが関与する反応によって得られるもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/72",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/84": {
+      "label": "炭素－炭素不飽和結合のみが関与する反応以外の反応によって得られるもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/72",
+      "children": [
+        "A61K8/85",
+        "A61K8/86",
+        "A61K8/87",
+        "A61K8/88",
+        "A61K8/89"
+      ],
+      "examples": []
+    },
+    "A61K8/85": {
+      "label": "ポリエステル［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/84",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/86": {
+      "label": "ポリエーテル［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/84",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/87": {
+      "label": "ポリウレタン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/84",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/88": {
+      "label": "ポリアミド［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/84",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/89": {
+      "label": "ポリシロキサン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/84",
+      "children": [
+        "A61K8/891",
+        "A61K8/895",
+        "A61K8/896"
+      ],
+      "examples": []
+    },
+    "A61K8/891": {
+      "label": "飽和状態にあるもの，例．ジメチコン，フェニルトリメチコン，Ｃ２４－Ｃ２８メチコン又はステアリル・ジメチコン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/89",
+      "children": [
+        "A61K8/892",
+        "A61K8/893",
+        "A61K8/894"
+      ],
+      "examples": []
+    },
+    "A61K8/892": {
+      "label": "ヒドロキシ基により修飾されているもの，例．ジメチコノール［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/891",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/893": {
+      "label": "アルコキシ又はアリルオキシ基により修飾されているもの，例．ベヘノキシジメチコン又はステアロキシジメチコン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/891",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/894": {
+      "label": "ポリオキシアルキレン基により修飾されているもの，例．セチルジメチコンコポリオール［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/891",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/895": {
+      "label": "不飽和の脂肪族基に結合したシリコンを含むもの，例．ビニルジメチコン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/89",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/896": {
+      "label": "シリコン，炭素，酸素および水素以外の原子を含むもの，例．リン酸ジメチコンコポリオール［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/89",
+      "children": [
+        "A61K8/897",
+        "A61K8/898",
+        "A61K8/899"
+      ],
+      "examples": []
+    },
+    "A61K8/897": {
+      "label": "ハロゲンを含むもの，例．フルオロシリコン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/896",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/898": {
+      "label": "窒素を含むもの，例．アモジメチコン，トリメチルシリルアモジメチコン又はジメチコンプロピルＰＧベタイン［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/896",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/899": {
+      "label": "硫黄を含むもの，例．ＰＧプロピルジメチコンチオ硫酸Ｎａコポリオール［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 7,
+      "parent": "A61K8/896",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/90": {
+      "label": "ブロック共重合体（Ａ６１Ｋ８／８９が優先）［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/72",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/91": {
+      "label": "グラフト共重合体（Ａ６１Ｋ８／８９が優先）［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/72",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/92": {
+      "label": "油，脂肪またはろう；その誘導体，例．水素化物［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/18",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/96": {
+      "label": "構造不明の物質またはその誘導体を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61K8/18",
+      "children": [
+        "A61K8/97",
+        "A61K8/98",
+        "A61K8/99"
+      ],
+      "examples": []
+    },
+    "A61K8/97": {
+      "label": "藻類，菌類，地衣類または植物由来のもの；それらの派生物由来のもの［２０１７．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/96",
+      "children": [
+        "A61K8/9706",
+        "A61K8/9728",
+        "A61K8/9733",
+        "A61K8/9739",
+        "A61K8/9741",
+        "A61K8/9755",
+        "A61K8/9771",
+        "A61K8/9778",
+        "A61K8/9783"
+      ],
+      "examples": []
+    },
+    "A61K8/9706": {
+      "label": "藻類［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/02, A61K35/748(藍藻類), A61K35/68(鞭毛虫)",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [
+        "A61K8/9711",
+        "A61K8/9717",
+        "A61K8/9722"
+      ],
+      "examples": []
+    },
+    "A61K8/9711": {
+      "label": "褐藻植物［褐藻類］，例．ヒバマタ［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/03",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9706",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9717": {
+      "label": "紅藻植物［紅藻類］，例．ノリ［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/04",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9706",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9722": {
+      "label": "緑藻植物［緑藻類］，例．クロレラ［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/05",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9706",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9728": {
+      "label": "菌類，例．酵母［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/06",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9733": {
+      "label": "地衣類［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/09",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9739": {
+      "label": "コケ植物門［コケ類］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/10",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9741": {
+      "label": "シダ植物門［シダ類］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/11",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [
+        "A61K8/9749"
+      ],
+      "examples": []
+    },
+    "A61K8/9749": {
+      "label": "シダ綱［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/12",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9741",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9755": {
+      "label": "裸子植物門［球果植物門］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/13",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [
+        "A61K8/9761",
+        "A61K8/9767"
+      ],
+      "examples": []
+    },
+    "A61K8/9761": {
+      "label": "ヒノキ科［イトスギ科］，例．ビャクシンまたはイトスギ［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/14",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9755",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9767": {
+      "label": "マツ科，例．マツまたはヒマラヤスギ［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/15",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9755",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9771": {
+      "label": "イチョウ門，例．イチョウ科［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/16",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9778": {
+      "label": "マオウ門，例．マオウ科［モルモンティー科］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/17",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9783": {
+      "label": "被子植物門［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/18",
+      "theme_code": "4C083",
+      "depth": 5,
+      "parent": "A61K8/97",
+      "children": [
+        "A61K8/9789",
+        "A61K8/9794"
+      ],
+      "examples": []
+    },
+    "A61K8/9789": {
+      "label": "モクレン綱［双子葉植物］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/185",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9783",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/9794": {
+      "label": "ユリ綱［単子葉植物］［２０１７．０１］",
+      "definition": "",
+      "related": "A61K36/88",
+      "theme_code": "4C083",
+      "depth": 6,
+      "parent": "A61K8/9783",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/98": {
+      "label": "動物由来のもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/96",
+      "children": [],
+      "examples": []
+    },
+    "A61K8/99": {
+      "label": "藻類または菌類以外の微生物由来のもの，例．原生動物またはバクテリア［２０１７．０１］",
+      "definition": "",
+      "related": "A61K35/66, C12N1/00",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61K8/96",
+      "children": [],
+      "examples": []
+    },
+    "A61K6/00": {
+      "label": "歯科用製剤［２０２０．０１］ HB CC 4C089",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K9/00": {
+      "label": "特別な物理的形態によって特徴づけられた医薬品の製剤 HB CC 4C076",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K31/00": {
+      "label": "有機活性成分を含有する医薬品製剤［２］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K33/00": {
+      "label": "無機活性成分を含有する医薬品製剤［２００６．０１］ HB CC 4C086",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K35/00": {
+      "label": "構造未知の物質またはその反応生成物を含有する医薬品製剤［２］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K36/00": {
+      "label": "藻類，地衣類，菌類もしくは植物またはそれらの派生物からの物質を含有する構造未知の医薬品製剤，例．伝統的生薬［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K38/00": {
+      "label": "ペプチドを含有する医療製剤（β－ラクタム環含有ペプチドＡ６１Ｋ３１／００；環状ジペプチドであって，その分子中にその環を形成するペプチド結合以外のペプチド結合を有しないもの，例．ピペラジン－２，５－ジオンＡ６１Ｋ３１／００；エルゴリンに基づくペプチドＡ６１Ｋ３１／４８；分子中に統計学的に分布されているアミノ酸単位を有する高分子化合物を含有するものＡ６１Ｋ３１／７４；抗原または抗体を含有する医療製剤Ａ６１Ｋ３９／００；不活性成分に特徴のある医療製剤，例．薬剤担体としてのペプチド，Ａ６１Ｋ４７／００）［２００６．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K39/00": {
+      "label": "抗原または抗体を含有する医薬品製剤（免疫分析用物質Ｇ０１Ｎ３３／５３）［２］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K40/00": {
+      "label": "細胞免疫療法（抗原または抗体を含有する医薬品製剤Ａ６１Ｋ３９／００）［２０２５．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K41/00": {
+      "label": "波動エネルギーまたは粒子線で物質を処理することによって得られる医薬品製剤［２０２０．０１］ HB CC 4C084",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K45/00": {
+      "label": "Ａ６１Ｋ３１／００～Ａ６１Ｋ４１／００に属さない活性成分を含有する医薬品製剤［２，６］ HB CC 4C084",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K47/00": {
+      "label": "使用する不活性成分，例．担体または不活性添加剤，に特徴のある医薬品製剤；活性成分と化学結合した標的剤または修飾剤［２］ HB CC 4C076",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K48/00": {
+      "label": "遺伝子疾病を治療するために生体の細胞内に挿入する遺伝子物質を含有する医療用製剤；遺伝子治療［５］ HB CC 4C084",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K49/00": {
+      "label": "生体内試験のための製剤［３］ HB CC 4C085",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K50/00": {
+      "label": "生体内での治療または検査で使用する導電剤，例．心電計［ＥＣＧ］または経皮薬投与のために電極と共に使用される導電性接着剤またはゲル［２００６．０１］ HB CC 4C085",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
+    "A61K51/00": {
+      "label": "生体内での治療または検査に用いる放射性物質を含有する製剤［２００６．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "",
+      "depth": 1,
+      "parent": "A61K",
+      "children": [],
+      "examples": []
+    },
     "A61Q1/00": {
       "label": "メイクアップ剤，ボディーパウダー；メイクアップの除去剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
         "A61Q1/02",
-        "A61Q1/04",
-        "A61Q1/06",
-        "A61Q1/08",
-        "A61Q1/10",
         "A61Q1/12",
         "A61Q1/14"
       ],
       "examples": []
     },
+    "A61Q1/02": {
+      "label": "皮膚着色剤を含有する製剤，例．顔料（粉末剤Ａ６１Ｑ１／１２）［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q1/00",
+      "children": [
+        "A61Q1/04",
+        "A61Q1/08",
+        "A61Q1/10"
+      ],
+      "examples": []
+    },
+    "A61Q1/04": {
+      "label": "唇用のもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61Q1/02",
+      "children": [
+        "A61Q1/06"
+      ],
+      "examples": []
+    },
+    "A61Q1/06": {
+      "label": "棒口紅［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 4,
+      "parent": "A61Q1/04",
+      "children": [],
+      "examples": []
+    },
+    "A61Q1/08": {
+      "label": "ほお用のもの，例．ほおべに［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61Q1/02",
+      "children": [],
+      "examples": []
+    },
+    "A61Q1/10": {
+      "label": "目用のもの，例．アイライナー，マスカラ［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 3,
+      "parent": "A61Q1/02",
+      "children": [],
+      "examples": []
+    },
+    "A61Q1/12": {
+      "label": "おしろいまたはボディパウダー，例．装飾または吸収用［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q1/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q1/14": {
+      "label": "メイクアップの除去剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q1/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q3/00": {
       "label": "マニキュアまたはペディキュア剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1034,9 +1352,31 @@
       ],
       "examples": []
     },
+    "A61Q3/02": {
+      "label": "爪被覆剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q3/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q3/04": {
+      "label": "爪被覆剤除去剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q3/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q5/00": {
       "label": "毛髪手入れ用製剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1049,9 +1389,71 @@
       ],
       "examples": []
     },
+    "A61Q5/02": {
+      "label": "毛髪洗浄剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q5/04": {
+      "label": "毛髪パーマネントウェーブ剤または縮毛矯正剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q5/06": {
+      "label": "整髪剤，例．一時的な整形または着色［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q5/08": {
+      "label": "毛髪脱色剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q5/10": {
+      "label": "永久染毛剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q5/12": {
+      "label": "ヘアーコンディショナーを含む製剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q5/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q7/00": {
       "label": "発毛促進あるいは発毛抑制をする剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1059,9 +1461,21 @@
       ],
       "examples": []
     },
+    "A61Q7/02": {
+      "label": "発毛抑制剤または発毛不活性剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q7/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q9/00": {
       "label": "除毛剤，または除毛補助剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1070,9 +1484,31 @@
       ],
       "examples": []
     },
+    "A61Q9/02": {
+      "label": "ひげそり剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q9/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q9/04": {
+      "label": "脱毛剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q9/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q11/00": {
       "label": "歯，口腔または入れ歯の手入れ用製剤，例．歯磨剤，練り歯磨き；口内洗浄剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1080,9 +1516,21 @@
       ],
       "examples": []
     },
+    "A61Q11/02": {
+      "label": "入れ歯の防臭，漂白，または消毒用製剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q11/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q13/00": {
       "label": "香料用の製剤または添加剤（精油または香料それ自体Ｃ１１Ｂ９／００）［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [],
@@ -1091,6 +1539,8 @@
     "A61Q15/00": {
       "label": "制汗剤または身体の防臭剤（空気の脱臭用品Ａ６１Ｌ９／００）［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [],
@@ -1099,6 +1549,8 @@
     "A61Q17/00": {
       "label": "防護剤；外部の影響，例．日光，Ｘ線もしくは他の有害光線，腐食物質，バクテリア，またはこん虫の針，から防護するため皮膚に直接接触させる製剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1107,9 +1559,31 @@
       ],
       "examples": []
     },
+    "A61Q17/02": {
+      "label": "虫よけ剤を含むもの［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q17/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q17/04": {
+      "label": "日光または他の光線から保護するための局所用製剤；局所用日焼け剤［８］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
+      "parent": "A61Q17/00",
+      "children": [],
+      "examples": []
+    },
     "A61Q19/00": {
       "label": "スキンケア剤［８］",
       "definition": "",
+      "related": "",
+      "theme_code": "4C083",
       "depth": 1,
       "parent": "A61Q",
       "children": [
@@ -1121,186 +1595,12 @@
       ],
       "examples": []
     },
-    "A61Q90/00": {
-      "label": "このサブクラスの他のグループには分類されない特殊用途のための化粧品または類似化粧品製剤［２００９．０１］",
-      "definition": "",
-      "depth": 1,
-      "parent": "A61Q",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/02": {
-      "label": "皮膚着色剤を含有する製剤，例．顔料（粉末剤Ａ６１Ｑ１／１２）［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/04": {
-      "label": "唇用のもの［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/06": {
-      "label": "棒口紅［８］",
-      "definition": "",
-      "depth": 5,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/08": {
-      "label": "ほお用のもの，例．ほおべに［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/10": {
-      "label": "目用のもの，例．アイライナー，マスカラ［８］",
-      "definition": "",
-      "depth": 4,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/12": {
-      "label": "おしろいまたはボディパウダー，例．装飾または吸収用［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q1/14": {
-      "label": "メイクアップの除去剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q1/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q3/02": {
-      "label": "爪被覆剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q3/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q3/04": {
-      "label": "爪被覆剤除去剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q3/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/02": {
-      "label": "毛髪洗浄剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/04": {
-      "label": "毛髪パーマネントウェーブ剤または縮毛矯正剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/06": {
-      "label": "整髪剤，例．一時的な整形または着色［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/08": {
-      "label": "毛髪脱色剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/10": {
-      "label": "永久染毛剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q5/12": {
-      "label": "ヘアーコンディショナーを含む製剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q5/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q7/02": {
-      "label": "発毛抑制剤または発毛不活性剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q7/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q9/02": {
-      "label": "ひげそり剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q9/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q9/04": {
-      "label": "脱毛剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q9/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q11/02": {
-      "label": "入れ歯の防臭，漂白，または消毒用製剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q11/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q17/02": {
-      "label": "虫よけ剤を含むもの［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q17/00",
-      "children": [],
-      "examples": []
-    },
-    "A61Q17/04": {
-      "label": "日光または他の光線から保護するための局所用製剤；局所用日焼け剤［８］",
-      "definition": "",
-      "depth": 3,
-      "parent": "A61Q17/00",
-      "children": [],
-      "examples": []
-    },
     "A61Q19/02": {
       "label": "化学的に皮膚を漂白または白化するためのもの［８］",
       "definition": "",
-      "depth": 3,
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
       "parent": "A61Q19/00",
       "children": [],
       "examples": []
@@ -1308,7 +1608,9 @@
     "A61Q19/04": {
       "label": "化学的に皮膚を日焼けさせるためのもの（局所用日焼け剤Ａ６１Ｑ１７／０４）［８］",
       "definition": "",
-      "depth": 3,
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
       "parent": "A61Q19/00",
       "children": [],
       "examples": []
@@ -1316,7 +1618,9 @@
     "A61Q19/06": {
       "label": "抗セルライト用のもの［８］",
       "definition": "",
-      "depth": 3,
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
       "parent": "A61Q19/00",
       "children": [],
       "examples": []
@@ -1324,7 +1628,9 @@
     "A61Q19/08": {
       "label": "老化防止剤［８］",
       "definition": "",
-      "depth": 3,
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
       "parent": "A61Q19/00",
       "children": [],
       "examples": []
@@ -1332,130 +1638,27 @@
     "A61Q19/10": {
       "label": "洗浄または浴用剤［８］",
       "definition": "",
-      "depth": 3,
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 2,
       "parent": "A61Q19/00",
+      "children": [],
+      "examples": []
+    },
+    "A61Q90/00": {
+      "label": "このサブクラスの他のグループには分類されない特殊用途のための化粧品または類似化粧品製剤［２００９．０１］",
+      "definition": "",
+      "related": "",
+      "theme_code": "4C083",
+      "depth": 1,
+      "parent": "A61Q",
       "children": [],
       "examples": []
     }
   },
   "reverse_index": {
-    "歯科用製剤": [
-      "A61K6/00"
-    ],
     "化粧品あるいは類似化粧品製剤": [
       "A61K8/00"
-    ],
-    "特別な物理的形態によって特徴づけられた医薬品の製剤": [
-      "A61K9/00"
-    ],
-    "有機活性成分を含有する医薬品製剤": [
-      "A61K31/00"
-    ],
-    "無機活性成分を含有する医薬品製剤": [
-      "A61K33/00"
-    ],
-    "構造未知の物質またはその反応生成物を含有する医薬品製剤": [
-      "A61K35/00"
-    ],
-    "藻類": [
-      "A61K36/00",
-      "A61K8/97",
-      "A61K8/9706"
-    ],
-    "地衣類": [
-      "A61K36/00",
-      "A61K8/9733"
-    ],
-    "菌類もしくは植物またはそれらの派生物からの物質を含有する構造未知の医薬品製剤": [
-      "A61K36/00"
-    ],
-    "伝統的生薬": [
-      "A61K36/00"
-    ],
-    "ペプチドを含有する医療製剤": [
-      "A61K38/00"
-    ],
-    "ラクタム環含有ペプチド": [
-      "A61K38/00"
-    ],
-    "環状ジペプチドであって": [
-      "A61K38/00"
-    ],
-    "その分子中にその環を形成するペプチド結合以外のペプチド結合を有しないもの": [
-      "A61K38/00"
-    ],
-    "ピペラジン": [
-      "A61K38/00"
-    ],
-    "ジオン": [
-      "A61K38/00"
-    ],
-    "エルゴリンに基づくペプチド": [
-      "A61K38/00"
-    ],
-    "分子中に統計学的に分布されているアミノ酸単位を有する高分子化合物を含有するもの": [
-      "A61K38/00"
-    ],
-    "抗原または抗体を含有する医療製剤": [
-      "A61K38/00"
-    ],
-    "不活性成分に特徴のある医療製剤": [
-      "A61K38/00"
-    ],
-    "薬剤担体としてのペプチド": [
-      "A61K38/00"
-    ],
-    "抗原または抗体を含有する医薬品製剤": [
-      "A61K39/00",
-      "A61K40/00"
-    ],
-    "免疫分析用物質": [
-      "A61K39/00"
-    ],
-    "細胞免疫療法": [
-      "A61K40/00"
-    ],
-    "波動エネルギ": [
-      "A61K41/00"
-    ],
-    "または粒子線で物質を処理することによって得られる医薬品製剤": [
-      "A61K41/00"
-    ],
-    "に属さない活性成分を含有する医薬品製剤": [
-      "A61K45/00"
-    ],
-    "使用する不活性成分": [
-      "A61K47/00"
-    ],
-    "担体または不活性添加剤": [
-      "A61K47/00"
-    ],
-    "に特徴のある医薬品製剤": [
-      "A61K47/00"
-    ],
-    "活性成分と化学結合した標的剤または修飾剤": [
-      "A61K47/00"
-    ],
-    "遺伝子疾病を治療するために生体の細胞内に挿入する遺伝子物質を含有する医療用製剤": [
-      "A61K48/00"
-    ],
-    "遺伝子治療": [
-      "A61K48/00"
-    ],
-    "生体内試験のための製剤": [
-      "A61K49/00"
-    ],
-    "生体内での治療または検査で使用する導電剤": [
-      "A61K50/00"
-    ],
-    "心電計": [
-      "A61K50/00"
-    ],
-    "または経皮薬投与のために電極と共に使用される導電性接着剤またはゲル": [
-      "A61K50/00"
-    ],
-    "生体内での治療または検査に用いる放射性物質を含有する製剤": [
-      "A61K51/00"
     ],
     "特別な物理的形態に特徴があるもの": [
       "A61K8/02"
@@ -1819,6 +2022,11 @@
     "構造不明の物質またはその誘導体を含むもの": [
       "A61K8/96"
     ],
+    "藻類": [
+      "A61K8/97",
+      "A61K8/9706",
+      "A61K36/00"
+    ],
     "菌類": [
       "A61K8/97",
       "A61K8/9728"
@@ -1858,6 +2066,10 @@
     ],
     "酵母": [
       "A61K8/9728"
+    ],
+    "地衣類": [
+      "A61K8/9733",
+      "A61K36/00"
     ],
     "コケ植物門": [
       "A61K8/9739"
@@ -1934,6 +2146,112 @@
     "原生動物またはバクテリア": [
       "A61K8/99"
     ],
+    "歯科用製剤": [
+      "A61K6/00"
+    ],
+    "特別な物理的形態によって特徴づけられた医薬品の製剤": [
+      "A61K9/00"
+    ],
+    "有機活性成分を含有する医薬品製剤": [
+      "A61K31/00"
+    ],
+    "無機活性成分を含有する医薬品製剤": [
+      "A61K33/00"
+    ],
+    "構造未知の物質またはその反応生成物を含有する医薬品製剤": [
+      "A61K35/00"
+    ],
+    "菌類もしくは植物またはそれらの派生物からの物質を含有する構造未知の医薬品製剤": [
+      "A61K36/00"
+    ],
+    "伝統的生薬": [
+      "A61K36/00"
+    ],
+    "ペプチドを含有する医療製剤": [
+      "A61K38/00"
+    ],
+    "ラクタム環含有ペプチド": [
+      "A61K38/00"
+    ],
+    "環状ジペプチドであって": [
+      "A61K38/00"
+    ],
+    "その分子中にその環を形成するペプチド結合以外のペプチド結合を有しないもの": [
+      "A61K38/00"
+    ],
+    "ピペラジン": [
+      "A61K38/00"
+    ],
+    "ジオン": [
+      "A61K38/00"
+    ],
+    "エルゴリンに基づくペプチド": [
+      "A61K38/00"
+    ],
+    "分子中に統計学的に分布されているアミノ酸単位を有する高分子化合物を含有するもの": [
+      "A61K38/00"
+    ],
+    "抗原または抗体を含有する医療製剤": [
+      "A61K38/00"
+    ],
+    "不活性成分に特徴のある医療製剤": [
+      "A61K38/00"
+    ],
+    "薬剤担体としてのペプチド": [
+      "A61K38/00"
+    ],
+    "抗原または抗体を含有する医薬品製剤": [
+      "A61K39/00",
+      "A61K40/00"
+    ],
+    "免疫分析用物質": [
+      "A61K39/00"
+    ],
+    "細胞免疫療法": [
+      "A61K40/00"
+    ],
+    "波動エネルギ": [
+      "A61K41/00"
+    ],
+    "または粒子線で物質を処理することによって得られる医薬品製剤": [
+      "A61K41/00"
+    ],
+    "に属さない活性成分を含有する医薬品製剤": [
+      "A61K45/00"
+    ],
+    "使用する不活性成分": [
+      "A61K47/00"
+    ],
+    "担体または不活性添加剤": [
+      "A61K47/00"
+    ],
+    "に特徴のある医薬品製剤": [
+      "A61K47/00"
+    ],
+    "活性成分と化学結合した標的剤または修飾剤": [
+      "A61K47/00"
+    ],
+    "遺伝子疾病を治療するために生体の細胞内に挿入する遺伝子物質を含有する医療用製剤": [
+      "A61K48/00"
+    ],
+    "遺伝子治療": [
+      "A61K48/00"
+    ],
+    "生体内試験のための製剤": [
+      "A61K49/00"
+    ],
+    "生体内での治療または検査で使用する導電剤": [
+      "A61K50/00"
+    ],
+    "心電計": [
+      "A61K50/00"
+    ],
+    "または経皮薬投与のために電極と共に使用される導電性接着剤またはゲル": [
+      "A61K50/00"
+    ],
+    "生体内での治療または検査に用いる放射性物質を含有する製剤": [
+      "A61K51/00"
+    ],
     "メイクアップ剤": [
       "A61Q1/00"
     ],
@@ -1946,78 +2264,6 @@
     "メイクアップの除去剤": [
       "A61Q1/00",
       "A61Q1/14"
-    ],
-    "マニキュアまたはペディキュア剤": [
-      "A61Q3/00"
-    ],
-    "毛髪手入れ用製剤": [
-      "A61Q5/00"
-    ],
-    "発毛促進あるいは発毛抑制をする剤": [
-      "A61Q7/00"
-    ],
-    "除毛剤": [
-      "A61Q9/00"
-    ],
-    "または除毛補助剤": [
-      "A61Q9/00"
-    ],
-    "口腔または入れ歯の手入れ用製剤": [
-      "A61Q11/00"
-    ],
-    "歯磨剤": [
-      "A61Q11/00"
-    ],
-    "練り歯磨き": [
-      "A61Q11/00"
-    ],
-    "口内洗浄剤": [
-      "A61Q11/00"
-    ],
-    "香料用の製剤または添加剤": [
-      "A61Q13/00"
-    ],
-    "精油または香料それ自体": [
-      "A61Q13/00"
-    ],
-    "制汗剤または身体の防臭剤": [
-      "A61Q15/00"
-    ],
-    "空気の脱臭用品": [
-      "A61Q15/00"
-    ],
-    "防護剤": [
-      "A61Q17/00"
-    ],
-    "外部の影響": [
-      "A61Q17/00"
-    ],
-    "日光": [
-      "A61Q17/00"
-    ],
-    "線もしくは他の有害光線": [
-      "A61Q17/00"
-    ],
-    "腐食物質": [
-      "A61Q17/00"
-    ],
-    "バクテリア": [
-      "A61Q17/00"
-    ],
-    "またはこん虫の針": [
-      "A61Q17/00"
-    ],
-    "から防護するため皮膚に直接接触させる製剤": [
-      "A61Q17/00"
-    ],
-    "スキンケア剤": [
-      "A61Q19/00"
-    ],
-    "このサブクラスの他のグル": [
-      "A61Q90/00"
-    ],
-    "プには分類されない特殊用途のための化粧品または類似化粧品製剤": [
-      "A61Q90/00"
     ],
     "皮膚着色剤を含有する製剤": [
       "A61Q1/02"
@@ -2055,11 +2301,17 @@
     "装飾または吸収用": [
       "A61Q1/12"
     ],
+    "マニキュアまたはペディキュア剤": [
+      "A61Q3/00"
+    ],
     "爪被覆剤": [
       "A61Q3/02"
     ],
     "爪被覆剤除去剤": [
       "A61Q3/04"
+    ],
+    "毛髪手入れ用製剤": [
+      "A61Q5/00"
     ],
     "毛髪洗浄剤": [
       "A61Q5/02"
@@ -2094,14 +2346,35 @@
     "を含む製剤": [
       "A61Q5/12"
     ],
+    "発毛促進あるいは発毛抑制をする剤": [
+      "A61Q7/00"
+    ],
     "発毛抑制剤または発毛不活性剤": [
       "A61Q7/02"
+    ],
+    "除毛剤": [
+      "A61Q9/00"
+    ],
+    "または除毛補助剤": [
+      "A61Q9/00"
     ],
     "ひげそり剤": [
       "A61Q9/02"
     ],
     "脱毛剤": [
       "A61Q9/04"
+    ],
+    "口腔または入れ歯の手入れ用製剤": [
+      "A61Q11/00"
+    ],
+    "歯磨剤": [
+      "A61Q11/00"
+    ],
+    "練り歯磨き": [
+      "A61Q11/00"
+    ],
+    "口内洗浄剤": [
+      "A61Q11/00"
     ],
     "入れ歯の防臭": [
       "A61Q11/02"
@@ -2112,6 +2385,42 @@
     "または消毒用製剤": [
       "A61Q11/02"
     ],
+    "香料用の製剤または添加剤": [
+      "A61Q13/00"
+    ],
+    "精油または香料それ自体": [
+      "A61Q13/00"
+    ],
+    "制汗剤または身体の防臭剤": [
+      "A61Q15/00"
+    ],
+    "空気の脱臭用品": [
+      "A61Q15/00"
+    ],
+    "防護剤": [
+      "A61Q17/00"
+    ],
+    "外部の影響": [
+      "A61Q17/00"
+    ],
+    "日光": [
+      "A61Q17/00"
+    ],
+    "線もしくは他の有害光線": [
+      "A61Q17/00"
+    ],
+    "腐食物質": [
+      "A61Q17/00"
+    ],
+    "バクテリア": [
+      "A61Q17/00"
+    ],
+    "またはこん虫の針": [
+      "A61Q17/00"
+    ],
+    "から防護するため皮膚に直接接触させる製剤": [
+      "A61Q17/00"
+    ],
     "虫よけ剤を含むもの": [
       "A61Q17/02"
     ],
@@ -2121,6 +2430,9 @@
     "局所用日焼け剤": [
       "A61Q17/04",
       "A61Q19/04"
+    ],
+    "スキンケア剤": [
+      "A61Q19/00"
     ],
     "化学的に皮膚を漂白または白化するためのもの": [
       "A61Q19/02"
@@ -2136,6 +2448,12 @@
     ],
     "洗浄または浴用剤": [
       "A61Q19/10"
+    ],
+    "このサブクラスの他のグル": [
+      "A61Q90/00"
+    ],
+    "プには分類されない特殊用途のための化粧品または類似化粧品製剤": [
+      "A61Q90/00"
     ]
   }
 }
