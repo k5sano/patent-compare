@@ -37,7 +37,10 @@ def _dict_path(field: str, name: str) -> str:
 # 複数テーマの場合は nodes を全テーマ分マージし、reverse_index も統合する。
 _FTERM_DICTS: dict = {
     "cosmetics": [
+        # 4C083: 化粧料 (A61K8/00-A61K8/99 + A61Q1/00-A61Q90/00)
         {"file": "fterm_4c083_tree.json", "format": "tree"},
+        # 4H003: 洗浄性組成物 (C11D1/00-19/00) — 化粧料と重なるシャンプー/ボディソープ案件で必須
+        {"file": "fterm_4h003_tree.json", "format": "tree"},
     ],
     "laminate": [
         # 4F100: 積層体 (B32B1/00-43/00)

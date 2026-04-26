@@ -529,7 +529,7 @@ def generate_presearch_prompt(segments, hongan, keywords, field="cosmetics", cas
     if field == "cosmetics":
         field_specific = """
 - 化粧品分野では、成分名に複数の表記があります（和名/化学名/INCI名/商品名）。すべて列挙してください。
-- Ftermテーマ: 4C083（化粧料）
+- Ftermテーマ: 4C083（化粧料）+ 4H003（洗浄性組成物）
 - 成分のFterm分類（AC:有機成分, BB:機能特定成分）も参考にしてください。"""
     elif field == "laminate":
         field_specific = """
@@ -779,7 +779,7 @@ def generate_classification_prompt(segments, hongan, field, tech_analysis, prese
 
     field_specific = ""
     if field == "cosmetics":
-        field_specific = "- Ftermテーマコード: 4C083（化粧料）のAA～FF分類を特に精査してください"
+        field_specific = "- Ftermテーマコード: **4C083（化粧料）と 4H003（洗浄性組成物 C11D1/00-19/00）の両方** を必ず精査してください。シャンプー・ボディソープ・ヘアケア等は 4C083 と 4H003 の双方に分類されます。AA～FF（または AA～FA）分類のうち本願請求項要素に該当するコードを必ず両テーマから抽出してください"
     elif field == "laminate":
         field_specific = "- Ftermテーマコード: 4F100（積層体）のAK～YY分類を特に精査してください"
 
