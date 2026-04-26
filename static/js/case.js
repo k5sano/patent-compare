@@ -1976,6 +1976,37 @@ function _renderFtermCatalogItem(c, usedGroupsByCode) {
   </div>`;
 }
 
+// テーマコードを Fターム コードから抽出 (例: "4C083AB13" → "4C083" / 短縮形なら "OTHER")
+function _ftermThemeOf(code) {
+  const m = String(code || '').match(/^(\d{1,2}[A-Z]\d{3})/);
+  return m ? m[1] : 'その他';
+}
+
+// テーマ表示順 (固定優先 + 残りはコード昇順)
+const _FTERM_THEME_PRIORITY = ['4C083', '4H003', '4F100', '3E086'];
+function _ftermThemesSorted(themesSet) {
+  const all = Array.from(themesSet);
+  const prio = _FTERM_THEME_PRIORITY.filter(t => themesSet.has(t));
+  const rest = all.filter(t => !prio.includes(t)).sort();
+  return prio.concat(rest);
+}
+
+// テーマの「人間向けラベル」(可能な範囲で)
+const _FTERM_THEME_LABELS = {
+  '4C083': '化粧料',
+  '4H003': '洗浄性組成物',
+  '4F100': '積層体',
+  '3E086': '被包体・包装体',
+  'その他': '辞書外/不明',
+};
+
+let _ftermActiveTheme = null;  // 現在選択中のテーマ (null なら最初の有効テーマ)
+
+function selectFtermTheme(theme) {
+  _ftermActiveTheme = theme;
+  renderFtermCatalog();
+}
+
 async function renderFtermCatalog() {
   const panel = document.getElementById('fterm-catalog');
   const body = document.getElementById('fterm-catalog-body');
@@ -1990,42 +2021,84 @@ async function renderFtermCatalog() {
   }
   panel.style.display = '';
 
-  const bySource = {};
+  // テーマ別 → src 別に二重グルーピング
+  const byTheme = {};         // theme → src → [candidates]
+  const themeCounts = {};     // theme → total count
+  const themeSet = new Set();
   candidates.forEach(c => {
+    const theme = _ftermThemeOf(c.code);
+    themeSet.add(theme);
+    if (!byTheme[theme]) byTheme[theme] = {};
     const src = c.source || '辞書';
-    if (!bySource[src]) bySource[src] = [];
-    bySource[src].push(c);
+    if (!byTheme[theme][src]) byTheme[theme][src] = [];
+    byTheme[theme][src].push(c);
+    themeCounts[theme] = (themeCounts[theme] || 0) + 1;
   });
 
   if (countEl) countEl.textContent = `（全${candidates.length}件）`;
 
+  // テーマタブ構築
+  const themes = _ftermThemesSorted(themeSet);
+  if (!themes.includes(_ftermActiveTheme)) _ftermActiveTheme = themes[0] || null;
+
+  const tabsHtml = themes.map(t => {
+    const label = _FTERM_THEME_LABELS[t] || '';
+    const active = t === _ftermActiveTheme;
+    return `<button type="button" class="fterm-theme-tab ${active ? 'active' : ''}"
+      onclick="selectFtermTheme('${escAttr(t)}')"
+      title="${escAttr(label)}">
+      <span class="fterm-theme-code">${escHtml(t)}</span>
+      ${label ? `<span class="fterm-theme-label">${escHtml(label)}</span>` : ''}
+      <span class="fterm-theme-count">${themeCounts[t]}</span>
+    </button>`;
+  }).join('');
+
   if (hintEl) {
+    // hint は現在テーマの src サマリ
+    const srcOfActive = byTheme[_ftermActiveTheme] || {};
     const srcSummary = FTERM_SOURCE_ORDER
-      .filter(s => bySource[s] && bySource[s].length)
-      .map(s => `${s} ${bySource[s].length}件`).join(' / ');
+      .filter(s => srcOfActive[s] && srcOfActive[s].length)
+      .map(s => `${s} ${srcOfActive[s].length}件`).join(' / ');
     hintEl.textContent = srcSummary;
   }
 
   const usedByCode = _ftermGroupsByCode();
 
-  let html = '';
+  // 現在テーマのカードを描画
+  const srcOfActive = byTheme[_ftermActiveTheme] || {};
+  let cardsHtml = '';
   for (const src of FTERM_SOURCE_ORDER) {
-    const list = bySource[src];
+    const list = srcOfActive[src];
     if (!list || !list.length) continue;
     const srcKey = FTERM_SOURCE_KEYS[src] || 'dict';
     const limit = src === '辞書' ? FTERM_DICT_SECTION_LIMIT : list.length;
     const shown = list.slice(0, limit);
 
-    html += `<div class="fterm-cat-section">
+    cardsHtml += `<div class="fterm-cat-section">
       <div class="fterm-cat-section-head">
         <span class="src-badge src-${srcKey}">${escHtml(src)}</span>
         <span>${list.length}件${list.length > limit ? `（${limit}件を表示・検索で絞り込み）` : ''}</span>
       </div>`;
-    html += shown.map(c => _renderFtermCatalogItem(c, usedByCode)).join('');
-    html += `</div>`;
+    cardsHtml += shown.map(c => _renderFtermCatalogItem(c, usedByCode)).join('');
+    cardsHtml += `</div>`;
+  }
+  if (!cardsHtml) {
+    cardsHtml = `<div class="fterm-cat-empty">テーマ ${escHtml(_ftermActiveTheme)} に該当する候補がありません</div>`;
   }
 
-  body.innerHTML = html || '<div class="fterm-cat-empty">Fターム候補がありません</div>';
+  // 辞書未整備テーマの注意書き
+  let warnHtml = '';
+  if (_ftermActiveTheme === 'その他') {
+    warnHtml = `<div class="fterm-cat-warn">⚠ テーマコード未識別の Fターム コードです。短縮形 (AA01 等) や辞書未登録テーマが混在しています。</div>`;
+  } else if (themeCounts[_ftermActiveTheme] && !(byTheme[_ftermActiveTheme] || {})['辞書']) {
+    warnHtml = `<div class="fterm-cat-warn">ℹ このテーマの辞書候補が出ていません。本願分類 + 既存グループのみ。</div>`;
+  }
+
+  body.innerHTML = `
+    <div class="fterm-theme-tabs">${tabsHtml}</div>
+    ${warnHtml}
+    ${cardsHtml}
+  `;
 
   const ind = document.getElementById('fterm-collapse-ind');
   if (ind) ind.classList.toggle('open', !_ftermCatalogCollapsed);
@@ -4528,6 +4601,11 @@ async function searchRunExecute() {
 function renderSrHits() {
   const el = document.getElementById('sr-hits-list');
   if (!el) return;
+
+  // グループ語フィルタ・ソート の UI は run の有無に関わらず同期
+  _srRenderGroupFilterUI();
+  _srRebuildSortDropdown();
+
   if (!_srCurrentRun) { el.innerHTML = ''; return; }
 
   const filter = (document.getElementById('sr-filter') || {}).value || '';
@@ -4539,10 +4617,42 @@ function renderSrHits() {
   else if (filter === 'pending') hits = hits.filter(h => (h.screening || 'pending') === 'pending');
   else if (filter === 'not-rejected') hits = hits.filter(h => h.screening !== 'reject');
 
+  // グループヒット数のメモ化（フィルタ・ソートで複数回参照されるため）
+  const _countsMemo = new Map();
+  const getCounts = (h) => {
+    const k = h.patent_id || '';
+    if (!_countsMemo.has(k)) _countsMemo.set(k, _srComputeHitGroupCounts(h));
+    return _countsMemo.get(k);
+  };
+
+  // グループ語フィルタ（選択されたグループの語が文献に含まれるか）
+  if (_srGroupFilter && _srGroupFilter.size > 0) {
+    const sel = Array.from(_srGroupFilter); // 文字列キー
+    hits = hits.filter(h => {
+      const counts = getCounts(h);
+      return _srGroupFilterMode === 'or'
+        ? sel.some(gid => (counts[gid] || 0) > 0)
+        : sel.every(gid => (counts[gid] || 0) > 0);
+    });
+  }
+
   if (sortBy === 'ai_score') {
     hits.sort((a, b) => (b.ai_score ?? -1) - (a.ai_score ?? -1));
   } else if (sortBy === 'date') {
     hits.sort((a, b) => (b.publication_date || '').localeCompare(a.publication_date || ''));
+  } else if (sortBy === 'group_total') {
+    // 選択中のグループがあれば選択分の合計、なければ全グループの合計
+    const sel = (_srGroupFilter && _srGroupFilter.size > 0)
+      ? Array.from(_srGroupFilter)
+      : (kwGroups || []).map(g => String(g.group_id));
+    const sum = (h) => {
+      const c = getCounts(h);
+      return sel.reduce((s, gid) => s + (c[gid] || 0), 0);
+    };
+    hits.sort((a, b) => sum(b) - sum(a));
+  } else if (typeof sortBy === 'string' && sortBy.startsWith('group:')) {
+    const gid = sortBy.slice('group:'.length);
+    hits.sort((a, b) => (getCounts(b)[gid] || 0) - (getCounts(a)[gid] || 0));
   }
 
   // 統計
@@ -4551,8 +4661,11 @@ function renderSrHits() {
     acc[k] = (acc[k] || 0) + 1;
     return acc;
   }, {});
+  const gfNote = (_srGroupFilter && _srGroupFilter.size > 0)
+    ? ` / グループ絞込み:${hits.length}件`
+    : '';
   document.getElementById('sr-hits-stats').textContent =
-    `全${_srCurrentRun.hits.length}件 / ★${stats.star || 0} △${stats.triangle || 0} ×${stats.reject || 0} …${stats.hold || 0} 未${stats.pending || 0}`;
+    `全${_srCurrentRun.hits.length}件 / ★${stats.star || 0} △${stats.triangle || 0} ×${stats.reject || 0} …${stats.hold || 0} 未${stats.pending || 0}${gfNote}`;
 
   if (!hits.length) {
     el.innerHTML = '<div style="font-size:0.85rem; color:var(--text2); padding:0.5rem;">フィルタ該当なし</div>';
@@ -4560,6 +4673,135 @@ function renderSrHits() {
   }
 
   el.innerHTML = hits.map(h => srRenderHitCard(h)).join('');
+}
+
+// ===== グループ語フィルタ =====
+let _srGroupFilter = new Set();
+let _srGroupFilterMode = 'and'; // 'and' | 'or'
+
+// ヒット 1 件についてグループごとの語ヒット数（本文+抽出表）を返す
+function _srComputeHitGroupCounts(h) {
+  const idx = _pkmGetIndex();
+  if (!idx.length) return {};
+  const pid = h.patent_id || '';
+  const ft = (window._pkmFullTexts && window._pkmFullTexts[pid]) || null;
+  const titleSrc = (ft && ft.title) || h.title || '';
+  const abstractSrc = (ft && ft.abstract) || h.abstract || '';
+  const claim1Src = h.claim1 || '';
+  const counts = {};
+  const addTo = c => Object.keys(c || {}).forEach(k => { counts[k] = (counts[k] || 0) + c[k]; });
+  addTo(pkmHighlight(titleSrc, idx).counts);
+  addTo(pkmHighlight(abstractSrc, idx).counts);
+  addTo(pkmHighlight(claim1Src, idx).counts);
+  if (ft && Array.isArray(ft.claims)) addTo(pkmHighlight(ft.claims.join('\n\n'), idx).counts);
+  if (ft && ft.description) addTo(pkmHighlight(ft.description, idx).counts);
+  const cellText = (window._tableExtractCells && window._tableExtractCells[pid]) || '';
+  if (cellText) addTo(pkmHighlight(cellText, idx).counts);
+  return counts;
+}
+
+function srToggleGroupFilter(gid) {
+  const key = String(gid);
+  if (_srGroupFilter.has(key)) _srGroupFilter.delete(key);
+  else _srGroupFilter.add(key);
+  renderSrHits();
+}
+
+function srClearGroupFilter() {
+  if (_srGroupFilter.size === 0) return;
+  _srGroupFilter.clear();
+  renderSrHits();
+}
+
+function srSetGroupFilterMode(mode) {
+  const next = (mode === 'or') ? 'or' : 'and';
+  if (_srGroupFilterMode === next) return;
+  _srGroupFilterMode = next;
+  renderSrHits();
+}
+
+function _srRebuildSortDropdown() {
+  const sel = document.getElementById('sr-sort');
+  if (!sel) return;
+  const groups = (kwGroups || []);
+  const desired = ['default', 'ai_score', 'date'];
+  if (groups.length > 0) desired.push('group_total');
+  for (const g of groups) desired.push('group:' + String(g.group_id));
+
+  // 既存と一致するなら再構築しない（ユーザー選択を維持＆無駄な DOM 更新回避）
+  const existing = Array.from(sel.options).map(o => o.value);
+  const sameLen = existing.length === desired.length;
+  const same = sameLen && existing.every((v, i) => v === desired[i]);
+  const current = sel.value || 'default';
+  if (same) return;
+
+  const esc = (s) => _pkmEsc(s);
+  const trunc = (s, n) => {
+    const arr = [...String(s || '')];
+    return arr.length > n ? arr.slice(0, n).join('') + '…' : arr.join('');
+  };
+
+  const opts = [
+    '<option value="default">元の順</option>',
+    '<option value="ai_score">AIスコア(高→低)</option>',
+    '<option value="date">公開日(新→古)</option>',
+  ];
+  if (groups.length > 0) {
+    opts.push('<option value="group_total">グループ語ヒット数 合計(高→低)</option>');
+    for (const g of groups) {
+      const gid = String(g.group_id);
+      const lbl = trunc(g.label || ('group' + gid), 14);
+      opts.push(`<option value="group:${esc(gid)}">🎯 ${esc(lbl)} のヒット数(高→低)</option>`);
+    }
+  }
+  sel.innerHTML = opts.join('');
+  sel.value = desired.includes(current) ? current : 'default';
+}
+
+function _srRenderGroupFilterUI() {
+  const el = document.getElementById('sr-group-filter');
+  if (!el) return;
+  const groups = (kwGroups || []);
+  if (!groups.length) {
+    el.innerHTML = '<span class="sr-gf-empty">Step 3 のキーワードグループ未登録 — グループ絞り込みは利用できません</span>';
+    return;
+  }
+
+  // 選択集合に存在しない gid は掃除（kwGroups 変更時の不整合対策）
+  const valid = new Set(groups.map(g => String(g.group_id)));
+  for (const gid of Array.from(_srGroupFilter)) {
+    if (!valid.has(gid)) _srGroupFilter.delete(gid);
+  }
+
+  const buttons = groups.map(g => {
+    const gidStr = String(g.group_id);
+    const c = groupColor(g.group_id);
+    const on = _srGroupFilter.has(gidStr);
+    const cls = on ? 'sr-gf-btn sr-gf-btn-on' : 'sr-gf-btn';
+    const label = _pkmEsc(g.label || ('group' + g.group_id));
+    const tip = `「${g.label || ''}」の語を含む文献に絞り込み`;
+    return `<button class="${cls}" style="--c:${c};" onclick="srToggleGroupFilter('${gidStr}')" title="${_pkmEsc(tip)}">${label}</button>`;
+  }).join('');
+
+  const activeCount = _srGroupFilter.size;
+  const mode = _srGroupFilterMode;
+  const modeRow = activeCount >= 2
+    ? `<span class="sr-gf-mode-row">
+         <span class="sr-gf-mode-label">複数選択時:</span>
+         <button class="sr-gf-mode ${mode === 'and' ? 'on' : ''}" onclick="srSetGroupFilterMode('and')" title="選択した全グループの語を含む文献のみ表示">AND</button>
+         <button class="sr-gf-mode ${mode === 'or' ? 'on' : ''}" onclick="srSetGroupFilterMode('or')" title="選択したいずれかのグループの語を含む文献を表示">OR</button>
+       </span>`
+    : '';
+  const clearBtn = activeCount > 0
+    ? `<button class="sr-gf-clear" onclick="srClearGroupFilter()" title="フィルタを全解除">× クリア (${activeCount})</button>`
+    : '';
+
+  el.innerHTML = `
+    <span class="sr-gf-label">グループ語で絞込み:</span>
+    ${buttons}
+    ${modeRow}
+    ${clearBtn}
+  `;
 }
 
 function srRenderHitCard(h) {
@@ -4660,9 +4902,11 @@ function srRenderHitCard(h) {
     : (canExtract
         ? `この引例の図表を Vision で抽出 (${h.downloaded_as_citation ? 'PDF' : 'Google画像'} ${hasImages ? `${ft.images.length}枚` : ''})`
         : '抽出するには 📄 で全文取得 か ☆→DL を先に実行してください');
-  // 一括選択チェックボックス
+  // 一括選択チェックボックス（常に選択可。一括抽出実行時に自動で全文取得を試行）
   const selChecked = (window._tableExtractSelected && window._tableExtractSelected.has(pid)) ? 'checked' : '';
-  const selDisabled = canExtract ? '' : 'disabled';
+  const selTitle = canExtract
+    ? '表抽出の一括選択'
+    : 'PDF/画像 未取得 — 一括抽出時に自動で全文取得を試みます';
 
   // タイトル → 全文ハイライトビューを新タブで開く
   const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view`;
@@ -4671,7 +4915,7 @@ function srRenderHitCard(h) {
   return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
     <div class="sr-hit-row1">
       <div class="sr-hit-actions">
-        <input type="checkbox" class="sr-hit-tblsel" data-pid="${pid}" ${selChecked} ${selDisabled} title="${canExtract ? '表抽出の一括選択' : 'PDF未DL — 抽出不可'}" onchange="srToggleTableSel('${pid}', this.checked)">
+        <input type="checkbox" class="sr-hit-tblsel" data-pid="${pid}" ${selChecked} title="${_pkmEsc(selTitle)}" onchange="srToggleTableSel('${pid}', this.checked)">
         ${['star', 'triangle', 'pending', 'hold', 'reject'].map(s => {
           const active = (s === screening) ? 'active' : '';
           return `<button class="sr-btn-${s} ${active}" title="${s}"
@@ -5098,11 +5342,93 @@ function _renderCitationTablesHtml(payload, pid) {
   return head.join('\n');
 }
 
+// 静かに 1 件の全文を取得（alert を出さない・進捗ラベル更新もしない）。成功なら true。
+async function _srFetchHitTextSilent(pid) {
+  const source = _pkmGetSelectedSource();
+  const isRefetch = !!(window._pkmFullTexts && window._pkmFullTexts[pid]);
+  try {
+    const r = await fetch(
+      `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/fetch-text`,
+      {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({force: isRefetch, source}),
+      },
+    );
+    if (!r.ok) return false;
+    const data = await r.json();
+    window._pkmFullTexts[pid] = data;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 async function srExtractTablesBulk() {
   const sel = Array.from(window._tableExtractSelected || []);
   if (!sel.length) { alert('チェックを入れた引例がありません'); return; }
-  if (!confirm(`選択した ${sel.length} 件の引例の図表を Vision で抽出します。\n1 件 1〜2 分、合計サブスク消費 ${(sel.length * 0.3).toFixed(1)} 程度の見込み。続行しますか？`)) return;
+
+  // 事前判定: 未 DL かつ画像未取得 = 全文取得が必要
+  const hits = (_srCurrentRun && _srCurrentRun.hits) || [];
+  const needsFetch = sel.filter(pid => {
+    const h = hits.find(x => x.patent_id === pid);
+    if (!h) return false;
+    if (h.downloaded_as_citation) return false;
+    const ft = window._pkmFullTexts && window._pkmFullTexts[pid];
+    if (ft && Array.isArray(ft.images) && ft.images.length > 0) return false;
+    return true;
+  });
+
+  let confirmMsg = `選択した ${sel.length} 件の引例の図表を Vision で抽出します。\n1 件 1〜2 分、合計サブスク消費 ${(sel.length * 0.3).toFixed(1)} 程度の見込み。`;
+  if (needsFetch.length > 0) {
+    confirmMsg += `\n\nうち ${needsFetch.length} 件は PDF/画像 未取得のため、先に全文取得を試みます。`;
+  }
+  confirmMsg += `\n続行しますか？`;
+  if (!confirm(confirmMsg)) return;
   const lbl = document.getElementById('sr-pkm-bulk-status');
+
+  // 事前取得フェーズ
+  if (needsFetch.length > 0) {
+    if (lbl) lbl.textContent = `事前: 全文取得 0/${needsFetch.length} ...`;
+    let i = 0;
+    const failed = [];
+    for (const pid of needsFetch) {
+      i++;
+      if (lbl) lbl.textContent = `事前: 全文取得 ${i}/${needsFetch.length}: ${pid}`;
+      const ok = await _srFetchHitTextSilent(pid);
+      if (!ok) failed.push(pid);
+    }
+    // 取得後に再判定: 画像も PDF も無いまま残っているもの
+    const stillEmpty = sel.filter(pid => {
+      const h = hits.find(x => x.patent_id === pid);
+      if (!h) return false;
+      if (h.downloaded_as_citation) return false;
+      const ft = window._pkmFullTexts && window._pkmFullTexts[pid];
+      return !(ft && Array.isArray(ft.images) && ft.images.length > 0);
+    });
+    if (stillEmpty.length > 0) {
+      const skip = confirm(
+        `次の ${stillEmpty.length} 件は全文取得しても抽出可能な画像/PDFが見つかりませんでした。\nこれらをスキップして残り ${sel.length - stillEmpty.length} 件で抽出を続行しますか？\n\n` +
+        stillEmpty.slice(0, 10).join('\n') + (stillEmpty.length > 10 ? '\n...' : ''),
+      );
+      if (!skip) {
+        if (lbl) lbl.textContent = '';
+        return;
+      }
+      // 抽出可能なものだけに絞る
+      const skipSet = new Set(stillEmpty);
+      for (let k = sel.length - 1; k >= 0; k--) {
+        if (skipSet.has(sel[k])) sel.splice(k, 1);
+      }
+      if (!sel.length) {
+        alert('抽出可能な引例がなくなりました。');
+        if (lbl) lbl.textContent = '';
+        return;
+      }
+    }
+    // ヒットカードに 📊 ボタン状態などを反映
+    renderSrHits();
+  }
+
   if (lbl) lbl.textContent = `表抽出 0/${sel.length} ...`;
   try {
     const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citations/extract-tables-bulk`, {
