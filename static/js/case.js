@@ -2001,9 +2001,15 @@ const _FTERM_THEME_LABELS = {
 };
 
 let _ftermActiveTheme = null;  // 現在選択中のテーマ (null なら最初の有効テーマ)
+let _ftermShowDictCandidates = false;  // 辞書ベース候補も表示するか (デフォルト OFF)
 
 function selectFtermTheme(theme) {
   _ftermActiveTheme = theme;
+  renderFtermCatalog();
+}
+
+function toggleFtermShowDict(checked) {
+  _ftermShowDictCandidates = !!checked;
   renderFtermCatalog();
 }
 
@@ -2014,14 +2020,27 @@ async function renderFtermCatalog() {
   const hintEl = document.getElementById('fterm-catalog-hint');
   if (!panel || !body) return;
 
-  const candidates = await _loadFtermCandidates();
-  if (!candidates || candidates.length === 0) {
+  const candidatesAll = await _loadFtermCandidates();
+  if (!candidatesAll || candidatesAll.length === 0) {
     panel.style.display = 'none';
     return;
   }
   panel.style.display = '';
 
-  // テーマ別 → src 別に二重グルーピング
+  // 「本願に付与されているもの」優先 — 辞書 source は toggle で出す。
+  // 本願分類 / 既存グループ は常に表示、辞書は _ftermShowDictCandidates が true のときのみ。
+  const candidates = candidatesAll.filter(c => {
+    if (_ftermShowDictCandidates) return true;
+    return (c.source === '本願分類' || c.source === '既存グループ');
+  });
+
+  // 集計表示用 (全数とフィルタ後の件数を両方持つ)
+  const totalAll = candidatesAll.length;
+  const totalAssigned = candidatesAll.filter(c =>
+    c.source === '本願分類' || c.source === '既存グループ').length;
+  const totalDict = totalAll - totalAssigned;
+
+  // テーマ別 → src 別に二重グルーピング (フィルタ後)
   const byTheme = {};         // theme → src → [candidates]
   const themeCounts = {};     // theme → total count
   const themeSet = new Set();
@@ -2035,7 +2054,11 @@ async function renderFtermCatalog() {
     themeCounts[theme] = (themeCounts[theme] || 0) + 1;
   });
 
-  if (countEl) countEl.textContent = `（全${candidates.length}件）`;
+  if (countEl) {
+    countEl.textContent = _ftermShowDictCandidates
+      ? `（全${totalAll}件 / 本願分類+既存 ${totalAssigned} + 辞書 ${totalDict}）`
+      : `（本願分類+既存 ${totalAssigned}件 / 辞書 ${totalDict}件は非表示）`;
+  }
 
   // テーマタブ構築
   const themes = _ftermThemesSorted(themeSet);
@@ -2094,8 +2117,24 @@ async function renderFtermCatalog() {
     warnHtml = `<div class="fterm-cat-warn">ℹ このテーマの辞書候補が出ていません。本願分類 + 既存グループのみ。</div>`;
   }
 
+  // 辞書 toggle (本願に付与されてない辞書候補もブラウズしたい時用)
+  const toggleHtml = `<label class="fterm-dict-toggle" title="辞書全体から候補を出す (本願に付与されていないものを含む)">
+    <input type="checkbox" ${_ftermShowDictCandidates ? 'checked' : ''}
+      onchange="toggleFtermShowDict(this.checked)">
+    <span>辞書候補も表示 (${totalDict})</span>
+  </label>`;
+
+  // 本願分類が空 → 注意書き
+  const noClassificationWarn = (totalAssigned === 0)
+    ? `<div class="fterm-cat-warn">⚠ 本願 PDF からテーマコード/Fターム/FI が抽出できていません。Step 2 のテキスト抽出を確認するか、「辞書候補も表示」で辞書からブラウズしてください。</div>`
+    : '';
+
   body.innerHTML = `
-    <div class="fterm-theme-tabs">${tabsHtml}</div>
+    <div class="fterm-theme-tabs-row">
+      <div class="fterm-theme-tabs">${tabsHtml}</div>
+      ${toggleHtml}
+    </div>
+    ${noClassificationWarn}
     ${warnHtml}
     ${cardsHtml}
   `;

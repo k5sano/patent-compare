@@ -357,9 +357,17 @@
   .fterm-catalog-body { padding: 0.2rem 0.9rem 0.8rem; border-top: 1px solid var(--border); }
   .fterm-catalog-body.collapsed { display: none; }
 
-  /* テーマ別タブ */
-  .fterm-theme-tabs { display: flex; gap: 4px; flex-wrap: wrap;
-    margin: 0.5rem 0 0.7rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  /* テーマ別タブ + 辞書トグル の行 */
+  .fterm-theme-tabs-row { display: flex; align-items: flex-end; justify-content: space-between;
+    flex-wrap: wrap; gap: 0.6rem; margin: 0.5rem 0 0.7rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  .fterm-theme-tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+  .fterm-dict-toggle { display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 10px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; cursor: pointer; color: var(--text2);
+    font-size: 0.78rem; user-select: none; white-space: nowrap; }
+  .fterm-dict-toggle:hover { color: var(--text); border-color: var(--accent); }
+  .fterm-dict-toggle input[type="checkbox"] { cursor: pointer; }
   .fterm-theme-tab { display: inline-flex; align-items: center; gap: 5px;
     padding: 5px 10px; background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px 6px 0 0; cursor: pointer; color: var(--text2);
