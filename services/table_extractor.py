@@ -513,6 +513,8 @@ def extract_tables_from_image_records(
     out_dir = Path(out_dir)
     img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
+    # doc_id をファイル名安全に正規化 ("再表2012/029514" の "/" 等を _ に)
+    safe_doc_id = re.sub(r'[\\/:*?"<>|\s]', "_", doc_id) or "doc"
 
     if progress:
         progress("scan", 0, 0, f"{doc_id}: {len(image_records)} 画像候補")
@@ -552,8 +554,8 @@ def extract_tables_from_image_records(
         url = cand.get("src")
         if not url:
             continue
-        # ダウンロード → 一時 PNG
-        img_name = f"{doc_id}_img{cand['index']:03d}.png"
+        # ダウンロード → 一時 PNG (パス安全な doc_id を使う)
+        img_name = f"{safe_doc_id}_img{cand['index']:03d}.png"
         img_path = img_dir / img_name
         if not img_path.exists():
             try:
