@@ -345,6 +345,8 @@ def create_case(case_number, year="", month="", field="cosmetics",
 
     try:
         result = extract_patent_pdf(dl_result["path"], "hongan")
+        # PDF 解決時に元ファイルを正引きできるよう source_pdf を残す
+        result["source_pdf"] = Path(dl_result["path"]).name
         with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
@@ -732,15 +734,47 @@ def create_bookmarked_hongan(case_id):
 
     output_dir = case_dir / "output"
     output_dir.mkdir(exist_ok=True)
-    out_pdf = output_dir / f"{case_id}_本願_bookmarked.pdf"
 
-    doc = fitz.open(str(src_pdf))
+    # 既存の同名ファイルが PDF-XChange 等で開いていると上書きできず
+    # "Permission denied" になるため、書込先を試行錯誤する。
+    #   1) 既定: "{case_id}_本願_bookmarked.pdf"
+    #   2) 失敗 (ロック中): "{case_id}_本願_bookmarked_{HHMMSS}.pdf"
+    #   3) 古いタイムスタンプ付き出力は、新規ファイルを開いたあと残骸として残るが
+    #      output/ ディレクトリを定期掃除すれば良い
+    base_name = f"{case_id}_本願_bookmarked.pdf"
+    out_pdf = output_dir / base_name
+
+    def _save(target):
+        doc = fitz.open(str(src_pdf))
+        try:
+            n_ann_local = apply_hongan_annotations(doc, claim_items, para_items)
+            n_bm_local = apply_toc(doc, bookmarks)
+            doc.save(str(target), garbage=3, deflate=True)
+        finally:
+            doc.close()
+        return n_ann_local, n_bm_local
+
     try:
-        n_ann = apply_hongan_annotations(doc, claim_items, para_items)
-        n_bm = apply_toc(doc, bookmarks)
-        doc.save(str(out_pdf), garbage=3, deflate=True)
-    finally:
-        doc.close()
+        n_ann, n_bm = _save(out_pdf)
+    except Exception as e:
+        msg = str(e).lower()
+        # Permission denied / locked / sharing violation 系を検出して別名で保存
+        is_lock = ("permission denied" in msg or "being used by another" in msg
+                   or "sharing violation" in msg or "cannot remove file" in msg)
+        if not is_lock:
+            return {"error": f"PDF 保存エラー: {e}"}, 500
+        from datetime import datetime as _dt
+        ts = _dt.now().strftime("%H%M%S")
+        out_pdf = output_dir / f"{case_id}_本願_bookmarked_{ts}.pdf"
+        try:
+            n_ann, n_bm = _save(out_pdf)
+        except Exception as e2:
+            return {
+                "error": (
+                    "PDF 保存エラー (リトライ後も失敗): " + str(e2) +
+                    "\n既存の本願PDFを開いている PDF ビューア (PDF-XChange Editor 等) を閉じてから再試行してください"
+                )
+            }, 500
 
     return {
         "success": True,

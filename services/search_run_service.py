@@ -57,6 +57,182 @@ def _runs_dir(case_id: str) -> Path:
     return d
 
 
+def _hit_text_dir(case_id: str) -> Path:
+    """ヒットの全文キャッシュ保存先（run 横断で再利用）。"""
+    d = get_case_dir(case_id) / "search_runs" / "_hit_text"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_pid(patent_id: str) -> str:
+    """patent_id をファイル名安全に正規化。"""
+    s = (patent_id or "").strip()
+    return re.sub(r'[\\/:*?"<>|]', '_', s) or "_unknown"
+
+
+def get_hit_text(case_id: str, patent_id: str) -> Optional[dict]:
+    p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
+    if not p.exists():
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _default_text_source(patent_id: str) -> str:
+    """patent_id から最適な取得元を決める。
+
+    - 純粋な JP 公報 (特開/特願/特許/JP*) → J-PlatPat (canonical 日本語)
+    - 再公表/再表 → Google Patents (WO 番号で直接アクセス可能、J-PlatPat は失敗しがち)
+    - その他 → Google Patents
+    """
+    s = (patent_id or "").upper()
+    # 再公表/再表 は WO の翻訳版なので Google Patents を優先
+    if any(p in s for p in ("再公表", "再表")):
+        return "google"
+    if any(p in s for p in ("特開", "特願", "特許")):
+        return "jplatpat"
+    if re.match(r'^\s*JP[\s\-]?\d', s):
+        return "jplatpat"
+    return "google"
+
+
+_PKM_GROUP_COLORS = [
+    '#ef4444', '#a855f7', '#ec4899', '#3b82f6',
+    '#22c55e', '#f97316', '#14b8a6', '#6b7280',
+]
+
+
+def pkm_group_color(gid: int) -> str:
+    try:
+        i = int(gid)
+    except (TypeError, ValueError):
+        return _PKM_GROUP_COLORS[0]
+    return _PKM_GROUP_COLORS[(i - 1) % len(_PKM_GROUP_COLORS)]
+
+
+def pkm_build_index(keywords_data) -> list:
+    """Step 3 のキーワードグループ辞書からハイライト用 index を作る。"""
+    items = []
+    for g in (keywords_data or []):
+        gid = g.get("group_id")
+        for kw in g.get("keywords", []) or []:
+            term = (kw or {}).get("term", "")
+            if isinstance(term, str):
+                term = term.strip()
+            if term:
+                items.append({"term": term, "gid": gid})
+    items.sort(key=lambda x: -len(x["term"]))
+    return items
+
+
+def pkm_highlight_python(text: str, index: list) -> dict:
+    """JS の pkmHighlight() と同じロジックの Python 版。
+    Returns: {"html": <escaped HTML with <mark>>, "counts": {gid: n}}
+    """
+    import html as _html
+    t = text or ""
+    if not t or not index:
+        return {"html": _html.escape(t), "counts": {}}
+    t_lower = t.lower()
+    positions = []
+    for item in index:
+        term = item["term"]
+        tlow = term.lower()
+        if not tlow:
+            continue
+        pos = 0
+        L = len(term)
+        while True:
+            pos = t_lower.find(tlow, pos)
+            if pos < 0:
+                break
+            overlap = any(
+                not (pos + L <= p["start"] or pos >= p["start"] + p["length"])
+                for p in positions
+            )
+            if not overlap:
+                positions.append({"start": pos, "length": L, "gid": item["gid"]})
+            pos += L
+    positions.sort(key=lambda p: p["start"])
+    counts = {}
+    for p in positions:
+        counts[p["gid"]] = counts.get(p["gid"], 0) + 1
+    out = []
+    prev = 0
+    for p in positions:
+        out.append(_html.escape(t[prev:p["start"]]))
+        matched = _html.escape(t[p["start"]:p["start"] + p["length"]])
+        color = pkm_group_color(p["gid"])
+        out.append(
+            f'<mark class="pkm-mark" style="--c:{color};" '
+            f'data-gid="{p["gid"]}">{matched}</mark>'
+        )
+        prev = p["start"] + p["length"]
+    out.append(_html.escape(t[prev:]))
+    return {"html": "".join(out), "counts": counts}
+
+
+def fetch_and_cache_hit_text(case_id: str, patent_id: str, *, force: bool = False,
+                              language: str = "ja", source: str = "auto") -> dict:
+    """全文を取得して案件配下にキャッシュ。force=False なら既存を返す。
+
+    source: 'auto' (JP 系は jplatpat / それ以外 google), 'google', 'jplatpat'
+
+    text の取得元が J-PlatPat の場合でも、実施例の表画像は Google Patents の
+    description ページにのみ埋め込まれているため並列で Google にも問い合わせて
+    images だけマージする (Ryzen 9 を活かして wall time を増やさない)。
+    """
+    if not patent_id:
+        return {"error": "patent_id が空です"}
+    cached = get_hit_text(case_id, patent_id)
+    if cached and not force:
+        cached["from_cache"] = True
+        return cached
+
+    chosen = source if source in ("google", "jplatpat") else _default_text_source(patent_id)
+    if chosen == "jplatpat":
+        from modules.jplatpat_client import fetch_jplatpat_full_text
+        from modules.google_patents_scraper import fetch_patent_full_text
+        from concurrent.futures import ThreadPoolExecutor
+        # J-PlatPat (text canonical) と Google Patents (images) を並列取得
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            f_jp = ex.submit(fetch_jplatpat_full_text, patent_id, language=language)
+            f_g = ex.submit(fetch_patent_full_text, patent_id, language=language)
+            try:
+                data = f_jp.result(timeout=60)
+            except Exception as e:
+                data = {"error": f"J-PlatPat 取得失敗: {e}"}
+            try:
+                g_data = f_g.result(timeout=60)
+            except Exception:
+                g_data = {}
+        # J-PlatPat 失敗 → Google にフォールバック
+        if not data.get("description") and not data.get("claims"):
+            if g_data.get("description") or g_data.get("claims"):
+                data = g_data
+                data["source"] = "google_fallback"
+        else:
+            # J-PlatPat 成功: Google から images だけ拝借 (text は J-PlatPat 優先)
+            if g_data.get("images") and not data.get("images"):
+                data["images"] = g_data["images"]
+    else:
+        from modules.google_patents_scraper import fetch_patent_full_text
+        data = fetch_patent_full_text(patent_id, language=language)
+        data.setdefault("source", "google")
+
+    p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    data["from_cache"] = False
+    return data
+
+
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -108,12 +284,63 @@ def list_runs(case_id: str) -> list:
     return runs
 
 
+_PID_RECOVERY_PATTERNS = [
+    re.compile(r'(特開\s*\d{4}\s*[-ー]\s*\d+)'),
+    re.compile(r'(特表\s*\d{4}\s*[-ー]\s*\d+)'),
+    re.compile(r'(再(?:公)?表\s*\d{4}\s*[-ー/／]\s*\d+)'),
+    re.compile(r'(特許\s*第?\s*\d+(?:号)?)'),
+    re.compile(r'(WO\s*\d{4}\s*[/／-]?\s*\d+)'),
+    re.compile(r'(JP\s*\d{4}[-]?\d{6}\s*[AB]\d?)', re.IGNORECASE),
+    re.compile(r'(JP\s*\d{5,8}\s*B\d?)', re.IGNORECASE),
+]
+
+
+def _recover_pid_from_text(*texts) -> str:
+    """row_text や title 等から公開番号を抽出。最初に見つかったものを返す。"""
+    for t in texts:
+        if not t:
+            continue
+        for pat in _PID_RECOVERY_PATTERNS:
+            m = pat.search(t)
+            if m:
+                return re.sub(r'\s+', '', m.group(1))
+    return ""
+
+
+def _heal_run_hits(data: dict) -> bool:
+    """ヒット中の patent_id 欠損を title / row_text から救出。書き換えがあれば True。"""
+    changed = False
+    for h in (data.get("hits") or []):
+        pid = (h.get("patent_id") or "").strip()
+        if pid:
+            continue
+        # title が公開番号らしき文字列なら昇格
+        recovered = _recover_pid_from_text(h.get("title"), h.get("row_text"))
+        if recovered:
+            h["patent_id"] = recovered
+            # title が公開番号と同一なら、タイトル欄として不適なのでクリア
+            if h.get("title") and recovered.replace(" ", "") in h["title"].replace(" ", ""):
+                # 別途 row_text からタイトルを再推定してもよいが、
+                # まずは patent_id 復旧だけ行う
+                h["title"] = ""
+            changed = True
+    return changed
+
+
 def load_run(case_id: str, run_id: str) -> Optional[dict]:
     p = _runs_dir(case_id) / f"{run_id}.json"
     if not p.exists():
         return None
     with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    # 古いランで再表がスラッシュ区切りのため patent_id 取得に失敗していたものを救出
+    if _heal_run_hits(data):
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+    return data
 
 
 def save_run(case_id: str, data: dict) -> Path:
@@ -646,7 +873,16 @@ def validate_formula(formula: str) -> dict:
         break
     if missing_tag:
         warnings.append(
-            "キーワード括弧の直後に構造タグ (/TX /TI /AB+CL /CL /FI /FT など) が無い可能性があります"
+            "キーワード括弧の直後に構造タグ (/TX /TI /AB /CL /FI /FT など) が無い可能性があります"
+        )
+
+    # 構造タグの '+' 連結 (例: /AB+CL) は J-PlatPat で構文エラーになる
+    composite_tag_matches = re.findall(r'/[A-Z]{2,4}\+[A-Z]{2,4}(?:\+[A-Z]{2,4})*', formula)
+    if composite_tag_matches:
+        bad = ", ".join(sorted(set(composite_tag_matches)))
+        errors.append(
+            f"構造タグの '+' 連結は J-PlatPat で構文エラーになります: {bad} "
+            "→ (キーワード)/AB+(キーワード)/CL の形に書き直すか、片方 (例: /CL) のみにしてください"
         )
 
     return {
@@ -696,14 +932,54 @@ def get_keyword_snippets(case_id: str) -> dict:
         }
     """
     case_dir = get_case_dir(case_id)
-    p = case_dir / "search" / "keyword_dictionary.json"
     snippets: dict = {"groups": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
-    if not p.exists():
-        return snippets
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
+
+    # 優先: Stage 3 が生成した keyword_dictionary.json (より洗練された語彙)
+    # フォールバック: Step 3 の keywords.json (ユーザーが Step 3 で直接編集したもの)
+    p = case_dir / "search" / "keyword_dictionary.json"
+    data = None
+    if p.exists():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+    if not data or (not data.get("keyword_groups") and not data.get("groups")):
+        # Step 3 の keywords.json から再構成
+        kw_path = case_dir / "keywords.json"
+        if kw_path.exists():
+            try:
+                with open(kw_path, "r", encoding="utf-8") as f:
+                    kw_groups = json.load(f) or []
+            except Exception:
+                kw_groups = []
+            if kw_groups:
+                # keywords.json のスキーマ → keyword_dictionary 互換に変換
+                data = {
+                    "keyword_groups": [
+                        {
+                            "label": g.get("label") or f"group{g.get('group_id', '')}",
+                            "terms": [
+                                kw.get("term", "")
+                                for kw in (g.get("keywords") or [])
+                                if isinstance(kw, dict) and kw.get("term")
+                            ],
+                        }
+                        for g in kw_groups
+                        if isinstance(g, dict)
+                    ],
+                    "fi": [
+                        c
+                        for g in kw_groups
+                        for c in ((g.get("search_codes") or {}).get("fi") or [])
+                    ],
+                    "fterm": [
+                        c
+                        for g in kw_groups
+                        for c in ((g.get("search_codes") or {}).get("fterm") or [])
+                    ],
+                }
+    if not data:
         return snippets
 
     # キーワード内ハイフンは J-PlatPat では NOT 扱いになるため全角 '－' に変換

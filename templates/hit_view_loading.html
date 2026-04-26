@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>取得中: {{ patent_id }}</title>
+<style>
+  body { font-family:'Segoe UI','Yu Gothic UI',sans-serif;
+    background:#0f172a; color:#e2e8f0; margin:0; padding:0;
+    display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  .box { text-align:center; padding:2rem 3rem; }
+  h1 { font-size:1.3rem; margin-bottom:1rem; }
+  .pid { color:#93c5fd; font-family:monospace; }
+  .src { display:inline-block; padding:2px 10px; border-radius:8px; font-size:0.78rem;
+    margin:0 4px; background:rgba(168,85,247,0.15); color:#c084fc;
+    border:1px solid #a855f7; }
+  .spinner { width:40px; height:40px; border:4px solid #334155;
+    border-top-color:#3b82f6; border-radius:50%; margin:1.5rem auto;
+    animation:spin 0.8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .progress { color:#94a3b8; font-size:0.85rem; margin-top:0.5rem; }
+  .err { color:#fca5a5; padding:1rem; background:#450a0a; border-radius:8px;
+    margin-top:1rem; max-width:540px; text-align:left; }
+  .err pre { white-space:pre-wrap; font-size:0.78rem; margin-top:0.5rem; }
+  button { background:#1e293b; border:1px solid #475569; color:#e2e8f0;
+    padding:0.5rem 1.2rem; border-radius:6px; cursor:pointer; font-size:0.85rem;
+    margin-top:1rem; }
+  button:hover { border-color:#3b82f6; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1><span class="pid">{{ patent_id }}</span> の全文を取得中</h1>
+  <div>
+    取得元:
+    <span class="src" id="src-label">{{ source_label }}</span>
+  </div>
+  <div class="spinner"></div>
+  <div class="progress" id="status">サーバに問い合わせています... ({{ source_label }})</div>
+  <div id="err-box"></div>
+</div>
+<script>
+const CASE_ID = {{ case_id|tojson }};
+const PID = {{ patent_id|tojson }};
+const SRC = {{ source|tojson }};
+const t0 = Date.now();
+const statusEl = document.getElementById('status');
+
+function tickStatus() {
+  const e = ((Date.now() - t0) / 1000).toFixed(0);
+  statusEl.textContent = `取得中... ${e}s 経過 (通常 8〜15s)`;
+}
+const tickT = setInterval(tickStatus, 500);
+
+(async () => {
+  try {
+    const r = await fetch(`/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(PID)}/fetch-text`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: false, source: SRC || 'auto'}),
+    });
+    clearInterval(tickT);
+    if (r.ok) {
+      // 取得完了 → このページをハイライトビューにリロード
+      location.reload();
+      return;
+    }
+    const err = await r.json().catch(() => ({}));
+    document.getElementById('err-box').innerHTML =
+      '<div class="err"><strong>取得に失敗しました</strong><pre>' +
+      (err.error || ('HTTP ' + r.status)) +
+      '</pre><button onclick="location.reload()">再試行</button></div>';
+  } catch (e) {
+    clearInterval(tickT);
+    document.getElementById('err-box').innerHTML =
+      '<div class="err"><strong>通信エラー</strong><pre>' + (e.message || e) +
+      '</pre><button onclick="location.reload()">再試行</button></div>';
+  }
+})();
+</script>
+</body>
+</html>

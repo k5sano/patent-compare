@@ -8,6 +8,7 @@ PatentCompare Web GUI
 
 import json
 import os
+import re
 import subprocess
 import yaml
 from pathlib import Path
@@ -430,31 +431,80 @@ def download_file(case_id, filename):
 
 
 def _resolve_hongan_pdf_path(case_id):
-    """本願PDFの実ファイルパスを解決。見つからなければ None。"""
+    """本願PDFの実ファイルパスを解決。見つからなければ None。
+
+    優先順位:
+      1. hongan.json の source_pdf (作成時に記録)
+      2. patent_number で始まる PDF (例: 特開2024-051653.pdf)
+      3. case_id 文字列を含む PDF (例: 2024-051653 を含むファイル)
+      4. JP{year}{serial} 形式の PDF (例: JP2024051653A.pdf)
+      5. input/ の中で引用文献 ID を含まない最初の PDF (最終フォールバック)
+    """
+    import re as _re
     case_dir = get_case_dir(case_id)
     hongan_path = case_dir / "hongan.json"
+    meta = load_case_meta(case_id) or {}
+    input_dir = case_dir / "input"
 
+    patent_number = ""
     if hongan_path.exists():
         try:
             with open(hongan_path, "r", encoding="utf-8") as f:
                 hongan = json.load(f)
+            # 1. source_pdf に記録された名前
             src = hongan.get("source_pdf")
             if src:
-                candidate = case_dir / "input" / src
+                candidate = input_dir / Path(str(src)).name
                 if candidate.exists():
                     return candidate
+            patent_number = (hongan.get("patent_number") or "").strip()
         except Exception:
             pass
+    if not patent_number:
+        patent_number = (meta.get("patent_number") or "").strip()
 
-    # フォールバック: input/ の中で引用文献 ID を含まない PDF を探す
-    input_dir = case_dir / "input"
-    if input_dir.exists():
-        meta = load_case_meta(case_id) or {}
-        cit_ids = [c["id"] for c in meta.get("citations", [])]
+    if not input_dir.exists():
+        return None
+
+    # 2. ファイル名に「本願」を含むものは最優先 (ユーザーが手動マーク)
+    for p in input_dir.glob("*.pdf"):
+        if "本願" in p.stem:
+            return p
+
+    # 3. patent_number 一致 (前方一致)
+    if patent_number:
         for p in input_dir.glob("*.pdf"):
-            if not any(cid and cid in p.stem for cid in cit_ids):
+            if p.stem == patent_number:
                 return p
-    return None
+        for p in input_dir.glob("*.pdf"):
+            if p.stem.startswith(patent_number):
+                return p
+
+    # 4. case_id 文字列を stem に含む (例: 2024-051653 を含む)
+    if case_id:
+        for p in input_dir.glob("*.pdf"):
+            if case_id in p.stem:
+                return p
+
+    # 5. JP{year}{serial}A / JPA{year}{serial} 形式 (Google Patents/J-PlatPat DL 名)
+    m = _re.match(r'^(\d{4})-(\d+)$', case_id or "")
+    if m:
+        joined = f"{m.group(1)}{m.group(2).zfill(6)}"  # 例: 2024051653
+        for p in input_dir.glob("*.pdf"):
+            if joined in p.stem:
+                return p
+
+    # 5. 最終フォールバック: 引用文献 ID を含まない PDF (alphabetically first を避け、
+    #    並びを安定させるため stem 長さでソートして「短い名前 = 余計な接頭辞のないもの」優先)
+    cit_ids = [c["id"] for c in meta.get("citations", [])]
+    candidates = [
+        p for p in input_dir.glob("*.pdf")
+        if not any(cid and cid in p.stem for cid in cit_ids)
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: (len(p.stem), p.name))
+    return candidates[0]
 
 
 PDFXCHANGE_CANDIDATES = [
@@ -957,6 +1007,184 @@ def jplatpat_session_scrape(case_id):
             diff = None
 
     return jsonify({"ok": True, "run": data, "count": len(hits), "diff_summary": diff})
+
+
+@app.route("/case/<case_id>/search-run/hit/<path:patent_id>/text", methods=["GET"])
+def get_hit_full_text(case_id, patent_id):
+    """キャッシュ済みヒット全文を返す（無ければ 404）。"""
+    from services.search_run_service import get_hit_text
+    d = get_hit_text(case_id, patent_id)
+    if d is None:
+        return jsonify({"error": "未取得"}), 404
+    return jsonify(d)
+
+
+@app.route("/case/<case_id>/search-run/hit/<path:patent_id>/view")
+def hit_full_text_view(case_id, patent_id):
+    """ヒットの全文ハイライトビュー（新タブで開く想定）。
+
+    キャッシュが無ければ自動取得する。Step 3 のキーワードグループの色で
+    `<mark>` を重畳し、グループ別ヒット数を凡例として表示。
+    """
+    from services.search_run_service import (
+        get_hit_text, _default_text_source,
+        pkm_build_index, pkm_highlight_python, pkm_group_color,
+    )
+    hit = get_hit_text(case_id, patent_id)
+    if not hit:
+        # キャッシュ無し: 即座に取得中ローダーページを返し、ブラウザ側で fetch → reload
+        src = _default_text_source(patent_id)
+        src_label = {"jplatpat": "J-PlatPat", "google": "Google Patents"}.get(src, src)
+        return render_template(
+            "hit_view_loading.html",
+            patent_id=patent_id,
+            case_id=case_id,
+            source=src,
+            source_label=src_label,
+        )
+    if "error" in hit and not hit.get("description") and not hit.get("claims"):
+        return render_template(
+            "hit_view.html",
+            patent_id=patent_id,
+            title="（取得失敗）",
+            source="google",
+            source_label="エラー",
+            source_url="",
+            google_url=f"https://patents.google.com/?q={patent_id}",
+            jplatpat_url="",
+            groups=[],
+            abstract_unit={"html": f'<div class="empty">エラー: {hit.get("error","")}</div>', "groups": []},
+            claims_units=[],
+            para_units=[],
+            total_hits=0,
+            total_chars=0,
+        )
+
+    keywords = load_json_file(case_id, "keywords.json") or []
+    index = pkm_build_index(keywords)
+
+    counts_total = {}
+
+    def _accum(c):
+        for k, v in (c or {}).items():
+            counts_total[k] = counts_total.get(k, 0) + v
+
+    # Highlight 要約 (1 unit)
+    abstract_h = pkm_highlight_python(hit.get("abstract") or "", index)
+    _accum(abstract_h["counts"])
+    abstract_unit = {
+        "html": abstract_h["html"],
+        "groups": sorted(int(g) for g in abstract_h["counts"].keys() if g is not None),
+    } if abstract_h["html"] else None
+
+    # Highlight 請求項 (各 claim を unit)
+    claims_units = []
+    for cl in (hit.get("claims") or []):
+        ch = pkm_highlight_python(cl, index)
+        _accum(ch["counts"])
+        claims_units.append({
+            "html": ch["html"],
+            "groups": sorted(int(g) for g in ch["counts"].keys() if g is not None),
+        })
+
+    # Highlight 明細書本文 — 段落マーカー【XXXX】単位で分割
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+    desc = hit.get("description") or ""
+    para_units = []
+    if desc:
+        # 全角・半角どちらでも【\d+】を捕捉
+        parts = re.split(r'(【\s*[\d０-９]+\s*】)', desc)
+        # parts[0] は最初のマーカー前のリード（例「発明の詳細な説明】【技術分野】」など）。
+        if parts and parts[0].strip():
+            head = pkm_highlight_python(parts[0], index)
+            _accum(head["counts"])
+            para_units.append({
+                "pid": "",
+                "marker": "",
+                "html": head["html"],
+                "groups": sorted(int(g) for g in head["counts"].keys() if g is not None),
+            })
+        for i in range(1, len(parts) - 1, 2):
+            marker = (parts[i] or "").strip()
+            body = parts[i + 1] if (i + 1) < len(parts) else ""
+            m_pid = re.search(r'(\d+)', marker.translate(fw2hw))
+            pid = m_pid.group(1).zfill(4) if m_pid else ""
+            ph = pkm_highlight_python(body, index)
+            _accum(ph["counts"])
+            para_units.append({
+                "pid": pid,
+                "marker": marker,
+                "html": ph["html"],
+                "groups": sorted(int(g) for g in ph["counts"].keys() if g is not None),
+            })
+
+    groups_view = []
+    for g in keywords:
+        gid = g.get("group_id")
+        groups_view.append({
+            "gid": gid,
+            "label": g.get("label") or f"group{gid}",
+            "color": pkm_group_color(gid),
+            "count": counts_total.get(gid, 0),
+        })
+    groups_view.sort(key=lambda x: -x["count"])
+
+    src = (hit.get("source") or "google").lower()
+    src_label = {
+        "jplatpat": "J-PlatPat",
+        "google": "Google Patents",
+        "google_fallback": "Google Patents",  # 取得元としては Google。経緯は表示しない
+    }.get(src, src)
+
+    # Build cross-source URLs
+    from modules.jplatpat_client import build_jplatpat_fixed_url
+    jpp_url = build_jplatpat_fixed_url(patent_id)
+    gp_url = f"https://patents.google.com/?q={patent_id}"
+    src_url = hit.get("url") or (jpp_url if src == "jplatpat" else gp_url)
+
+    total_chars = (
+        len(hit.get("abstract") or "")
+        + len(hit.get("description") or "")
+        + sum(len(c or "") for c in (hit.get("claims") or []))
+    )
+
+    images = hit.get("images") or []
+
+    return render_template(
+        "hit_view.html",
+        patent_id=patent_id,
+        title=hit.get("title") or "",
+        source=src,
+        source_label=src_label,
+        source_url=src_url,
+        google_url=gp_url,
+        jplatpat_url=jpp_url,
+        groups=groups_view,
+        abstract_unit=abstract_unit,
+        claims_units=claims_units,
+        para_units=para_units,
+        images=images,
+        total_hits=sum(counts_total.values()),
+        total_chars=total_chars,
+    )
+
+
+@app.route("/case/<case_id>/search-run/hit/<path:patent_id>/fetch-text", methods=["POST"])
+def fetch_hit_full_text(case_id, patent_id):
+    """ヒット全文を取得してキャッシュ。source='auto' / 'google' / 'jplatpat'。"""
+    from services.search_run_service import fetch_and_cache_hit_text
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
+    language = (body.get("language") or "ja").strip() or "ja"
+    source = (body.get("source") or "auto").strip() or "auto"
+    try:
+        data = fetch_and_cache_hit_text(case_id, patent_id, force=force,
+                                         language=language, source=source)
+    except Exception as e:
+        return jsonify({"error": f"取得エラー: {e}"}), 500
+    if "error" in data and not data.get("description") and not data.get("claims"):
+        return jsonify(data), 500
+    return jsonify(data)
 
 
 @app.route("/case/<case_id>/search-run/jplatpat/status", methods=["GET"])

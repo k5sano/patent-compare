@@ -1087,9 +1087,47 @@ const SEG_DATA = {};
 })();
 
 // ================================================================
+// ================================================================
+// キーワードハイライト (kw-marked) 永続化: ページ再読込でも残るよう localStorage に保存
+// ================================================================
+const _KW_MARK_STORAGE_KEY = 'patent-compare:kw-marks:' + (CASE_ID || 'unknown');
+
+function _kwMarkSave() {
+  try {
+    const marks = { kw: [], ft: [] };
+    document.querySelectorAll('.kw-tag.kw-marked').forEach(el => {
+      marks.kw.push((el.dataset.gid || '') + '|' + (el.dataset.term || ''));
+    });
+    document.querySelectorAll('.fterm-tag.kw-marked').forEach(el => {
+      marks.ft.push((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
+    });
+    localStorage.setItem(_KW_MARK_STORAGE_KEY, JSON.stringify(marks));
+  } catch (e) { /* localStorage 不可 (シークレット等) は黙ってスキップ */ }
+}
+
+function _kwMarkRestore() {
+  let marks = null;
+  try {
+    const raw = localStorage.getItem(_KW_MARK_STORAGE_KEY);
+    if (raw) marks = JSON.parse(raw);
+  } catch (e) { return; }
+  if (!marks) return;
+  const kwSet = new Set(marks.kw || []);
+  const ftSet = new Set(marks.ft || []);
+  document.querySelectorAll('.kw-tag').forEach(el => {
+    const key = (el.dataset.gid || '') + '|' + (el.dataset.term || '');
+    if (kwSet.has(key)) el.classList.add('kw-marked');
+  });
+  document.querySelectorAll('.fterm-tag').forEach(el => {
+    const key = (el.dataset.gid || '') + '|' + (el.dataset.code || '');
+    if (ftSet.has(key)) el.classList.add('kw-marked');
+  });
+}
+
 // メイン描画
 // ================================================================
 function renderGroups() {
+  if (typeof _pkmInvalidateIndex === 'function') _pkmInvalidateIndex();
   const container = document.getElementById('kw-groups-container');
   if (!kwGroups || kwGroups.length === 0) {
     container.innerHTML = `
@@ -1103,6 +1141,8 @@ function renderGroups() {
   if (typeof renderFtermCatalog === 'function') {
     try { renderFtermCatalog(); } catch(_) { /* no-op */ }
   }
+  // 描画完了後にハイライト状態を復元 (再読込でも消えないように)
+  if (typeof _kwMarkRestore === 'function') _kwMarkRestore();
 }
 
 function renderGroup(g) {
@@ -1290,6 +1330,7 @@ function clearSelection(gid) {
   const groupEl = document.getElementById('kw-group-' + gid);
   if (!groupEl) return;
   groupEl.querySelectorAll('.kw-tag.kw-marked, .fterm-tag.kw-marked').forEach(el => el.classList.remove('kw-marked'));
+  if (typeof _kwMarkSave === 'function') _kwMarkSave();
 }
 
 async function deleteUnselected(gid) {
@@ -1985,6 +2026,7 @@ document.addEventListener('DOMContentLoaded', () => {
       _kwClickTimer = setTimeout(() => {
         tag.classList.toggle('kw-marked');
         _kwClickTimer = null;
+        _kwMarkSave();
       }, 220);
     });
     kwContainer.addEventListener('dblclick', (e) => {
@@ -4376,17 +4418,71 @@ function srRenderHitCard(h) {
   const screening = h.screening || 'pending';
   const scrClass = SR_SCREEN_CLASS[screening] || 'sr-pending';
   const pid = h.patent_id || '';
-  const title = (h.title || '').replace(/</g, '&lt;');
-  const applicant = (h.applicant || '').replace(/</g, '&lt;');
   const date = h.publication_date || '';
   const ipc = (h.ipc || []).slice(0, 3).join(' ');
-  const abstract = (h.abstract || '').replace(/</g, '&lt;');
-  const claim1 = (h.claim1 || '').replace(/</g, '&lt;');
   const aiScore = (h.ai_score != null) ? `<span class="sr-score">AI: ${h.ai_score}</span>` : '';
-  const aiReason = (h.ai_reason || '').replace(/</g, '&lt;');
+  const aiReason = _pkmEsc(h.ai_reason || '');
   const dled = h.downloaded_as_citation ? '<span class="sr-dled">引用登録済</span>' : '';
   const jpUrl = (typeof buildJplatpatUrl === 'function') ? (buildJplatpatUrl(pid) || '') : '';
   const gpUrl = `https://patents.google.com/?q=${encodeURIComponent(pid)}`;
+
+  const idx = _pkmGetIndex();
+  const useHighlight = idx.length > 0 && _pkmEnabled;
+  // 全文キャッシュ
+  const ft = (window._pkmFullTexts && window._pkmFullTexts[pid]) || null;
+  // 全文取得済みなら、ヒット側の値より取得時のメタ情報を優先（特に title が空の場合の救出）
+  const titleSrc = (ft && ft.title) || h.title || '';
+  const applicantSrc = (ft && ft.assignee) || h.applicant || '';
+  const abstractSrc = h.abstract || '';
+  const claim1Src = h.claim1 || '';
+
+  // ヒット数集計（タイトル+要約+claim1+全文(あれば)）
+  const totalCounts = {};
+  const addCounts = (c) => Object.keys(c || {}).forEach(k => { totalCounts[k] = (totalCounts[k] || 0) + c[k]; });
+  if (useHighlight) {
+    addCounts(pkmHighlight(titleSrc, idx).counts);
+    addCounts(pkmHighlight((ft && ft.abstract) || abstractSrc, idx).counts);
+    addCounts(pkmHighlight(claim1Src, idx).counts);
+    if (ft && Array.isArray(ft.claims)) addCounts(pkmHighlight(ft.claims.join('\n\n'), idx).counts);
+    if (ft && ft.description) addCounts(pkmHighlight(ft.description, idx).counts);
+  }
+
+  // チップ（kwGroups があれば常に表示。0件もグレーで見せて「対象未ヒット」を伝える）
+  let countBar = '';
+  const groups = (kwGroups || []).slice().sort((a, b) =>
+    (totalCounts[b.group_id] || 0) - (totalCounts[a.group_id] || 0));
+  if (groups.length > 0) {
+    const chips = groups.map(g => {
+      const n = totalCounts[g.group_id] || 0;
+      const c = groupColor(g.group_id);
+      const cls = n > 0 ? 'sr-pkm-chip-on' : 'sr-pkm-chip-off';
+      return `<span class="sr-pkm-chip ${cls}" style="--c:${c};" title="${_pkmEsc(g.label || ('group' + g.group_id))}">${_pkmEsc((g.label || '').slice(0, 8))}<span class="sr-pkm-chip-n">${n}</span></span>`;
+    }).join('');
+    const scope = ft ? '全文' : (abstractSrc || claim1Src ? '要約のみ' : '未取得');
+    countBar = `<div class="sr-pkm-counts" title="集計対象: ${scope}">${chips}<span class="sr-pkm-scope">${scope}</span></div>`;
+  }
+
+  // 取得元バッジ
+  const srcBadge = (() => {
+    if (!ft || !ft.source) {
+      return '<span class="sr-hit-src sr-src-none">未取得</span>';
+    }
+    const map = {
+      'jplatpat': { label: 'J-PlatPat', cls: 'sr-src-jp', tip: 'J-PlatPat から取得' },
+      'google': { label: 'Google', cls: 'sr-src-gp', tip: 'Google Patents から取得' },
+      'google_fallback': { label: 'Google', cls: 'sr-src-gp', tip: 'J-PlatPat 失敗 → Google Patents から代替取得' },
+    };
+    const m = map[ft.source] || { label: ft.source, cls: '', tip: '' };
+    return `<span class="sr-hit-src ${m.cls}" title="${_pkmEsc(m.tip)}">${m.label}</span>`;
+  })();
+
+  // 個別取得ボタン（コンパクト）
+  const fetchBtnLabel = ft ? '🔄' : '📄';
+  const fetchBtnTitle = ft ? '全文を再取得' : 'この文献の全文を取得';
+
+  // タイトル → 全文ハイライトビューを新タブで開く
+  const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view`;
+  const titleEsc = _pkmEsc(titleSrc) || '<em style="color:var(--text2);">(タイトル未取得 — クリックで全文取得)</em>';
 
   return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
     <div class="sr-hit-row1">
@@ -4403,16 +4499,216 @@ function srRenderHitCard(h) {
         <span class="sr-hit-ipc">${ipc}</span>
         ${aiScore}${dled}
         <span style="flex:1"></span>
+        ${srcBadge}
+        <button class="sr-hit-fetch-btn" onclick="srFetchHitFullText('${_pkmEsc(pid).replace(/'/g, "\\'")}', this)" title="${fetchBtnTitle}">${fetchBtnLabel}</button>
         ${jpUrl ? `<a href="${jpUrl}" target="_blank" class="sr-hit-link">J-PlatPat</a>` : ''}
         <a href="${gpUrl}" target="_blank" class="sr-hit-link">Google Patents</a>
       </div>
     </div>
-    <div class="sr-hit-title">${title}</div>
-    <div class="sr-hit-applicant">${applicant}</div>
-    ${abstract ? `<details class="sr-hit-details"><summary>要約</summary><div class="sr-hit-text">${abstract}</div></details>` : ''}
-    ${claim1 ? `<details class="sr-hit-details"><summary>請求項1</summary><div class="sr-hit-text">${claim1}</div></details>` : ''}
+    <h4 class="sr-hit-title-row"><a href="${viewUrl}" target="_blank" rel="noopener" class="sr-hit-title-link" title="クリックで全文ハイライトビューを新タブで開く">${titleEsc} <span class="sr-hit-open-icon">↗</span></a></h4>
+    <div class="sr-hit-applicant">${_pkmEsc(applicantSrc)}</div>
+    ${countBar}
     ${aiReason ? `<div class="sr-hit-reason">AI: ${aiReason}</div>` : ''}
   </div>`;
+}
+
+// ヒットの全文を Google Patents から取得しセッションキャッシュへ
+window._pkmFullTexts = window._pkmFullTexts || {};
+
+function _pkmGetSelectedSource() {
+  const el = document.getElementById('sr-pkm-source');
+  return (el && el.value) || 'auto';
+}
+
+async function srFetchHitFullText(patentId, btn) {
+  if (!patentId) return;
+  const origLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '取得中...'; }
+  const source = _pkmGetSelectedSource();
+  // 既にキャッシュ (window._pkmFullTexts) を持っていれば「再取得」とみなし force=true。
+  // そうでなければ初回取得 (force=false。サーバ側ファイルキャッシュがあればそれを使う)。
+  const isRefetch = !!(window._pkmFullTexts && window._pkmFullTexts[patentId]);
+  try {
+    const r = await fetch(`/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(patentId)}/fetch-text`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: isRefetch, source}),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || ('HTTP ' + r.status));
+    }
+    const data = await r.json();
+    window._pkmFullTexts[patentId] = data;
+    srRerenderOneHitCard(patentId);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = origLabel; }
+    alert('全文取得失敗: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+// 1 件のヒットカードだけ再描画（全件 renderSrHits より高速＆視覚的）
+function srRerenderOneHitCard(patentId) {
+  if (!_srCurrentRun) return;
+  const h = (_srCurrentRun.hits || []).find(x => x.patent_id === patentId);
+  if (!h) return;
+  const card = document.querySelector(`.sr-hit-card[data-pid="${CSS.escape(patentId)}"]`);
+  if (!card) return;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = srRenderHitCard(h);
+  const fresh = tmp.firstElementChild;
+  if (fresh) card.replaceWith(fresh);
+}
+
+// N 並列ワーカーでアイテムを処理（順序保持しない、完了したものから処理）
+async function _runWithConcurrency(items, fn, concurrency) {
+  let idx = 0;
+  const workers = [];
+  for (let w = 0; w < concurrency; w++) {
+    workers.push((async () => {
+      while (idx < items.length) {
+        const i = idx++;
+        try { await fn(items[i], i); } catch (e) { /* 個別失敗はスキップ */ }
+      }
+    })());
+  }
+  await Promise.all(workers);
+}
+
+async function srFetchAllHitsFullText(opts) {
+  opts = opts || {};
+  const force = !!opts.force;
+  if (!_srCurrentRun) {
+    alert('検索ランが選択されていません。先に検索を実行してください。');
+    return;
+  }
+  const hits = _srCurrentRun.hits || [];
+  if (hits.length === 0) { alert('ヒットがありません。'); return; }
+  const source = _pkmGetSelectedSource();
+  // force=true なら全件、そうでなければ未取得のみ
+  const target = force ? hits.slice() : hits.filter(h => !window._pkmFullTexts[h.patent_id]);
+  if (target.length === 0) {
+    alert('全ヒットの全文は既に取得済みです（強制再取得は「🔄 全部再取得」から）');
+    return;
+  }
+  if (force) {
+    if (!confirm(`${target.length} 件の全文を取得元(${source})から強制再取得します。実行しますか？`)) {
+      return;
+    }
+  }
+  const btn = document.querySelector('button[onclick="srFetchAllHitsFullText()"]');
+  const status = document.getElementById('sr-pkm-bulk-status');
+  const bar = document.getElementById('sr-pkm-bulk-bar');
+  const barFill = document.getElementById('sr-pkm-bulk-bar-fill');
+  if (btn) btn.disabled = true;
+  if (bar) bar.style.display = 'block';
+
+  // 並列度: 4 (Ryzen 9 でブラウザ4インスタンス並走 — 体感 3〜4倍速)
+  const CONCURRENCY = 4;
+  let done = 0, ok = 0, ng = 0;
+  const total = target.length;
+  const t0 = Date.now();
+
+  await _runWithConcurrency(target, async (h) => {
+    try {
+      const r = await fetch(`/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(h.patent_id)}/fetch-text`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({force, source}),
+      });
+      if (r.ok) {
+        window._pkmFullTexts[h.patent_id] = await r.json();
+        ok++;
+        srRerenderOneHitCard(h.patent_id);
+      } else {
+        ng++;
+      }
+    } catch (e) { ng++; }
+    done++;
+    if (barFill) barFill.style.width = `${Math.round(done / total * 100)}%`;
+    if (status) {
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      status.textContent = `${done}/${total} 完了 (${elapsed}s, 並列${CONCURRENCY})`;
+    }
+  }, CONCURRENCY);
+
+  const total_s = ((Date.now() - t0) / 1000).toFixed(1);
+  if (status) {
+    status.innerHTML = `完了 (${total_s}s): ✅ ${ok}件 ${ng > 0 ? `/ ❌ ${ng}件失敗` : ''}`;
+  }
+  if (btn) btn.disabled = false;
+}
+
+// ================================================================
+// PKM 風キーワードハイライト（Step 3 キーワードグループを色で重畳）
+// ================================================================
+let _pkmEnabled = true;
+let _pkmIndexCache = null;
+
+function _pkmInvalidateIndex() { _pkmIndexCache = null; }
+
+function _pkmGetIndex() {
+  if (_pkmIndexCache) return _pkmIndexCache;
+  const items = [];
+  for (const g of (kwGroups || [])) {
+    const color = groupColor(g.group_id);
+    for (const kw of (g.keywords || [])) {
+      const t = (kw && kw.term ? String(kw.term) : '').trim();
+      if (!t) continue;
+      items.push({ term: t, gid: g.group_id, color });
+    }
+  }
+  // 長い term を先にマッチさせる（短いものに食われないように）
+  items.sort((a, b) => b.term.length - a.term.length);
+  _pkmIndexCache = items;
+  return items;
+}
+
+function _pkmEsc(s) {
+  return String(s || '').replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function pkmHighlight(text, index) {
+  const t = String(text || '');
+  if (!t || !index || !index.length) return { html: _pkmEsc(t), counts: {} };
+  const tLower = t.toLowerCase();
+  const positions = [];
+  for (const item of index) {
+    const term = item.term;
+    const tlow = term.toLowerCase();
+    if (!tlow) continue;
+    let pos = 0;
+    while ((pos = tLower.indexOf(tlow, pos)) >= 0) {
+      const overlap = positions.some(p =>
+        !(pos + term.length <= p.start || pos >= p.start + p.length));
+      if (!overlap) {
+        positions.push({ start: pos, length: term.length, gid: item.gid, color: item.color });
+      }
+      pos += term.length;
+    }
+  }
+  positions.sort((a, b) => a.start - b.start);
+  const counts = {};
+  positions.forEach(p => { counts[p.gid] = (counts[p.gid] || 0) + 1; });
+  let out = '';
+  let prev = 0;
+  for (const p of positions) {
+    out += _pkmEsc(t.slice(prev, p.start));
+    const matched = _pkmEsc(t.slice(p.start, p.start + p.length));
+    out += `<mark class="pkm-mark" style="--c:${p.color};" data-gid="${p.gid}">${matched}</mark>`;
+    prev = p.start + p.length;
+  }
+  out += _pkmEsc(t.slice(prev));
+  return { html: out, counts };
+}
+
+function srTogglePkm() {
+  _pkmEnabled = !_pkmEnabled;
+  const btn = document.getElementById('btn-sr-pkm');
+  if (btn) {
+    btn.textContent = _pkmEnabled ? '🎨 ハイライト ON' : '🎨 ハイライト OFF';
+    btn.classList.toggle('active', _pkmEnabled);
+  }
+  if (typeof renderSrHits === 'function') renderSrHits();
 }
 
 async function srSetScreening(patentId, screening) {
@@ -4601,6 +4897,126 @@ function srInsertProximity() {
   srInsertText(snippet);
 }
 
+// キーワード term を J-PlatPat 用にサニタイズ:
+//   半角 '-' を全角 '－' に (NOT 演算子と解釈されないように)
+function _kwSanitizeTerm(term) {
+  const t = String(term || '').trim();
+  // 両端がワード文字 (英数 / カナ / かな / 漢字) の '-' を '－' に置換 (反復)
+  const re = /([\w぀-ゟ゠-ヿ一-鿿])-([\w぀-ゟ゠-ヿ一-鿿])/;
+  let prev = null, cur = t;
+  while (prev !== cur) { prev = cur; cur = cur.replace(re, '$1－$2'); }
+  return cur;
+}
+
+// Step 3 のキーワードグループから J-PlatPat 検索式を組み立てる。
+// ルール:
+//   - 「赤字ハイライト (.kw-marked)」を**選択中**とみなし、それだけを使う
+//   - 何も選んでいない場合: 確認ダイアログを出して、押されたら全件使用
+//   - 各グループ内: `(a+b+c)/CL` 形式で OR 結合
+//   - 全グループは `*` (AND) で結合
+//   - FI/Fterm コードもハイライト中のものだけを末尾に AND
+//   - キーワード内の '-' は J-PlatPat の NOT と解釈されるため全角 '－' に置換
+async function srBuildFormulaFromKeywords() {
+  const groups = kwGroups || [];
+  if (groups.length === 0) {
+    alert('Step 3 にキーワードグループがありません。先にグループを作成してください。');
+    return;
+  }
+
+  // DOM のハイライト状態を集計
+  const markedKw = new Set();   // "gid|term"
+  const markedFt = new Set();   // "gid|code"
+  document.querySelectorAll('.kw-tag.kw-marked').forEach(el => {
+    markedKw.add((el.dataset.gid || '') + '|' + (el.dataset.term || ''));
+  });
+  document.querySelectorAll('.fterm-tag.kw-marked').forEach(el => {
+    markedFt.add((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
+  });
+
+  let useAll = false;
+  if (markedKw.size === 0 && markedFt.size === 0) {
+    if (!confirm(
+      'ハイライト (赤字) した語が無いため、各グループの全キーワードを使います。\n\n' +
+      '選別したい場合は Step 3 で残したい語をクリックして赤くしてからもう一度実行してください。\n\n' +
+      '全キーワードで組み立てますか？'
+    )) {
+      return;
+    }
+    useAll = true;
+  }
+
+  // タグ選択
+  const tag = (prompt(
+    'キーワードに付ける構造タグ:\n  /CL = 請求の範囲 (推奨)\n  /TX = 全文\n  /AB = 要約\n  /TI = 発明の名称',
+    '/CL'
+  ) || '').trim();
+  if (!tag) return;
+  if (!/^\/[A-Z]{2,4}$/.test(tag)) {
+    alert('構造タグは /CL や /TX のような形式で入力してください');
+    return;
+  }
+
+  const parts = [];
+  let totalKw = 0, totalFt = 0;
+
+  for (const g of groups) {
+    const gid = String(g.group_id);
+    const allTerms = (g.keywords || []).map(kw => kw && kw.term).filter(Boolean);
+    const terms = (useAll ? allTerms : allTerms.filter(t => markedKw.has(gid + '|' + t)))
+      .map(_kwSanitizeTerm)
+      .filter(Boolean);
+    totalKw += terms.length;
+    if (terms.length === 1) {
+      parts.push(`${terms[0]}${tag}`);
+    } else if (terms.length > 1) {
+      parts.push(`(${terms.join('+')})${tag}`);
+    }
+  }
+
+  // FI/Fterm: 各グループの search_codes から、ハイライト中のものだけ
+  for (const g of groups) {
+    const gid = String(g.group_id);
+    const codes = ((g.search_codes || {}).fterm) || [];
+    for (const ft of codes) {
+      const code = (ft && ft.code ? ft.code : (typeof ft === 'string' ? ft : '')).trim();
+      if (!code) continue;
+      if (useAll || markedFt.has(gid + '|' + code)) {
+        parts.push(/\/FT\b/.test(code) ? code : `${code}/FT`);
+        totalFt++;
+      }
+    }
+    const fiCodes = ((g.search_codes || {}).fi) || [];
+    for (const fi of fiCodes) {
+      const code = (fi && fi.code ? fi.code : (typeof fi === 'string' ? fi : '')).trim();
+      if (!code) continue;
+      // FI には専用ハイライト UI が無いので useAll の時のみ含める
+      if (useAll) {
+        parts.push(/\/FI\b/.test(code) ? code : `${code}/FI`);
+      }
+    }
+  }
+
+  if (parts.length === 0) {
+    alert('組立対象がありません。ハイライトした語が空、または用語が登録されていません。');
+    return;
+  }
+
+  const formula = parts.join('*');
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  if (ta.value.trim() && !confirm('現在のエディタの内容を上書きします。よろしいですか？')) {
+    return;
+  }
+  ta.value = formula;
+  srOnFormulaChange();
+  if (typeof srAutoResizeTextarea === 'function') srAutoResizeTextarea(ta);
+  ta.focus();
+  const note = useAll ? '(全件使用)' : `(ハイライト ${totalKw} 語 / ${totalFt} F-term)`;
+  if (typeof _srShowToast === 'function') {
+    _srShowToast(`検索式を組立 ${note}: ${formula.length} 字`);
+  }
+}
+
 function srInsertText(text) {
   const ta = document.getElementById('sr-formula');
   if (!ta) return;
@@ -4614,8 +5030,13 @@ function srInsertText(text) {
   srOnFormulaChange();
 }
 
-// 直前の ')' または ']' (なければ末尾) に構造タグを付与する。
-// 選択範囲があればその終端。既タグがあれば置換。
+// 構造タグを付与または置換する。
+// 優先順位:
+//   1. カーソルが既存の構造タグ (/XX や /XX+YY) の中/末端にあれば → そのタグを差し替え
+//   2. カーソル直後に構造タグがあれば → それを差し替え
+//   3. 選択範囲があれば終端に挿入 (既タグ続く場合は差し替え)
+//   4. 直前の ')' または ']' に挿入 (既タグ続く場合は差し替え)
+//   5. 末尾に追記
 function srAppendTag(tag) {
   const ta = document.getElementById('sr-formula');
   if (!ta) return;
@@ -4623,10 +5044,35 @@ function srAppendTag(tag) {
   const selStart = ta.selectionStart ?? v.length;
   const selEnd = ta.selectionEnd ?? v.length;
 
+  // 構造タグ全体マッチ用 regex (start anchor 用に matchAll でも可)
+  const TAG_RE = /\/[A-Z]{2,4}(?:\+[A-Z]{2,4})*/g;
+
+  // (1)+(2): カーソル位置が既存タグ内/直後/直前にあるか確認
+  if (selStart === selEnd) {
+    const cursor = selEnd;
+    let m;
+    TAG_RE.lastIndex = 0;
+    while ((m = TAG_RE.exec(v)) !== null) {
+      const start = m.index;
+      const end = start + m[0].length;
+      // タグの開始('/')以降〜終了+1 までの範囲ならヒットとみなす
+      // (「/CL」の C や L にカーソルがある時、/CL 直後にカーソルがある時、両方拾う)
+      if (cursor >= start && cursor <= end) {
+        const newVal = v.slice(0, start) + tag + v.slice(end);
+        const newPos = start + tag.length;
+        ta.value = newVal;
+        ta.setSelectionRange(newPos, newPos);
+        ta.focus();
+        srOnFormulaChange();
+        return;
+      }
+    }
+  }
+
+  // (3)〜(5): 従来動作 — 選択終端 or 直前の閉じ括弧位置に挿入
   let insertAt = selEnd;
   if (selStart === selEnd) {
     const before = v.slice(0, selEnd);
-    // ')' と ']' の最後の位置のうち後ろの方を採用
     const lastParen = before.lastIndexOf(')');
     const lastBracket = before.lastIndexOf(']');
     const last = Math.max(lastParen, lastBracket);

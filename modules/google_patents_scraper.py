@@ -228,7 +228,7 @@ def fetch_patent_detail(
         {"abstract": "...", "claim1": "...", "title": "...", "assignee": "...", "url": "..."}
         取得失敗時は空文字列でフィールドが埋められる。
     """
-    cleaned = re.sub(r'[\s\-/]', '', patent_id)
+    cleaned = normalize_for_google_patents(patent_id)
     url = f"https://patents.google.com/patent/{cleaned}/{language}"
 
     result = {
@@ -293,6 +293,236 @@ def fetch_patent_detail(
                 browser.close()
     except Exception as e:
         logger.warning("fetch_patent_detail error (%s): %s", patent_id, e)
+
+    return result
+
+
+def normalize_for_google_patents(patent_id: str) -> str:
+    """Google Patents の URL に使える ID 形式へ正規化する。
+
+    例:
+      再表2012/029514 → WO2012029514A1
+      特開2024-073024 → JP2024073024A
+      特許第6719258号 → JP6719258B2
+      WO2012/029514  → WO2012029514A1
+    解釈できないものは余計な空白/ハイフン/スラッシュだけ落として返す。
+    """
+    s = (patent_id or "").strip()
+    if not s:
+        return ""
+    # 全角→半角・装飾除去
+    s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    s = (s.replace("－", "-").replace("ー", "-").replace("−", "-")
+           .replace("―", "-").replace("—", "-").replace("／", "/"))
+    s = re.sub(r'(号公報|号|公報|明細書)', '', s)
+    s = re.sub(r'[（(][^)）]*[)）]', '', s)
+    s = s.strip()
+
+    # 再公表/再表 yyyy[-/]nnnnnn → WOyyyynnnnnnA1
+    m = re.search(r'再(?:公)?表\s*(\d{4})\s*[-/]\s*(\d+)', s)
+    if m:
+        return f"WO{m.group(1)}{m.group(2).zfill(6)}A1"
+    # 特開 yyyy-nnnnnn → JPyyyynnnnnnA
+    m = re.search(r'特開\s*(\d{4})\s*-\s*(\d+)', s)
+    if m:
+        return f"JP{m.group(1)}{m.group(2).zfill(6)}A"
+    # 特表 yyyy-nnnnnn → JPyyyynnnnnnA
+    m = re.search(r'特表\s*(\d{4})\s*-\s*(\d+)', s)
+    if m:
+        return f"JP{m.group(1)}{m.group(2).zfill(6)}A"
+    # 特願 yyyy-nnnnnn → JPyyyynnnnnnA (Google Patents は出願番号→公開公報をある程度紐付ける)
+    m = re.search(r'特願\s*(\d{4})\s*-\s*(\d+)', s)
+    if m:
+        return f"JP{m.group(1)}{m.group(2).zfill(6)}A"
+    # 特許第nnn号 → JPnnnB2
+    m = re.search(r'特許(?:第)?\s*(\d+)', s)
+    if m:
+        return f"JP{m.group(1)}B2"
+    # WO yyyy[-/]nnnnnn → WOyyyynnnnnnA1 (空白/ハイフン/スラッシュ自由)
+    m = re.search(r'WO\s*(\d{4})\s*[-/]?\s*(\d+)', s, re.I)
+    if m:
+        return f"WO{m.group(1)}{m.group(2).zfill(6)}A1"
+    # JP yyyy-nnnnnn A → JPyyyynnnnnnA
+    m = re.search(r'JP\s*(\d{4})\s*-?\s*(\d{3,6})\s*A\d?', s, re.I)
+    if m:
+        return f"JP{m.group(1)}{m.group(2).zfill(6)}A"
+    # JPnnn B → JPnnnB2 (B1/B2 数字が無ければ B2 と仮定)
+    m = re.search(r'JP\s*(\d{5,8})\s*B(\d?)', s, re.I)
+    if m:
+        b = m.group(2) or "2"
+        return f"JP{m.group(1)}B{b}"
+    # US 8,123,456 B2 系: カンマ/空白/ハイフン/スラッシュを落とす (US8123456B2)
+    m = re.search(r'US\s*([\d,]+)\s*([A-Z]\d?)?', s, re.I)
+    if m:
+        num = m.group(1).replace(',', '')
+        suffix = m.group(2) or ''
+        return f"US{num}{suffix}".upper().replace(' ', '')
+    # それ以外 (EP, CN, KR 等) は空白/ハイフン/スラッシュ/カンマを落とす
+    return re.sub(r'[\s\-/,]', '', s)
+
+
+def fetch_patent_full_text(
+    patent_id: str,
+    *,
+    language: str = "ja",
+    timeout_ms: int = 30000,
+) -> dict:
+    """Google Patents から公報の全文（claims + description）を取得する。
+
+    Returns:
+        {"patent_id", "url", "title", "abstract", "claims": [text...], "description": "text", "fetched_at": iso_dt}
+        取得失敗時は claims=[], description="" で返る。
+    """
+    import datetime
+    cleaned = normalize_for_google_patents(patent_id)
+    url = f"https://patents.google.com/patent/{cleaned}/{language}"
+
+    result = {
+        "patent_id": patent_id,
+        "url": url,
+        "title": "",
+        "abstract": "",
+        "claims": [],
+        "description": "",
+        "images": [],
+        "fetched_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return result
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage", "--disable-gpu",
+                      "--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                context = browser.new_context(locale=language,
+                                               viewport={"width": 1024, "height": 768})
+                # 重いリソース (画像/フォント/動画/スタイルシート) をブロックして高速化
+                def _block(route):
+                    rt = route.request.resource_type
+                    if rt in ("image", "font", "media", "stylesheet"):
+                        route.abort()
+                    else:
+                        route.continue_()
+                try:
+                    context.route("**/*", _block)
+                except Exception:
+                    pass
+                page = context.new_page()
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                # 必須要素 (タイトル) → 本文 (description) の順に待つ
+                try:
+                    page.wait_for_selector("h1#title", timeout=8000)
+                except Exception:
+                    pass
+                try:
+                    page.wait_for_selector("#description", timeout=10000)
+                except Exception:
+                    try:
+                        page.wait_for_selector("div.claim", timeout=3000)
+                    except Exception:
+                        page.wait_for_timeout(1500)
+                page.wait_for_timeout(400)
+
+                # タイトル
+                try:
+                    el = page.locator("h1#title").first
+                    if el.count() > 0:
+                        result["title"] = (el.inner_text() or "").strip()[:300]
+                except Exception:
+                    pass
+
+                # Abstract
+                try:
+                    el = page.locator('abstract, section[itemprop="abstract"], #text > abstract').first
+                    if el.count() > 0:
+                        result["abstract"] = (el.inner_text() or "").strip()
+                except Exception:
+                    pass
+
+                # Claims (各クレームを個別に取得)
+                try:
+                    items = page.locator('div.claim').all()
+                    if items:
+                        for it in items:
+                            try:
+                                txt = (it.inner_text() or "").strip()
+                                if txt:
+                                    result["claims"].append(txt)
+                            except Exception:
+                                continue
+                    if not result["claims"]:
+                        # フォールバック: #claims セクション全体
+                        cl_block = page.locator("#claims").first
+                        if cl_block.count() > 0:
+                            t = (cl_block.inner_text() or "").strip()
+                            if t:
+                                result["claims"] = [t]
+                except Exception:
+                    pass
+
+                # Description (#description が現在の構造)
+                try:
+                    desc = page.locator("#description").first
+                    if desc.count() > 0:
+                        d = (desc.inner_text() or "").strip()
+                        # 先頭の "Description" ラベルだけ除去
+                        if d.startswith("Description\n"):
+                            d = d[len("Description\n"):]
+                        elif d.startswith("Description"):
+                            d = d[len("Description"):].lstrip()
+                        result["description"] = d
+                except Exception:
+                    pass
+
+                # 実施例の表 (画像) を抽出。Google Patents は description 内の表を
+                # patentimages.storage.googleapis.com の <img> として埋め込む。
+                try:
+                    images_data = page.evaluate("""() => {
+                      const desc = document.querySelector('#description');
+                      if (!desc) return [];
+                      const imgs = Array.from(desc.querySelectorAll('img'));
+                      return imgs.map(im => {
+                        // 直近の「文字塊」を caption として拾う (前方への遡り)
+                        let cur = im;
+                        let context = '';
+                        for (let step = 0; step < 8; step++) {
+                          cur = cur.previousElementSibling || (cur.parentElement);
+                          if (!cur) break;
+                          const t = (cur.textContent || '').trim();
+                          if (t.length >= 10 && t.length < 600) {
+                            context = t.slice(0, 300);
+                            break;
+                          }
+                        }
+                        return {
+                          src: im.src,
+                          alt: im.alt || '',
+                          width: im.naturalWidth || im.width || 0,
+                          height: im.naturalHeight || im.height || 0,
+                          context: context,
+                        };
+                      }).filter(o => o.src);
+                    }""")
+                    if images_data:
+                        # caption から「表N」「Table N」を抽出して label に
+                        for im in images_data:
+                            ctx = im.get("context", "")
+                            mlabel = re.search(r'(表\s*\d+|Table\s*\d+|Fig(?:ure)?\.?\s*\d+)', ctx, re.I)
+                            im["label"] = mlabel.group(1) if mlabel else ""
+                        result["images"] = images_data
+                except Exception:
+                    pass
+            finally:
+                browser.close()
+    except Exception as e:
+        logger.warning("fetch_patent_full_text error (%s): %s", patent_id, e)
 
     return result
 

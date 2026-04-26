@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>{{ patent_id }} — {{ title|default('全文ハイライト', true) }}</title>
+<style>
+  :root { --bg:#0f172a; --surface:#1e293b; --surface2:#334155;
+    --border:#475569; --text:#e2e8f0; --text2:#94a3b8; --accent:#3b82f6; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Segoe UI','Yu Gothic UI',sans-serif; background:var(--bg);
+    color:var(--text); line-height:1.7; padding:0; }
+  .topbar { position:sticky; top:0; z-index:10; background:var(--surface);
+    border-bottom:1px solid var(--border); padding:0.7rem 1.5rem;
+    display:flex; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .topbar h1 { font-size:1.05rem; flex:1; min-width:18rem; }
+  .topbar .meta { font-size:0.78rem; color:var(--text2); display:flex;
+    align-items:center; gap:0.5rem; flex-wrap:wrap; }
+  .topbar a { color:#93c5fd; text-decoration:none; padding:2px 8px;
+    border:1px solid var(--border); border-radius:6px; font-size:0.78rem; }
+  .topbar a:hover { border-color:var(--accent); color:#bfdbfe; }
+  .badge-src { padding:2px 8px; border-radius:8px; font-size:0.72rem; font-weight:600;
+    border:1px solid currentColor; }
+  .src-jplatpat { background:rgba(168,85,247,0.15); color:#c084fc; }
+  .src-google, .src-google_fallback { background:rgba(59,130,246,0.15); color:#93c5fd; }
+
+  .legend { display:flex; gap:0.5rem; flex-wrap:wrap; padding:0.6rem 1.5rem;
+    background:var(--surface2); border-bottom:1px solid var(--border);
+    align-items:center; position:sticky; top:50px; z-index:9; }
+  .legend-hint { font-size:0.78rem; color:var(--text2); margin-right:0.4rem; }
+  .legend-chip { display:inline-flex; align-items:center; gap:6px;
+    padding:3px 10px; border-radius:12px; font-size:0.82rem;
+    border:1px solid var(--c); background:var(--bg); color:var(--text);
+    cursor:pointer; user-select:none; transition:transform 0.1s; }
+  .legend-chip:hover:not(.legend-chip-disabled) { transform:translateY(-1px); }
+  .legend-chip-on { background: color-mix(in srgb, var(--c) 18%, transparent); color:var(--c); font-weight:600; }
+  .legend-chip-off { color:var(--text2); border-color:var(--border); opacity:0.55; }
+  .legend-chip-disabled { cursor:not-allowed; }
+  .legend-chip.active { background:var(--c); color:#fff !important;
+    box-shadow:0 0 0 2px rgba(255,255,255,0.2);
+    transform:translateY(-1px) scale(1.04); }
+  .legend-chip.active .n { background:rgba(0,0,0,0.3); color:#fff !important; }
+  .legend-chip .n { background:var(--bg); padding:0 6px; border-radius:8px;
+    font-family:monospace; min-width:1.5rem; text-align:center; font-weight:700; }
+  .legend-chip-on .n { color:var(--c); }
+  .legend-clear { padding:3px 10px; border-radius:12px; font-size:0.78rem;
+    background:var(--bg); border:1px solid var(--border); color:var(--text2);
+    cursor:pointer; }
+  .legend-clear:hover { color:var(--text); border-color:var(--accent); }
+  .legend-total { margin-left:auto; font-size:0.85rem; color:var(--text2); }
+  body.filter-active .legend-clear { background:#7f1d1d; color:#fecaca;
+    border-color:#ef4444; }
+
+  .content { max-width:980px; margin:0 auto; padding:1.5rem 2rem; }
+  .content h2 { font-size:1.05rem; margin:1.4rem 0 0.5rem;
+    padding-bottom:0.3rem; border-bottom:2px solid var(--accent);
+    display:flex; align-items:center; gap:0.5rem; }
+  .content h2:first-child { margin-top:0; }
+  .content h2 .sec-count { font-size:0.78rem; color:var(--text2); font-weight:400; }
+  .content .section { background:var(--surface); border:1px solid var(--border);
+    border-radius:8px; padding:0.4rem 0.4rem; }
+  .content .section + h2 { margin-top:1.5rem; }
+
+  .filter-unit { padding:0.45rem 0.7rem; margin:0.15rem 0; border-radius:5px;
+    transition:background 0.12s; }
+  .filter-unit:hover { background:var(--surface2); }
+  .filter-unit-text { white-space:pre-wrap; word-break:break-word; font-size:0.92rem; }
+  .para-num { color:#93c5fd; font-weight:700; margin-right:0.5rem; font-family:monospace; }
+  .filter-unit.is-claim { background:var(--surface2); border-left:3px solid var(--accent);
+    border-radius:0 4px 4px 0; padding-left:0.7rem; }
+  .filter-unit.is-claim .claim-num { color:#93c5fd; font-weight:700; margin-right:0.5rem; }
+
+  body.filter-active .filter-unit:not(.unit-match) { display:none; }
+  body.filter-active .filter-unit.unit-match { background:rgba(59,130,246,0.04); }
+  body.filter-active .section:has(.filter-unit.unit-match) ~ h2 { display:block; }
+  /* セクション内に matchがゼロのとき、その h2 ＋ section をユニットでない補助テキストで案内 */
+  .empty-section { color:var(--text2); font-style:italic; padding:0.5rem; display:none; }
+  body.filter-active .section:not(:has(.filter-unit.unit-match)) > .empty-section { display:block; }
+
+  mark.pkm-mark { background: color-mix(in srgb, var(--c, #f87171) 22%, transparent);
+    color: var(--c, #f87171); padding:0 2px; border-radius:3px; font-weight:600;
+    box-shadow: inset 0 -1px 0 var(--c, #f87171); }
+  @supports not (background: color-mix(in srgb, red 50%, transparent)) {
+    mark.pkm-mark { background: rgba(248,113,113,0.22); }
+  }
+
+  .empty { color:var(--text2); font-style:italic; padding:0.5rem 0; }
+
+  .figures-section { display:flex; flex-direction:column; gap:1rem; padding:0.7rem 0.5rem; }
+  .patent-fig { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+    padding:0.6rem; text-align:center; }
+  .patent-fig a { display:block; }
+  .patent-fig img { max-width:100%; height:auto; background:#fff; border-radius:4px;
+    cursor:zoom-in; transition:transform 0.15s; }
+  .patent-fig:hover img { transform:scale(1.005); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+  .patent-fig figcaption { margin-top:0.5rem; font-size:0.82rem; color:var(--text2);
+    text-align:left; line-height:1.5; padding:0 0.4rem; }
+  .patent-fig figcaption strong { color:var(--accent); margin-right:0.3rem; }
+  @media print {
+    .topbar, .legend { position:static; }
+    .topbar a, .legend-clear { display:none; }
+    body { background:#fff; color:#000; }
+    .legend { background:#eee; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>{{ patent_id }}{% if title %} — {{ title }}{% endif %}</h1>
+  <div class="meta">
+    <span class="badge-src src-{{ source|default('google', true) }}">{{ source_label }}</span>
+    {% if source_url %}<a href="{{ source_url }}" target="_blank" rel="noopener">{{ source_label }} で開く</a>{% endif %}
+    {% if google_url %}<a href="{{ google_url }}" target="_blank" rel="noopener">Google Patents</a>{% endif %}
+    {% if jplatpat_url %}<a href="{{ jplatpat_url }}" target="_blank" rel="noopener">J-PlatPat</a>{% endif %}
+    <a href="javascript:window.close()">閉じる</a>
+  </div>
+</div>
+
+<div class="legend">
+  <span class="legend-hint">クリックで段落絞込:</span>
+  {% for g in groups %}
+    <button type="button"
+            class="legend-chip {{ 'legend-chip-on' if g.count > 0 else 'legend-chip-off legend-chip-disabled' }}"
+            style="--c:{{ g.color }};"
+            data-gid="{{ g.gid }}"
+            {% if g.count == 0 %}disabled title="ヒット 0 件のため絞込不可"{% endif %}
+            onclick="toggleFilter({{ g.gid }})">
+      {{ g.label }} <span class="n">{{ g.count }}</span>
+    </button>
+  {% endfor %}
+  <button type="button" class="legend-clear" onclick="toggleFilter(null)">絞込解除</button>
+  {% if total_hits is defined %}
+    <span class="legend-total">合計 {{ total_hits }} ヒット / {{ total_chars }} 字</span>
+  {% endif %}
+</div>
+
+<div class="content">
+  {% if abstract_unit %}
+  <h2>要約 <span class="sec-count" id="sec-count-abs"></span></h2>
+  <div class="section">
+    <div class="filter-unit is-abstract {{ 'unit-no-match' if not abstract_unit.groups else '' }}"
+         data-groups="{{ abstract_unit.groups|join(' ') }}">
+      <div class="filter-unit-text">{{ abstract_unit.html|safe }}</div>
+    </div>
+    <div class="empty-section">この絞込条件に合致する内容なし。</div>
+  </div>
+  {% endif %}
+
+  {% if images %}
+  <h2>図表 <span class="sec-count">({{ images|length }} 件)</span></h2>
+  <div class="section figures-section">
+    {% for im in images %}
+      <figure class="patent-fig">
+        <a href="{{ im.src }}" target="_blank" rel="noopener" title="クリックで原寸表示">
+          <img src="{{ im.src }}" alt="{{ im.alt|default('') }}" loading="lazy">
+        </a>
+        <figcaption>
+          {% if im.label %}<strong>{{ im.label }}</strong> — {% endif %}
+          {{ im.context|default('', true) }}
+        </figcaption>
+      </figure>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if claims_units %}
+  <h2>請求の範囲 <span class="sec-count" id="sec-count-claims"></span></h2>
+  <div class="section">
+    {% for cl in claims_units %}
+      <div class="filter-unit is-claim {{ 'unit-no-match' if not cl.groups else '' }}"
+           data-groups="{{ cl.groups|join(' ') }}">
+        <span class="claim-num">[{{ loop.index }}]</span>{{ cl.html|safe }}
+      </div>
+    {% endfor %}
+    <div class="empty-section">この絞込条件に合致する請求項なし。</div>
+  </div>
+  {% endif %}
+
+  {% if para_units %}
+  <h2>明細書本文 <span class="sec-count" id="sec-count-desc"></span></h2>
+  <div class="section">
+    {% for p in para_units %}
+      <div class="filter-unit is-para {{ 'unit-no-match' if not p.groups else '' }}"
+           data-pid="{{ p.pid }}" data-groups="{{ p.groups|join(' ') }}">
+        {% if p.marker %}<span class="para-num">{{ p.marker }}</span>{% endif %}
+        <span class="filter-unit-text">{{ p.html|safe }}</span>
+      </div>
+    {% endfor %}
+    <div class="empty-section">この絞込条件に合致する段落なし。</div>
+  </div>
+  {% endif %}
+
+  {% if not abstract_unit and not claims_units and not para_units %}
+  <div class="empty">本文データがありません。{{ patent_id }} の全文取得に失敗した可能性があります。</div>
+  {% endif %}
+</div>
+
+<script>
+let _activeFilter = null;
+function toggleFilter(gid) {
+  // null をクリックすると解除。同じ gid を再度クリックしても解除。
+  if (gid === null || _activeFilter === gid) {
+    _activeFilter = null;
+  } else {
+    _activeFilter = gid;
+  }
+  applyFilter();
+}
+
+function applyFilter() {
+  const body = document.body;
+  body.classList.toggle('filter-active', _activeFilter !== null);
+  // legend chip の active 状態
+  document.querySelectorAll('.legend-chip').forEach(c => {
+    const cgid = c.dataset.gid;
+    const isActive = (_activeFilter !== null && String(cgid) === String(_activeFilter));
+    c.classList.toggle('active', isActive);
+  });
+  // 各 unit に unit-match / unit-no-match を付与
+  const units = document.querySelectorAll('.filter-unit');
+  let totalShown = 0;
+  units.forEach(u => {
+    if (_activeFilter === null) {
+      u.classList.remove('unit-match');
+      u.classList.remove('unit-hidden');
+      return;
+    }
+    const groups = (u.dataset.groups || '').split(/\s+/).filter(Boolean);
+    const hit = groups.includes(String(_activeFilter));
+    u.classList.toggle('unit-match', hit);
+    if (hit) totalShown++;
+  });
+  // セクション別カウント表示
+  ['abs', 'claims', 'desc'].forEach(s => {
+    const el = document.getElementById('sec-count-' + s);
+    if (!el) return;
+    const sel = s === 'abs' ? '.is-abstract' : s === 'claims' ? '.is-claim' : '.is-para';
+    if (_activeFilter === null) {
+      el.textContent = '';
+    } else {
+      const matchN = document.querySelectorAll(sel + '.unit-match').length;
+      const totalN = document.querySelectorAll(sel).length;
+      el.textContent = `(${matchN}/${totalN} 表示)`;
+    }
+  });
+}
+</script>
+</body>
+</html>

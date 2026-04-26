@@ -570,20 +570,21 @@
           <button class="sr-tool-btn" onclick="srWrapParens()" title="( ) 同種キーワード群の省略 例: (a+b)/TX">( )</button>
           <span class="sr-tool-sep"></span>
           <span style="font-size:0.75rem; color:var(--text2);">構造タグ:</span>
-          <button class="sr-tool-btn" onclick="srAppendTag('/TX')" title="全文 (名称+要約+請求+明細書)">/TX</button>
-          <button class="sr-tool-btn" onclick="srAppendTag('/TI')" title="発明の名称">/TI</button>
-          <button class="sr-tool-btn" onclick="srAppendTag('/AB+CL')" title="要約+請求の範囲">/AB+CL</button>
-          <button class="sr-tool-btn" onclick="srAppendTag('/CL')" title="請求の範囲">/CL</button>
-          <button class="sr-tool-btn" onclick="srAppendTag('/FI')" title="FI 分類">/FI</button>
-          <button class="sr-tool-btn" onclick="srAppendTag('/FT')" title="Fターム">/FT</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/TX')" title="全文 (名称+要約+請求+明細書)。カーソルが既存タグ上にあると置換">/TX</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/TI')" title="発明の名称。カーソルが既存タグ上にあると置換">/TI</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/AB')" title="要約。カーソルが既存タグ上にあると置換">/AB</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/CL')" title="請求の範囲。カーソルが既存タグ上にあると置換">/CL</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/FI')" title="FI 分類。カーソルが既存タグ上にあると置換">/FI</button>
+          <button class="sr-tool-btn" onclick="srAppendTag('/FT')" title="Fターム。カーソルが既存タグ上にあると置換">/FT</button>
           <span class="sr-tool-sep"></span>
           <button class="sr-tool-btn" onclick="srInsertProximity()" title="近傍検索 (A,5C,B/TX) C=語順あり N=語順なし">近傍</button>
           <button class="sr-tool-btn" onclick="srAutoFixFormula()" title="NOT演算子の / → -、キーワード括弧に /TX を付与、全角記号→半角 など">🔧 式を自動修正</button>
           <button class="sr-tool-btn" onclick="srToggleKwHelper()" title="キーワード辞書から挿入">＋ 語を挿入</button>
+          <button class="sr-tool-btn sr-tool-build" onclick="srBuildFormulaFromKeywords()" title="Step 3 のキーワードグループから検索式を自動組立 (各グループ AND, グループ内 OR, 末尾に FI/Fターム)">🛠 KW から式を組立</button>
           <span id="sr-formula-valid" class="sr-formula-valid"></span>
         </div>
 
-        <textarea id="sr-formula" rows="6" placeholder="例: (化粧料+メイクアップ+ファンデーション)/AB+CL*(シリコーン+silicone)/AB+CL"
+        <textarea id="sr-formula" rows="6" placeholder="例: (化粧料+メイクアップ+ファンデーション)/CL*(シリコーン+silicone)/CL"
                   style="width:100%; font-family:monospace; font-size:0.9rem; line-height:1.4;"
                   oninput="srOnFormulaChange()"></textarea>
 
@@ -697,6 +698,16 @@
         <div class="btn-row" style="margin-top:0; margin-bottom:0.6rem; flex-wrap:wrap;">
           <button class="btn btn-outline" onclick="srEnrich()" title="Google Patents から要約/請求項1を取得">要約/請求項1 を取得</button>
           <button class="btn btn-outline" onclick="srAiScore()" title="Claudeで本願との関連度スコアを付与">AI関連度スコア</button>
+          <button class="btn btn-outline active" id="btn-sr-pkm" onclick="srTogglePkm()" title="Step 3 のキーワードグループでヒットの本文を色分け表示">🎨 ハイライト ON</button>
+          <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">取得元:</label>
+          <select id="sr-pkm-source" style="font-size:0.78rem; padding:0.2rem 0.4rem;" title="J-PlatPat 推奨（中韓特許も日本語で取得可）">
+            <option value="auto" selected>自動 (JP系→J-PlatPat / 他→Google)</option>
+            <option value="jplatpat">J-PlatPat 固定</option>
+            <option value="google">Google Patents 固定</option>
+          </select>
+          <button class="btn btn-outline" onclick="srFetchAllHitsFullText()" title="未取得のヒットの全文（明細書）を一括取得（取得元は左のドロップダウン）">📄 全文を一括取得</button>
+          <button class="btn btn-outline" onclick="srFetchAllHitsFullText({force:true})" title="既に取得済みのものも含めて、全ヒットの全文を再取得（番号正規化変更後の更新等）">🔄 全部再取得</button>
+          <span id="sr-pkm-bulk-status" style="font-size:0.8rem; color:var(--text2);"></span>
           <button class="btn btn-success" onclick="srDownloadStarred()" title="☆マークの候補を一括DL&amp;引用登録">☆をまとめてDL&amp;引用登録</button>
           <span style="flex:1"></span>
           <label style="font-size:0.8rem; color:var(--text2);">フィルタ:</label>
@@ -713,6 +724,9 @@
             <option value="ai_score">AIスコア(高→低)</option>
             <option value="date">公開日(新→古)</option>
           </select>
+        </div>
+        <div id="sr-pkm-bulk-bar" class="sr-pkm-bulk-bar" style="display:none;">
+          <div id="sr-pkm-bulk-bar-fill" class="sr-pkm-bulk-bar-fill"></div>
         </div>
 
         <div class="loading-msg" id="loading-sr-enrich">

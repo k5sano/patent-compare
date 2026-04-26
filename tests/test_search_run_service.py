@@ -368,9 +368,12 @@ def test_validate_formula_no_warn_when_tag_present():
     assert not any("構造タグ" in w for w in r["warnings"])
 
 
-def test_validate_formula_no_warn_with_ab_cl_combo():
+def test_validate_formula_composite_tag_error():
+    """構造タグの '+' 連結 (/AB+CL 等) は J-PlatPat エラーなのでバリデーションで弾く"""
     r = srs.validate_formula("(A+B)/AB+CL")
-    assert r["ok"] is True
+    assert r["ok"] is False
+    assert any("/AB+CL" in e for e in r["errors"])
+    # 構造タグが存在する以上「構造タグが無い」警告は出ない
     assert not any("構造タグ" in w for w in r["warnings"])
 
 
@@ -419,7 +422,7 @@ def test_validate_formula_warns_hyphen_in_keyword_japanese():
 
 
 def test_validate_formula_warns_hyphen_in_keyword_ascii():
-    r = srs.validate_formula("(SUS-304+A3003)/AB+CL")
+    r = srs.validate_formula("(SUS-304+A3003)/CL")
     assert any("ハイフン" in w or "全角" in w for w in r["warnings"])
 
 

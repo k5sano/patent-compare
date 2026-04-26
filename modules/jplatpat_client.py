@@ -513,15 +513,22 @@ def _extract_hits(page, max_results: int, on_progress=None) -> List[JplatpatHit]
     return hits
 
 
-# 文献番号パターン
+# 文献番号パターン (公開番号 = 取得対象としたい識別子)
 _PATENT_ID_PATTERNS = [
     re.compile(r'(特開\s*\d{4}\s*[-ー]\s*\d+)'),
     re.compile(r'(特表\s*\d{4}\s*[-ー]\s*\d+)'),
     re.compile(r'(特許\s*第?\s*\d+(?:号)?)'),
-    re.compile(r'(再表\s*\d{4}\s*[-ー]\s*\d+)'),
-    re.compile(r'(WO\s*\d{4}\s*[/]?\s*\d+)'),
+    # 再公表/再表: J-PlatPat 一覧では `再表2012/029514` のスラッシュ区切りで出るため
+    # `[-ー/／]` を許容する
+    re.compile(r'(再(?:公)?表\s*\d{4}\s*[-ー/／]\s*\d+)'),
+    re.compile(r'(WO\s*\d{4}\s*[/／-]?\s*\d+)'),
     re.compile(r'(JP\s*\d{4}[-]?\d{6}\s*[AB]\d?)', re.IGNORECASE),
     re.compile(r'(JP\s*\d{5,8}\s*B\d?)', re.IGNORECASE),
+]
+
+# タイトル候補から除外したい識別子パターン（出願番号 特願 など）
+_NON_TITLE_PATTERNS = list(_PATENT_ID_PATTERNS) + [
+    re.compile(r'特願\s*\d{4}\s*[-ー]\s*\d+'),
 ]
 
 # 日付パターン
@@ -557,11 +564,16 @@ def _parse_row(row) -> JplatpatHit:
     lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
     # タイトル: 最も長い行 (もしくは見出し的な行) を採用
     if lines:
+        _ipc_re = re.compile(r'^[A-H]\d{2}[A-Z]\s*\d+/\d+\s*$')
+        _applicant_kw = ("株式会社", "有限会社", "合同会社", "大学", "公団",
+                         "研究所", "Corporation", "Ltd", "Inc")
         candidates = [
             ln for ln in lines
-            if 6 <= len(ln) <= 120
-            and not any(p.search(ln) for p in _PATENT_ID_PATTERNS)
+            if 4 <= len(ln) <= 120
+            and not any(p.search(ln) for p in _NON_TITLE_PATTERNS)
             and not any(p.search(ln) for p in _DATE_PATTERNS)
+            and not _ipc_re.match(ln)
+            and not any(k in ln for k in _applicant_kw)
         ]
         if candidates:
             hit.title = max(candidates, key=len)
@@ -593,6 +605,227 @@ def _parse_row(row) -> JplatpatHit:
 
 
 # --- CLI テスト用 ---
+
+def build_jplatpat_fixed_url(patent_id: str) -> str:
+    """patent_id から J-PlatPat 固定 URL を組み立てる。対応外なら空文字。"""
+    pid = (patent_id or "").strip()
+    if not pid:
+        return ""
+    # 全角→半角の最低限の正規化
+    pid = pid.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    pid = pid.replace("－", "-").replace("ー", "-").replace("／", "/")
+    pid = re.sub(r'(号公報|号|公報)', '', pid).strip()
+    B = "https://www.j-platpat.inpit.go.jp/c1801/PU"
+
+    m = re.search(r'特開\s*(\d{4})\s*-\s*(\d+)', pid)
+    if m:
+        return f"{B}/JP-{m.group(1)}-{m.group(2).zfill(6)}/11/ja"
+    m = re.search(r'特願\s*(\d{4})\s*-\s*(\d+)', pid)
+    if m:
+        return f"{B}/JP-{m.group(1)}-{m.group(2).zfill(6)}/10/ja"
+    m = re.search(r'特許(?:第)?\s*(\d+)', pid)
+    if m:
+        return f"{B}/JP-{m.group(1)}/15/ja"
+    m = re.search(r'JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A', pid, re.I)
+    if m:
+        return f"{B}/JP-{m.group(1)}-{m.group(2).zfill(6)}/11/ja"
+    m = re.search(r'JP\s*(\d{5,8})\s*B\d?', pid, re.I)
+    if m:
+        return f"{B}/JP-{m.group(1)}/15/ja"
+    m = re.search(r'WO\s*(\d{4})\s*[/-]?\s*(\d+)', pid, re.I)
+    if m:
+        return f"{B}/WO-A-{m.group(1)}-{m.group(2).zfill(6)}/50/ja"
+    m = re.search(r'US\s*(\d{4})\s*[/-]?\s*(\d+)\s*A\d?', pid, re.I)
+    if m:
+        return f"{B}/US-{m.group(1)}{m.group(2)}/50/ja"
+    m = re.search(r'US\s*([\d,]+)\s*B\d?', pid, re.I)
+    if m:
+        return f"{B}/US-{m.group(1).replace(',', '')}/50/ja"
+    m = re.search(r'EP\s*(\d+)', pid, re.I)
+    if m:
+        return f"{B}/EP-{m.group(1)}/50/ja"
+    m = re.search(r'CN\s*(\d+)', pid, re.I)
+    if m:
+        return f"{B}/CN-{m.group(1)}/50/ja"
+    m = re.search(r'KR\s*(\d{4})\s*[-]?\s*(\d+)', pid, re.I)
+    if m:
+        return f"{B}/KR-{m.group(1)}-{m.group(2).zfill(7)}/50/ja"
+    return ""
+
+
+def fetch_jplatpat_full_text(patent_id: str, *, language: str = "ja",
+                              timeout_ms: int = 45000) -> dict:
+    """J-PlatPat の固定 URL から公報全文（claims+description）を取得する。
+
+    戦略:
+      1. 固定 URL `c1801/PU/...` にアクセス（landing/メタ情報ページ）
+      2. ページ中の文献番号リンクをクリック → 詳細ページ p0200 が新タブで開く
+      3. アコーディオン（「開く」トグル）を全て JS で押下して全セクションを展開
+      4. document.body.textContent を取得（inner_text は折りたたみで欠ける）
+      5. 「要約 / 請求の範囲 / 発明の詳細な説明」を切り出して返す
+
+    Returns:
+        {"patent_id", "url", "title", "abstract", "claims": [text], "description": "...",
+         "fetched_at": iso, "source": "jplatpat", "raw": "..."}
+    """
+    import datetime
+    fixed_url = build_jplatpat_fixed_url(patent_id)
+    result = {
+        "patent_id": patent_id,
+        "url": fixed_url,
+        "title": "",
+        "abstract": "",
+        "claims": [],
+        "description": "",
+        "raw": "",
+        "source": "jplatpat",
+        "fetched_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    if not fixed_url:
+        result["error"] = f"J-PlatPat 固定 URL を組み立てられない番号です: {patent_id}"
+        return result
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        result["error"] = "playwright 未インストール"
+        return result
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage", "--disable-gpu",
+                      "--disable-blink-features=AutomationControlled"],
+            )
+            try:
+                ctx = browser.new_context(locale="ja-JP",
+                                          viewport={"width": 1024, "height": 900})
+                # 画像/フォント/動画をブロック (CSS は J-PlatPat の表示判定に使われるので残す)
+                def _block(route):
+                    rt = route.request.resource_type
+                    if rt in ("image", "font", "media"):
+                        route.abort()
+                    else:
+                        route.continue_()
+                try:
+                    ctx.route("**/*", _block)
+                except Exception:
+                    pass
+                page = ctx.new_page()
+                page.goto(fixed_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_timeout(3500)
+                # 公開番号セルをクリック → 詳細ページ (p0200) が新タブで開く
+                # patent_id 文字列のバリエーションをいくつか試す
+                opened = None
+                # 取得したい文字列パターン: 特開YYYY-NNNNNN / 特許第NNNN号 / WO-A-... など
+                # 入力 patent_id から複数の表記を作る
+                cands = [patent_id, patent_id.replace(" ", "")]
+                m = re.search(r'(\d{4})\s*[-]?\s*(\d+)', patent_id)
+                if m:
+                    cands.append(f"{m.group(1)}-{m.group(2)}")
+                m_jp = re.search(r'JP\s*(\d{5,8})\s*B', patent_id, re.I)
+                if m_jp:
+                    cands.append(f"特許第{m_jp.group(1)}号")
+                    cands.append(f"特許{m_jp.group(1)}")
+                m_jpa = re.search(r'JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A', patent_id, re.I)
+                if m_jpa:
+                    cands.append(f"特開{m_jpa.group(1)}-{m_jpa.group(2)}")
+                # 重複除去 (順序保持)
+                seen = set()
+                cands = [c for c in cands if c and not (c in seen or seen.add(c))]
+
+                for label in cands:
+                    try:
+                        loc = page.locator(f'text={label}').first
+                        if loc.count() > 0 and loc.is_visible(timeout=1500):
+                            with ctx.expect_page(timeout=12000) as new_info:
+                                loc.click()
+                            opened = new_info.value
+                            break
+                    except Exception:
+                        continue
+                if not opened:
+                    result["error"] = f"詳細ページへの遷移に失敗 (試行: {cands})"
+                    return result
+
+                opened.wait_for_load_state("domcontentloaded", timeout=20000)
+                opened.wait_for_timeout(3000)
+
+                # 全アコーディオンを開く（最大 8 ラウンド、変化が無くなるまで）
+                for _ in range(8):
+                    n = opened.evaluate("""() => {
+                      let n = 0;
+                      document.querySelectorAll('*').forEach(el => {
+                        if (el.children.length === 0 && el.textContent && el.textContent.trim() === '開く') {
+                          let cur = el;
+                          for (let i = 0; i < 8 && cur; i++) {
+                            if (cur.tagName === 'BUTTON' || cur.tagName === 'A' ||
+                                cur.getAttribute('role') === 'button' || cur.onclick) {
+                              cur.click(); n++; return;
+                            }
+                            cur = cur.parentElement;
+                          }
+                          if (el.parentElement) { el.parentElement.click(); n++; }
+                        }
+                      });
+                      return n;
+                    }""")
+                    if not n:
+                        break
+                    opened.wait_for_timeout(800)
+                opened.wait_for_timeout(800)
+
+                full_text = opened.evaluate("() => document.body.textContent") or ""
+                full_text = re.sub(r'[ \t　]+', ' ', full_text)
+                full_text = re.sub(r'\n{3,}', '\n\n', full_text).strip()
+                result["raw"] = full_text
+
+                # タイトル (次の【...】 or "(NN)" バイブリオ・マーカーまで)
+                m = re.search(r'【発明の名称】\s*([^【\n]{1,200})', full_text)
+                if m:
+                    title = m.group(1).strip()
+                    # "(51)【国際特許分類】" 等が続くことがあるので括弧マーカーで切る
+                    title = re.split(r'\s*\(\d{2}\)', title, maxsplit=1)[0].strip()
+                    result["title"] = title[:300]
+
+                # 要約
+                m = re.search(r'要約.*?\(57\)\s*【要約】\s*(.*?)(?=【選択図】|請求の範囲|発明の詳細な説明|$)',
+                              full_text, re.DOTALL)
+                if m:
+                    result["abstract"] = m.group(1).strip()[:3000]
+
+                # 請求の範囲（個別請求項に分割）
+                m = re.search(r'請求の範囲\s*閉じる\s*(.*?)(?=発明の詳細な説明|図面|$)',
+                              full_text, re.DOTALL)
+                if m:
+                    cl_block = m.group(1)
+                    # 各 【請求項N】内容 を抽出 (preamble の (57)【特許請求の範囲】等は捨てる)
+                    pairs = re.findall(r'【請求項\s*(\d+)】\s*(.+?)(?=【請求項\s*\d+】|$)',
+                                       cl_block, re.DOTALL)
+                    for _num, body in pairs:
+                        body = body.strip()
+                        if body:
+                            result["claims"].append(body)
+
+                # 発明の詳細な説明
+                m = re.search(r'発明の詳細な説明\s*閉じる\s*(.*?)(?=図面|要約\s*閉じる|$)',
+                              full_text, re.DOTALL)
+                if m:
+                    result["description"] = m.group(1).strip()
+                else:
+                    # フォールバック: claims以降の長い塊
+                    after_claims = full_text.find("発明の詳細な説明")
+                    if after_claims > 0:
+                        result["description"] = full_text[after_claims:].strip()
+            finally:
+                browser.close()
+    except Exception as e:
+        logger.warning("fetch_jplatpat_full_text error (%s): %s", patent_id, e)
+        result["error"] = f"{type(e).__name__}: {e}"
+
+    return result
+
 
 def _cli():
     import argparse
