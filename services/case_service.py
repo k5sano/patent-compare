@@ -697,6 +697,264 @@ def get_hongan_tables(case_id):
     return {"exists": True, "data": data}, 200
 
 
+# ---------- 引用文献の Vision 表抽出 ----------
+
+def _safe_pid_for_path(pid: str) -> str:
+    """patent_id を安全なディレクトリ名に変換 (citations/_hit_text と同方針)。"""
+    return re.sub(r"[^A-Za-z0-9_\-]", "_", str(pid))
+
+
+def _citation_tables_dir(case_id: str, citation_id: str) -> Path:
+    return (get_case_dir(case_id) / "output" / "tables"
+            / "citations" / _safe_pid_for_path(citation_id))
+
+
+def get_citation_tables(case_id, citation_id):
+    """引用文献 1 件の抽出済み表データを返す。"""
+    p = _citation_tables_dir(case_id, citation_id) / "tables.json"
+    if not p.exists():
+        return {"exists": False}, 200
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return {"error": f"tables.json 読み込み失敗: {e}"}, 500
+    return {"exists": True, "data": data}, 200
+
+
+def get_citation_tables_cells(case_id):
+    """全引用文献の抽出済みセル文字列を patent_id → flat-text のマップで返す。
+
+    PKM ハイライトの表ヒット集計用。各引用について、抽出された全表の全セルを
+    タイトル + ヘッダ + 各行セルを改行連結した 1 つの文字列にまとめる。
+    """
+    case_dir = get_case_dir(case_id)
+    citations_dir = case_dir / "citations"
+    cells = {}
+    if not citations_dir.exists():
+        return {"cells": cells}, 200
+    for cj in sorted(citations_dir.glob("*.json")):
+        cid = cj.stem
+        tj = _citation_tables_dir(case_id, cid) / "tables.json"
+        if not tj.exists():
+            continue
+        try:
+            with open(tj, "r", encoding="utf-8") as f:
+                d = json.load(f)
+        except Exception:
+            continue
+        chunks = []
+        for t in d.get("tables", []):
+            if not t.get("is_table"):
+                continue
+            if t.get("title"):
+                chunks.append(str(t["title"]))
+            for h in (t.get("headers") or []):
+                chunks.append(str(h))
+            for row in (t.get("rows") or []):
+                for c in (row.get("cells") or []):
+                    chunks.append(str(c))
+        cells[cid] = "\n".join(chunks)
+    return {"cells": cells}, 200
+
+
+def list_citation_table_status(case_id):
+    """表抽出ステータス一覧を返す (引用登録済み + 抽出済みの全 patent_id)。
+
+    引用登録 (cases/<id>/citations/*.json) されていなくても、
+    既に表抽出が走った patent_id (output/tables/citations/<safe_pid>/) は
+    status に含めて UI から確認できるようにする。
+    """
+    case_dir = get_case_dir(case_id)
+    items_map: dict[str, dict] = {}
+
+    # 1) 引用登録済みのもの: extracted フラグをファイル存在で判定
+    citations_dir = case_dir / "citations"
+    if citations_dir.exists():
+        for cj in sorted(citations_dir.glob("*.json")):
+            cid = cj.stem
+            items_map[cid] = {"citation_id": cid, "extracted": False}
+
+    # 2) 抽出済みディレクトリを scan して patent_id を補完
+    tables_root = case_dir / "output" / "tables" / "citations"
+    if tables_root.exists():
+        for d in sorted(tables_root.iterdir()):
+            if not d.is_dir():
+                continue
+            tj = d / "tables.json"
+            if not tj.exists():
+                continue
+            # 抽出済み: 中身から citation_id (= doc_id) を取得 (safe_pid 化前の生 ID)
+            try:
+                with open(tj, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                cid = raw.get("doc_id") or d.name
+            except Exception:
+                cid = d.name
+                raw = {}
+            entry = items_map.get(cid, {"citation_id": cid})
+            entry["extracted"] = True
+            entry["n_table"] = raw.get("n_table", 0)
+            entry["n_error"] = raw.get("n_error", 0)
+            entry["cost"] = raw.get("total_cost_usd_equivalent", 0)
+            entry["extracted_at"] = raw.get("extracted_at")
+            entry["source_kind"] = raw.get("source_kind", "pdf")
+            items_map[cid] = entry
+
+    return {"items": list(items_map.values())}, 200
+
+
+def stream_citation_table_extraction(case_id, citation_id, *,
+                                       model="sonnet", effort="low",
+                                       force=False):
+    """1 件の引用文献から表抽出 (SSE 形式で進捗配信)。
+
+    抽出ソースの優先順位:
+      1. cases/<id>/input/ にある PDF (引用登録済み)
+      2. cases/<id>/search_runs/_hit_text/<pid>.json の images
+         (Google Patents 等から既に取得済み — DL 前でも OK)
+    どちらも無ければエラー。
+    """
+    import queue
+    import threading
+    from services.table_extractor import (
+        extract_tables_from_pdf, extract_tables_from_image_records,
+    )
+    from services.search_run_service import get_hit_text
+
+    case_dir = get_case_dir(case_id)
+    out_dir = _citation_tables_dir(case_id, citation_id)
+    if (out_dir / "tables.json").exists() and not force:
+        yield "data: " + json.dumps(
+            {"stage": "skip", "citation_id": citation_id,
+             "message": "既に抽出済み (force=true で再実行可)"},
+            ensure_ascii=False,
+        ) + "\n\n"
+        return
+
+    pdf = find_citation_pdf(case_dir / "input", citation_id)
+    image_records = None
+    source_kind = None
+    if pdf is not None:
+        source_kind = "pdf"
+    else:
+        # 全文取得済みなら images から抽出 (PDF DL 不要)
+        ht = get_hit_text(case_id, citation_id)
+        if ht and isinstance(ht.get("images"), list) and ht["images"]:
+            image_records = ht["images"]
+            source_kind = "image_records"
+        else:
+            yield "data: " + json.dumps(
+                {"stage": "error", "citation_id": citation_id,
+                 "message": (f"引用文献 {citation_id} の PDF も全文 cache の images も見つかりません。"
+                             "📄 ボタンで全文取得を実行してから再試行してください。")},
+                ensure_ascii=False,
+            ) + "\n\n"
+            return
+
+    events: "queue.Queue[dict]" = queue.Queue()
+
+    def progress(stage, current, total, info):
+        events.put({
+            "stage": stage, "current": current,
+            "total": total, "info": info,
+            "citation_id": citation_id,
+        })
+
+    box = {}
+
+    def run():
+        try:
+            if source_kind == "pdf":
+                r = extract_tables_from_pdf(
+                    pdf, out_dir, model=model, effort=effort, progress=progress,
+                )
+            else:
+                r = extract_tables_from_image_records(
+                    image_records, out_dir, doc_id=citation_id,
+                    model=model, effort=effort, progress=progress,
+                )
+            box["summary"] = r
+        except Exception as e:
+            box["error"] = f"{type(e).__name__}: {e}"
+        events.put({"stage": "_done"})
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+
+    yield "data: " + json.dumps(
+        {"stage": "start", "citation_id": citation_id,
+         "source_kind": source_kind,
+         "pdf": Path(pdf).name if pdf else None,
+         "image_count": len(image_records) if image_records else None},
+        ensure_ascii=False,
+    ) + "\n\n"
+
+    while True:
+        ev = events.get()
+        if ev.get("stage") == "_done":
+            break
+        yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+
+    th.join(timeout=2)
+
+    if "error" in box:
+        yield "data: " + json.dumps(
+            {"stage": "error", "citation_id": citation_id,
+             "message": box["error"]},
+            ensure_ascii=False,
+        ) + "\n\n"
+        return
+
+    s = box.get("summary", {})
+    yield "data: " + json.dumps({
+        "stage": "done", "citation_id": citation_id,
+        "summary": {
+            "n_table": s.get("n_table"),
+            "n_nontable": s.get("n_nontable"),
+            "n_error": s.get("n_error"),
+            "candidates_total": s.get("candidates_total"),
+            "candidates_targeted": s.get("candidates_targeted"),
+            "total_duration_ms": s.get("total_duration_ms"),
+            "total_cost_usd_equivalent": s.get("total_cost_usd_equivalent"),
+            "body_table_references": s.get("body_table_references", []),
+        },
+    }, ensure_ascii=False) + "\n\n"
+
+
+def stream_bulk_citation_table_extraction(case_id, citation_ids, *,
+                                            model="sonnet", effort="low",
+                                            force=False):
+    """複数の引用文献を順次抽出 (各 citation の進捗を中継)。"""
+    yield "data: " + json.dumps(
+        {"stage": "bulk_start", "total": len(citation_ids),
+         "citation_ids": citation_ids},
+        ensure_ascii=False,
+    ) + "\n\n"
+    summary_per_cid = {}
+    for i, cid in enumerate(citation_ids, 1):
+        yield "data: " + json.dumps(
+            {"stage": "bulk_item_start", "current": i,
+             "total": len(citation_ids), "citation_id": cid},
+            ensure_ascii=False,
+        ) + "\n\n"
+        for ev_str in stream_citation_table_extraction(
+            case_id, cid, model=model, effort=effort, force=force,
+        ):
+            yield ev_str
+            # 最終 done/skip/error イベントを記録
+            try:
+                ev = json.loads(ev_str.split("data: ", 1)[1].strip())
+                if ev.get("stage") in ("done", "skip", "error"):
+                    summary_per_cid[cid] = ev
+            except Exception:
+                pass
+    yield "data: " + json.dumps(
+        {"stage": "bulk_done", "summary_per_citation": summary_per_cid},
+        ensure_ascii=False,
+    ) + "\n\n"
+
+
 def stream_hongan_table_extraction(case_id, *, model="sonnet", effort="low"):
     """本願 PDF から実施例表を SSE で抽出 (進捗をリアルタイム配信)。
 

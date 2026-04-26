@@ -601,6 +601,62 @@ def get_hongan_tables_route(case_id):
     return jsonify(result), code
 
 
+@app.route("/case/<case_id>/citation/<path:citation_id>/extract-tables",
+           methods=["POST"])
+def extract_citation_tables_route(case_id, citation_id):
+    """1 件の引用文献から表抽出 (SSE で進捗配信)。"""
+    from services.case_service import stream_citation_table_extraction
+    body = request.get_json(silent=True) or {}
+    force = bool(body.get("force"))
+    return Response(
+        stream_citation_table_extraction(case_id, citation_id, force=force),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/case/<case_id>/citations/extract-tables-bulk", methods=["POST"])
+def extract_citation_tables_bulk_route(case_id):
+    """複数の引用文献を順次抽出 (SSE)。
+    body: {"citation_ids": ["JP2024-051653", ...], "force": false}
+    """
+    from services.case_service import stream_bulk_citation_table_extraction
+    body = request.get_json(silent=True) or {}
+    cids = body.get("citation_ids") or []
+    force = bool(body.get("force"))
+    if not cids:
+        return jsonify({"error": "citation_ids が空です"}), 400
+    return Response(
+        stream_bulk_citation_table_extraction(case_id, cids, force=force),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route("/case/<case_id>/citation/<path:citation_id>/tables", methods=["GET"])
+def get_citation_tables_route(case_id, citation_id):
+    """1 件の引用文献の抽出済み表データを返す。"""
+    from services.case_service import get_citation_tables
+    result, code = get_citation_tables(case_id, citation_id)
+    return jsonify(result), code
+
+
+@app.route("/case/<case_id>/citations/tables-status", methods=["GET"])
+def get_citation_tables_status_route(case_id):
+    """全引用文献の表抽出状況を返す。"""
+    from services.case_service import list_citation_table_status
+    result, code = list_citation_table_status(case_id)
+    return jsonify(result), code
+
+
+@app.route("/case/<case_id>/citations/tables-cells", methods=["GET"])
+def get_citation_tables_cells_route(case_id):
+    """全引用文献の抽出済みセル文字列マップを返す (PKM ヒット集計用)。"""
+    from services.case_service import get_citation_tables_cells
+    result, code = get_citation_tables_cells(case_id)
+    return jsonify(result), code
+
+
 @app.route("/case/<case_id>/annotate/<citation_id>", methods=["POST"])
 def annotate_citation(case_id, citation_id):
     from services.comparison_service import annotate_citation
@@ -1296,7 +1352,10 @@ def search_run_ai_score(case_id, run_id):
     from services.search_run_service import ai_score_run
     body = request.get_json() or {}
     try:
-        data = ai_score_run(case_id, run_id, limit=int(body.get("limit") or 20))
+        # limit=None で未スコアの全件を処理。明示で {"limit": N} 指定があれば従う。
+        raw_limit = body.get("limit")
+        limit = int(raw_limit) if raw_limit not in (None, "", 0) else None
+        data = ai_score_run(case_id, run_id, limit=limit)
     except NotImplementedError:
         return jsonify({"error": "AIスコア機能は未実装 (Phase2)"}), 501
     if not data:

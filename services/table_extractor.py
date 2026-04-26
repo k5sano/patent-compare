@@ -176,6 +176,147 @@ def extract_image_candidates(pdf_path: Path, out_dir: Path) -> list[ImageCandida
     return candidates
 
 
+def _normalize_caption_for_filter(label: str) -> tuple[bool, bool]:
+    """画像 record の label / context から (is_table, is_figure) を判定する。"""
+    if not label:
+        return False, False
+    if _TABLE_CAPTION_PAT.search(label):
+        return True, False
+    if _FIGURE_CAPTION_PAT.search(label):
+        return False, True
+    return False, False
+
+
+def extract_tables_from_image_records(
+    image_records: list[dict], out_dir: Path, doc_id: str, *,
+    model: str = DEFAULT_MODEL, effort: str = "low",
+    max_images: Optional[int] = None,
+    include_uncaptioned: bool = False,
+    progress=None,
+) -> dict:
+    """Google Patents 等から取得済みの image records から表抽出する。
+
+    PDF を持たない (まだ DL されていない) 引用文献向け。
+
+    Args:
+        image_records: [{"src": "https://...", "label": "表1", "context": "...",
+                         "width": ..., "height": ...}, ...]
+                       (modules.google_patents_scraper.fetch_patent_full_text の result["images"])
+        out_dir: 結果保存先 (ここに images/ と tables.json が出来る)
+        doc_id: 出力ファイル名のベース (patent_id 等)
+    """
+    import urllib.request
+    out_dir = Path(out_dir)
+    img_dir = out_dir / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+
+    if progress:
+        progress("scan", 0, 0, f"{doc_id}: {len(image_records)} 画像候補")
+
+    # キャプションフィルタを適用 (label or context をチェック)
+    candidates: list[dict] = []
+    skipped: list[dict] = []
+    for i, rec in enumerate(image_records):
+        label = rec.get("label") or ""
+        context = rec.get("context") or ""
+        is_table, is_figure = _normalize_caption_for_filter(label)
+        if not (is_table or is_figure):
+            # label が空: context からも判定試みる
+            is_table, is_figure = _normalize_caption_for_filter(context)
+        target = include_uncaptioned or is_table
+        cand = {
+            "index": i, "src": rec.get("src"),
+            "label": label, "context": context,
+            "width": rec.get("width", 0), "height": rec.get("height", 0),
+            "is_table_caption": is_table, "is_figure_caption": is_figure,
+        }
+        if target and not is_figure:
+            candidates.append(cand)
+        else:
+            cand["skip_reason"] = "figure_caption" if is_figure else "no_table_caption"
+            skipped.append(cand)
+
+    if max_images is not None:
+        candidates = candidates[:max_images]
+
+    tables = []
+    total_cost = 0.0
+    total_duration = 0
+    n_table = n_nontable = n_error = 0
+
+    for i, cand in enumerate(candidates, 1):
+        url = cand.get("src")
+        if not url:
+            continue
+        # ダウンロード → 一時 PNG
+        img_name = f"{doc_id}_img{cand['index']:03d}.png"
+        img_path = img_dir / img_name
+        if not img_path.exists():
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    img_path.write_bytes(r.read())
+            except Exception as e:
+                tables.append({
+                    "index": cand["index"], "src": url,
+                    "is_table": False, "error": f"image download failed: {e}",
+                    "label": cand["label"], "caption": cand["label"] or cand["context"],
+                })
+                n_error += 1
+                continue
+        if progress:
+            progress("extract", i, len(candidates),
+                     f"{img_name} cap={cand['label'] or '-'}")
+        et = extract_table_via_claude(
+            img_path, model=model, effort=effort,
+            caption_hint=cand["label"] or None,
+        )
+        rec_out = asdict(et)
+        rec_out.update({
+            "index": cand["index"],
+            "src": url,
+            "image_width": cand["width"],
+            "image_height": cand["height"],
+            "caption": cand["label"] or cand["context"],
+            "caption_label": cand["label"],
+        })
+        tables.append(rec_out)
+        total_cost += et.cost_usd_equivalent or 0.0
+        total_duration += et.duration_ms or 0
+        if et.error:
+            n_error += 1
+        elif et.is_table:
+            n_table += 1
+        else:
+            n_nontable += 1
+
+    summary = {
+        "doc_id": doc_id,
+        "source_kind": "image_records",
+        "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "model": model,
+        "candidates_total": len(image_records),
+        "candidates_targeted": len(candidates),
+        "candidates_skipped": len(skipped),
+        "skipped_reasons": [
+            {"index": s["index"], "src": s["src"],
+             "label": s["label"], "reason": s["skip_reason"]}
+            for s in skipped
+        ],
+        "n_table": n_table,
+        "n_nontable": n_nontable,
+        "n_error": n_error,
+        "total_duration_ms": total_duration,
+        "total_cost_usd_equivalent": round(total_cost, 4),
+        "tables": tables,
+    }
+    out_json = out_dir / "tables.json"
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+    summary["output_json"] = str(out_json)
+    return summary
+
+
 def find_table_references_in_text(pdf_path: Path) -> list[str]:
     """本文テキストから 表N / Table N / 実施例N 等の参照を抽出 (重複あり)。
 

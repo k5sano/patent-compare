@@ -4390,6 +4390,10 @@ async function srOpenRun(runId) {
     document.getElementById('sr-hits-title').textContent =
       `候補一覧: ${_srCurrentRun.formula_level || ''} (${_srCurrentRun.source || ''})`;
     await srRenderDiffSummary();
+    // 表抽出ステータスもロード (failed silently は ignore)
+    if (typeof srLoadTableExtractStatus === 'function') {
+      await srLoadTableExtractStatus();
+    }
     renderSrHits();
     document.getElementById('sr-hits-panel').scrollIntoView({behavior: 'smooth', block: 'start'});
   } catch (e) { alert('エラー: ' + e.message); }
@@ -4580,30 +4584,42 @@ function srRenderHitCard(h) {
   const abstractSrc = h.abstract || '';
   const claim1Src = h.claim1 || '';
 
-  // ヒット数集計（タイトル+要約+claim1+全文(あれば)）
-  const totalCounts = {};
-  const addCounts = (c) => Object.keys(c || {}).forEach(k => { totalCounts[k] = (totalCounts[k] || 0) + c[k]; });
+  // ヒット数集計（本文集計と表集計を分けて持つ）
+  const bodyCounts = {};
+  const tableCounts = {};
+  const addTo = (target, c) => Object.keys(c || {}).forEach(k => { target[k] = (target[k] || 0) + c[k]; });
   if (useHighlight) {
-    addCounts(pkmHighlight(titleSrc, idx).counts);
-    addCounts(pkmHighlight((ft && ft.abstract) || abstractSrc, idx).counts);
-    addCounts(pkmHighlight(claim1Src, idx).counts);
-    if (ft && Array.isArray(ft.claims)) addCounts(pkmHighlight(ft.claims.join('\n\n'), idx).counts);
-    if (ft && ft.description) addCounts(pkmHighlight(ft.description, idx).counts);
+    addTo(bodyCounts, pkmHighlight(titleSrc, idx).counts);
+    addTo(bodyCounts, pkmHighlight((ft && ft.abstract) || abstractSrc, idx).counts);
+    addTo(bodyCounts, pkmHighlight(claim1Src, idx).counts);
+    if (ft && Array.isArray(ft.claims)) addTo(bodyCounts, pkmHighlight(ft.claims.join('\n\n'), idx).counts);
+    if (ft && ft.description) addTo(bodyCounts, pkmHighlight(ft.description, idx).counts);
+    // 抽出済み表のセルから集計
+    const cellText = (window._tableExtractCells && window._tableExtractCells[pid]) || '';
+    if (cellText) addTo(tableCounts, pkmHighlight(cellText, idx).counts);
   }
 
   // チップ（kwGroups があれば常に表示。0件もグレーで見せて「対象未ヒット」を伝える）
   let countBar = '';
+  const totalCounts = {};
+  const allKeys = new Set([...Object.keys(bodyCounts), ...Object.keys(tableCounts)]);
+  for (const k of allKeys) totalCounts[k] = (bodyCounts[k] || 0) + (tableCounts[k] || 0);
   const groups = (kwGroups || []).slice().sort((a, b) =>
     (totalCounts[b.group_id] || 0) - (totalCounts[a.group_id] || 0));
   if (groups.length > 0) {
     const chips = groups.map(g => {
-      const n = totalCounts[g.group_id] || 0;
+      const nb = bodyCounts[g.group_id] || 0;
+      const nt = tableCounts[g.group_id] || 0;
+      const n = nb + nt;
       const c = groupColor(g.group_id);
       const cls = n > 0 ? 'sr-pkm-chip-on' : 'sr-pkm-chip-off';
-      return `<span class="sr-pkm-chip ${cls}" style="--c:${c};" title="${_pkmEsc(g.label || ('group' + g.group_id))}">${_pkmEsc((g.label || '').slice(0, 8))}<span class="sr-pkm-chip-n">${n}</span></span>`;
+      const tblMark = nt > 0 ? `<span class="sr-pkm-chip-tbl" title="表内ヒット ${nt} 件">📊${nt}</span>` : '';
+      const tip = `${(g.label || ('group'+g.group_id))} | 本文 ${nb} / 表 ${nt}`;
+      return `<span class="sr-pkm-chip ${cls}" style="--c:${c};" title="${_pkmEsc(tip)}">${_pkmEsc((g.label || '').slice(0, 8))}<span class="sr-pkm-chip-n">${nb}</span>${tblMark}</span>`;
     }).join('');
     const scope = ft ? '全文' : (abstractSrc || claim1Src ? '要約のみ' : '未取得');
-    countBar = `<div class="sr-pkm-counts" title="集計対象: ${scope}">${chips}<span class="sr-pkm-scope">${scope}</span></div>`;
+    const tableScope = (window._tableExtractCells && window._tableExtractCells[pid]) ? ' + 表' : '';
+    countBar = `<div class="sr-pkm-counts" title="集計対象: ${scope}${tableScope}">${chips}<span class="sr-pkm-scope">${scope}${tableScope}</span></div>`;
   }
 
   // 取得元バッジ
@@ -4624,6 +4640,28 @@ function srRenderHitCard(h) {
   const fetchBtnLabel = ft ? '🔄' : '📄';
   const fetchBtnTitle = ft ? '全文を再取得' : 'この文献の全文を取得';
 
+  // 表抽出可能条件: 引用登録済み (PDF あり) または全文取得済み (Google から images 取得済み)
+  // ft (window._pkmFullTexts[pid]) は srFetchHitFullText 後に images を含んでいる
+  const extractStatus = (window._tableExtractStatus && window._tableExtractStatus[pid]) || null;
+  const hasImages = !!(ft && Array.isArray(ft.images) && ft.images.length > 0);
+  const canExtract = !!h.downloaded_as_citation || hasImages;
+  const extractBadge = (() => {
+    if (!canExtract) return '';
+    if (extractStatus && extractStatus.extracted) {
+      return `<span class="sr-tbl-done" title="表抽出済み: ${extractStatus.n_table || 0}件 / コスト相当 $${extractStatus.cost || 0}">📊×${extractStatus.n_table || 0}</span>`;
+    }
+    return '';
+  })();
+  const extractBtnLabel = (extractStatus && extractStatus.extracted) ? '🔄' : '📊';
+  const extractBtnTitle = (extractStatus && extractStatus.extracted)
+    ? '表を再抽出 (Vision サブスク消費)'
+    : (canExtract
+        ? `この引例の図表を Vision で抽出 (${h.downloaded_as_citation ? 'PDF' : 'Google画像'} ${hasImages ? `${ft.images.length}枚` : ''})`
+        : '抽出するには 📄 で全文取得 か ☆→DL を先に実行してください');
+  // 一括選択チェックボックス
+  const selChecked = (window._tableExtractSelected && window._tableExtractSelected.has(pid)) ? 'checked' : '';
+  const selDisabled = canExtract ? '' : 'disabled';
+
   // タイトル → 全文ハイライトビューを新タブで開く
   const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view`;
   const titleEsc = _pkmEsc(titleSrc) || '<em style="color:var(--text2);">(タイトル未取得 — クリックで全文取得)</em>';
@@ -4631,6 +4669,7 @@ function srRenderHitCard(h) {
   return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
     <div class="sr-hit-row1">
       <div class="sr-hit-actions">
+        <input type="checkbox" class="sr-hit-tblsel" data-pid="${pid}" ${selChecked} ${selDisabled} title="${canExtract ? '表抽出の一括選択' : 'PDF未DL — 抽出不可'}" onchange="srToggleTableSel('${pid}', this.checked)">
         ${['star', 'triangle', 'pending', 'hold', 'reject'].map(s => {
           const active = (s === screening) ? 'active' : '';
           return `<button class="sr-btn-${s} ${active}" title="${s}"
@@ -4641,10 +4680,11 @@ function srRenderHitCard(h) {
         <span class="sr-hit-pid">${pid}</span>
         <span class="sr-hit-date">${date}</span>
         <span class="sr-hit-ipc">${ipc}</span>
-        ${aiScore}${dled}
+        ${aiScore}${dled}${extractBadge}
         <span style="flex:1"></span>
         ${srcBadge}
         <button class="sr-hit-fetch-btn" onclick="srFetchHitFullText('${_pkmEsc(pid).replace(/'/g, "\\'")}', this)" title="${fetchBtnTitle}">${fetchBtnLabel}</button>
+        <button class="sr-hit-fetch-btn" onclick="srExtractOneTable('${_pkmEsc(pid).replace(/'/g, "\\'")}', this)" title="${extractBtnTitle}" ${canExtract ? '' : 'disabled'}>${extractBtnLabel}</button>
         ${jpUrl ? `<a href="${jpUrl}" target="_blank" class="sr-hit-link">J-PlatPat</a>` : ''}
         <a href="${gpUrl}" target="_blank" class="sr-hit-link">Google Patents</a>
       </div>
@@ -4893,14 +4933,15 @@ async function srEnrich() {
 
 async function srAiScore() {
   if (!_srCurrentRun) return;
-  if (!confirm('Claudeを呼び出して関連度スコアを計算します。\n未スコアの最大20件まで実行します。')) return;
+  const pending = (_srCurrentRun.hits || []).filter(h => h.ai_score == null).length;
+  if (!confirm(`Claudeを呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
   const loading = document.getElementById('loading-sr-aiscore');
   loading.classList.add('show');
   try {
     const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/ai-score`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({limit: 20}),
+      body: JSON.stringify({}),  // limit 未指定 = 全件
     });
     const data = await r.json();
     loading.classList.remove('show');
@@ -4911,6 +4952,152 @@ async function srAiScore() {
   } catch (e) {
     loading.classList.remove('show');
     alert('通信エラー: ' + e.message);
+  }
+}
+
+// ===== 引用文献の表抽出 (Step 4.5) =====
+window._tableExtractSelected = window._tableExtractSelected || new Set();
+window._tableExtractStatus = window._tableExtractStatus || {};
+window._tableExtractCells = window._tableExtractCells || {};  // pid → flat cell text
+
+async function srLoadTableExtractStatus() {
+  try {
+    const r = await fetch(`/case/${CASE_ID}/citations/tables-status`);
+    const d = await r.json();
+    const map = {};
+    for (const it of (d.items || [])) map[it.citation_id] = it;
+    window._tableExtractStatus = map;
+  } catch(_) { /* ignore */ }
+  // セル本文も同時ロード (ハイライト集計用)
+  try {
+    const r2 = await fetch(`/case/${CASE_ID}/citations/tables-cells`);
+    const d2 = await r2.json();
+    window._tableExtractCells = d2.cells || {};
+  } catch(_) { /* ignore */ }
+}
+
+function srToggleTableSel(pid, checked) {
+  const sel = window._tableExtractSelected;
+  if (checked) sel.add(pid); else sel.delete(pid);
+  // 全体カウント表示の更新
+  const lbl = document.getElementById('sr-pkm-bulk-status');
+  if (lbl) {
+    const n = sel.size;
+    lbl.textContent = n > 0 ? `表抽出選択: ${n} 件` : '';
+  }
+}
+
+async function srExtractOneTable(pid, btn) {
+  if (!confirm(`引例 ${pid} の図表を Vision で抽出します。\n所要 1〜2 分、サブスク消費 約 $0.05〜$0.3。続行しますか？`)) return;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(pid)}/extract-tables`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force: orig === '🔄'}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop();
+      for (const block of events) {
+        const line = block.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.stage === 'extract' && evt.total) {
+            btn.textContent = `${evt.current}/${evt.total}`;
+          } else if (evt.stage === 'done') {
+            const s = evt.summary || {};
+            alert(`✅ ${pid}: ${s.n_table || 0} 表抽出 / 所要 ${((s.total_duration_ms || 0)/1000).toFixed(1)}s / コスト相当 $${s.total_cost_usd_equivalent || 0}`);
+          } else if (evt.stage === 'skip') {
+            alert(`スキップ: ${pid} は既に抽出済みです (再抽出するには 🔄 を使用)`);
+          } else if (evt.stage === 'error') {
+            throw new Error(evt.message);
+          }
+        } catch(e) {
+          if (e instanceof SyntaxError) continue;
+          throw e;
+        }
+      }
+    }
+    await srLoadTableExtractStatus();
+    renderSrHits();
+  } catch(e) {
+    alert('表抽出失敗: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    // textContent は renderSrHits で再生成されるので戻し不要
+  }
+}
+
+async function srExtractTablesBulk() {
+  const sel = Array.from(window._tableExtractSelected || []);
+  if (!sel.length) { alert('チェックを入れた引例がありません'); return; }
+  if (!confirm(`選択した ${sel.length} 件の引例の図表を Vision で抽出します。\n1 件 1〜2 分、合計サブスク消費 ${(sel.length * 0.3).toFixed(1)} 程度の見込み。続行しますか？`)) return;
+  const lbl = document.getElementById('sr-pkm-bulk-status');
+  if (lbl) lbl.textContent = `表抽出 0/${sel.length} ...`;
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citations/extract-tables-bulk`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({citation_ids: sel}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let perCid = {};
+    let currentI = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop();
+      for (const block of events) {
+        const line = block.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        try {
+          const evt = JSON.parse(line.slice(6));
+          if (evt.stage === 'bulk_item_start') {
+            currentI = evt.current;
+            if (lbl) lbl.textContent = `表抽出 ${currentI}/${evt.total}: ${evt.citation_id} 開始`;
+          } else if (evt.stage === 'extract' && evt.total) {
+            if (lbl) lbl.textContent = `表抽出 ${currentI}/${sel.length}: ${evt.citation_id} ${evt.current}/${evt.total}`;
+          } else if (evt.stage === 'done' || evt.stage === 'skip') {
+            perCid[evt.citation_id] = evt;
+          } else if (evt.stage === 'error') {
+            perCid[evt.citation_id] = evt;
+          } else if (evt.stage === 'bulk_done') {
+            const ok = Object.values(evt.summary_per_citation || {}).filter(e => e.stage === 'done').length;
+            const skipped = Object.values(evt.summary_per_citation || {}).filter(e => e.stage === 'skip').length;
+            const err = Object.values(evt.summary_per_citation || {}).filter(e => e.stage === 'error').length;
+            const cost = Object.values(evt.summary_per_citation || {})
+              .filter(e => e.stage === 'done')
+              .reduce((s, e) => s + (e.summary?.total_cost_usd_equivalent || 0), 0);
+            alert(`完了: 成功 ${ok} / スキップ ${skipped} / エラー ${err}\nサブスク消費相当 $${cost.toFixed(3)}`);
+          }
+        } catch(e) {
+          if (e instanceof SyntaxError) continue;
+          throw e;
+        }
+      }
+    }
+    await srLoadTableExtractStatus();
+    renderSrHits();
+    if (lbl) lbl.textContent = '';
+  } catch(e) {
+    alert('一括抽出失敗: ' + e.message);
+    if (lbl) lbl.textContent = '';
   }
 }
 

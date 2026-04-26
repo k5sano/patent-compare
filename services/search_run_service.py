@@ -327,6 +327,58 @@ def _heal_run_hits(data: dict) -> bool:
     return changed
 
 
+def _enrich_hits_from_cache(case_id: str, data: dict) -> bool:
+    """各 hit の title / abstract / claim1 が空なら cache (_hit_text) から補完する。
+
+    J-PlatPat スクレイピング側でタイトル抽出に失敗した 再表/特表 系ヒットは
+    cache 側 (Google Patents から取得) には完備されていることがあるため、
+    load_run 時に自動マージして UI と AI スコアの両方を救う。
+    """
+    changed = False
+    for h in (data.get("hits") or []):
+        pid = (h.get("patent_id") or "").strip()
+        if not pid:
+            continue
+        # 既に十分な情報があるならスキップ (要約か請求項1のいずれかが入っていれば OK)
+        has_body = bool((h.get("abstract") or "").strip()) or bool((h.get("claim1") or "").strip())
+        has_title = bool((h.get("title") or "").strip())
+        if has_title and has_body:
+            continue
+        cached = get_hit_text(case_id, pid)
+        if not cached:
+            continue
+        merged_anything = False
+        # title
+        if not has_title and cached.get("title"):
+            h["title"] = cached["title"]
+            merged_anything = True
+        # abstract
+        if not (h.get("abstract") or "").strip() and cached.get("abstract"):
+            h["abstract"] = cached["abstract"]
+            merged_anything = True
+        # claim1: cached.claims が list なら 1 個目を採用
+        if not (h.get("claim1") or "").strip():
+            cl = cached.get("claims")
+            if isinstance(cl, list) and cl:
+                h["claim1"] = str(cl[0])
+                merged_anything = True
+            elif isinstance(cl, str) and cl:
+                h["claim1"] = cl
+                merged_anything = True
+        # applicant: 出願人が空で cache にあれば補完
+        if not (h.get("applicant") or "").strip() and cached.get("assignee"):
+            h["applicant"] = cached["assignee"]
+            merged_anything = True
+        if merged_anything:
+            changed = True
+            # 古い AI スコアは「情報不足」前提で付けられた可能性が高いので無効化。
+            # 次の「AI関連度スコア」実行時に enriched データで再評価される。
+            if h.get("ai_score") is not None:
+                h["ai_score"] = None
+                h["ai_reason"] = (h.get("ai_reason") or "") + " [enriched: needs rescore]"
+    return changed
+
+
 def load_run(case_id: str, run_id: str) -> Optional[dict]:
     p = _runs_dir(case_id) / f"{run_id}.json"
     if not p.exists():
@@ -334,7 +386,10 @@ def load_run(case_id: str, run_id: str) -> Optional[dict]:
     with open(p, "r", encoding="utf-8") as f:
         data = json.load(f)
     # 古いランで再表がスラッシュ区切りのため patent_id 取得に失敗していたものを救出
-    if _heal_run_hits(data):
+    healed = _heal_run_hits(data)
+    # 全文 cache に title/abstract/claim1 がある hit を自動マージ
+    enriched = _enrich_hits_from_cache(case_id, data)
+    if healed or enriched:
         try:
             with open(p, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -587,11 +642,13 @@ def enrich_run(case_id: str, run_id: str, limit: int = 20) -> Optional[dict]:
     return data
 
 
-def ai_score_run(case_id: str, run_id: str, limit: int = 20) -> Optional[dict]:
+def ai_score_run(case_id: str, run_id: str, limit: Optional[int] = None) -> Optional[dict]:
     """Claude を使って本願との関連度スコア (0-100) を付与する。
 
     本願の claim1 / 発明の名称を入力として各 hit の title+abstract+claim1 を
     評価し ai_score と ai_reason を書き込む。
+
+    limit=None なら未スコアのヒット全件に対して実行する。
     """
     from modules.claude_client import call_claude, ClaudeClientError
 
@@ -605,7 +662,7 @@ def ai_score_run(case_id: str, run_id: str, limit: int = 20) -> Optional[dict]:
 
     scored_count = 0
     for h in data.get("hits", []):
-        if scored_count >= limit:
+        if limit is not None and scored_count >= limit:
             break
         if h.get("ai_score") is not None:
             continue

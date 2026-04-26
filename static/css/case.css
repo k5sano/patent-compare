@@ -576,6 +576,10 @@
     font-size: 0.7rem; font-weight: 700; }
   .sr-dled { background: #14532d; color: #4ade80; padding: 1px 6px; border-radius: 8px;
     font-size: 0.7rem; }
+  .sr-tbl-done { background: #422006; color: #fb923c; padding: 1px 6px; border-radius: 8px;
+    font-size: 0.7rem; font-weight: 700; }
+  .sr-hit-tblsel { width: 14px; height: 14px; cursor: pointer; }
+  .sr-hit-tblsel:disabled { cursor: not-allowed; opacity: 0.3; }
 
   /* ----- エディタ強化 (複製して編集) ----- */
   .sr-parent-banner { display: flex; align-items: center; gap: 0.5rem;
@@ -770,6 +774,9 @@
     padding: 0 5px; border-radius: 8px; font-family: monospace; font-size: 0.7rem;
     font-weight: 700; min-width: 1rem; text-align: center; }
   .sr-pkm-chip-on .sr-pkm-chip-n { color: var(--c); }
+  .sr-pkm-chip-tbl { background: #422006; color: #fb923c;
+    padding: 0 4px; border-radius: 8px; font-size: 0.62rem; font-weight: 700;
+    margin-left: 2px; }
   #btn-sr-pkm { font-size: 0.82rem; }
   #btn-sr-pkm.active { background: rgba(168, 85, 247, 0.15);
     border-color: #a855f7; color: #c084fc; }

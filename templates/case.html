@@ -726,6 +726,7 @@
           <button class="btn btn-outline" onclick="srFetchAllHitsFullText({force:true})" title="既に取得済みのものも含めて、全ヒットの全文を再取得（番号正規化変更後の更新等）">🔄 全部再取得</button>
           <span id="sr-pkm-bulk-status" style="font-size:0.8rem; color:var(--text2);"></span>
           <button class="btn btn-success" onclick="srDownloadStarred()" title="☆マークの候補を一括DL&amp;引用登録">☆をまとめてDL&amp;引用登録</button>
+          <button class="btn btn-outline" onclick="srExtractTablesBulk()" title="チェックを入れた引用文献(DL済み)の図表をClaude Visionで一括抽出。サブスク消費 約$0.3/件">📊 選択した引例の表を抽出</button>
           <span style="flex:1"></span>
           <label style="font-size:0.8rem; color:var(--text2);">フィルタ:</label>
           <select id="sr-filter" onchange="renderSrHits()">
