@@ -167,6 +167,54 @@ def _fterm_short_code(code: str) -> str:
     return m.group(1) if m else (code or "")
 
 
+def _fterm_lookup_node(code: str, dict_nodes: dict):
+    """F-term コードを辞書から段階的に引く。
+
+    試行順:
+      1. 入力コードそのまま (`AA01` 等)
+      2. テーマプレフィックスを剥がした短縮形 (`4C083AA01` → `AA01`)
+      3. 短縮形からさらに付加コード (請求項=1 / 実施例=2 等の末尾 1 桁) を剥がす
+         (`AA011` → `AA01`)
+
+    見つかればノード dict、見つからなければ None。
+    """
+    import re
+    if not code or not dict_nodes:
+        return None
+    if code in dict_nodes:
+        return dict_nodes[code]
+    short = _fterm_short_code(code)
+    if short in dict_nodes:
+        return dict_nodes[short]
+    m = re.match(r"^([A-Z]{2}\d{2})\d$", short)
+    if m and m.group(1) in dict_nodes:
+        return dict_nodes[m.group(1)]
+    return None
+
+
+def enrich_fterm_groups(groups, field: str = "cosmetics"):
+    """各キーワードグループの F-term の desc が空なら辞書から補完する (in-place)。
+
+    keywords.json には保存しない。ビュー直前に表示用補完するための呼び出し用。
+    """
+    from modules.fterm_dict import get_nodes
+    try:
+        dict_nodes = get_nodes(field)
+    except Exception:
+        return groups
+    if not dict_nodes:
+        return groups
+    for g in groups or []:
+        fts = (g.get("search_codes") or {}).get("fterm") or []
+        for ft in fts:
+            if ft.get("desc"):
+                continue
+            node = _fterm_lookup_node(ft.get("code", ""), dict_nodes)
+            if node and node.get("label"):
+                ft["desc"] = node["label"]
+    return groups
+
+
 def fterm_candidates(case_id):
     """本願のFterm候補一覧を返す。
 
@@ -191,10 +239,15 @@ def fterm_candidates(case_id):
 
     def dict_examples(code: str) -> list:
         """フルコード or 短縮コードから辞書の examples を最大3件取得"""
-        node = dict_nodes.get(code) or dict_nodes.get(_fterm_short_code(code))
+        node = _fterm_lookup_node(code, dict_nodes)
         if not node:
             return []
         return (node.get("examples") or [])[:3]
+
+    def dict_label(code: str) -> str:
+        """辞書ラベル (説明) を返す。見つからなければ空文字。"""
+        node = _fterm_lookup_node(code, dict_nodes)
+        return (node.get("label") or "") if node else ""
 
     candidates = []
     seen = set()
@@ -209,7 +262,7 @@ def fterm_candidates(case_id):
                 seen.add(code)
                 candidates.append({
                     "code": code,
-                    "label": ft.get("label", ""),
+                    "label": ft.get("label", "") or dict_label(code),
                     "source": "本願分類",
                     "type": ft.get("type", ""),
                     "note": ft.get("note", ""),
@@ -227,7 +280,7 @@ def fterm_candidates(case_id):
                     seen.add(code)
                     candidates.append({
                         "code": code,
-                        "label": ft.get("desc", ""),
+                        "label": ft.get("desc", "") or dict_label(code),
                         "source": "既存グループ",
                         "examples": dict_examples(code),
                     })
