@@ -1058,6 +1058,150 @@ if (INITIAL_RELATED && Object.keys(INITIAL_RELATED).length > 0) {
 }
 
 // ================================================================
+// 本願 PDF 図表 Vision 抽出
+// ================================================================
+function _appendTableProgress(line) {
+  const box = document.getElementById('hongan-tables-progress');
+  if (!box) return;
+  box.style.display = 'block';
+  const ts = new Date().toLocaleTimeString();
+  box.textContent += `[${ts}] ${line}\n`;
+  box.scrollTop = box.scrollHeight;
+}
+
+async function extractHonganTables() {
+  const btn = document.getElementById('btn-extract-hongan-tables');
+  const progress = document.getElementById('hongan-tables-progress');
+  const result = document.getElementById('hongan-tables-result');
+  if (!confirm('本願PDFから図表を Vision で抽出します。\n1 表あたり約 25 秒、サブスク消費 $0.05〜0.12/表 の目安です。続行しますか？')) return;
+  btn.disabled = true;
+  progress.textContent = '';
+  progress.style.display = 'block';
+  result.innerHTML = '';
+  _appendTableProgress('抽出を開始します...');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/extract-tables`, {
+      method: 'POST',
+      headers: {'Accept': 'text/event-stream'},
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(err.slice(0, 200));
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let summary = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop();
+      for (const block of events) {
+        const line = block.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch(_) { continue; }
+        if (evt.stage === 'start') {
+          _appendTableProgress(`PDF: ${evt.pdf}`);
+        } else if (evt.stage === 'scan') {
+          _appendTableProgress(`スキャン中: ${evt.info}`);
+        } else if (evt.stage === 'extract') {
+          _appendTableProgress(`[${evt.current}/${evt.total}] ${evt.info}`);
+        } else if (evt.stage === 'done') {
+          summary = evt.summary;
+          _appendTableProgress(`完了: ${summary.n_table} 表抽出 / 所要 ${(summary.total_duration_ms/1000).toFixed(1)}s / コスト相当 $${summary.total_cost_usd_equivalent}`);
+        } else if (evt.stage === 'error') {
+          throw new Error(evt.message);
+        }
+      }
+    }
+    if (summary) {
+      await loadHonganTables();
+    }
+  } catch(e) {
+    _appendTableProgress(`!! エラー: ${e.message}`);
+    alert('表抽出に失敗: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadHonganTables() {
+  const result = document.getElementById('hongan-tables-result');
+  if (!result) return;
+  result.innerHTML = '<p style="color:var(--text2); font-size:0.85rem;">読み込み中...</p>';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/tables`);
+    const data = await resp.json();
+    if (!data.exists) {
+      result.innerHTML = '<p style="color:var(--text2); font-size:0.85rem;">まだ抽出されていません。「本願 実施例表を抽出」ボタンを押してください。</p>';
+      return;
+    }
+    _renderHonganTables(data.data);
+  } catch(e) {
+    result.innerHTML = `<p style="color:#f87171;">読み込み失敗: ${e.message}</p>`;
+  }
+}
+
+function _renderHonganTables(payload) {
+  const result = document.getElementById('hongan-tables-result');
+  const tables = (payload.tables || []).filter(t => t.is_table);
+  if (!tables.length) {
+    result.innerHTML = '<p style="color:var(--text2);">抽出された表がありません。</p>';
+    return;
+  }
+  const refs = (payload.body_table_references || []).filter(r => /表|Table/i.test(r));
+  const html = [
+    `<div style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">`,
+    `  本文中の表参照: ${refs.length} 件 / 検出キャプション付き画像: ${payload.candidates_targeted ?? '?'} / 抽出成功: ${tables.length}`,
+    `  &nbsp;|&nbsp; 所要 ${((payload.total_duration_ms||0)/1000).toFixed(1)}s &nbsp;|&nbsp; サブスク相当 $${payload.total_cost_usd_equivalent ?? 0}`,
+    `</div>`,
+  ];
+  for (const t of tables) {
+    html.push(_renderOneTable(t));
+  }
+  result.innerHTML = html.join('\n');
+}
+
+function _renderOneTable(t) {
+  const title = t.title || t.caption_label || `表 (p.${t.page_num})`;
+  const headers = t.headers || [];
+  const rows = t.rows || [];
+  const head = headers.map(h => `<th style="padding:4px 8px; border:1px solid #475569; background:#1e293b; font-weight:600; white-space:nowrap;">${_esc(h)}</th>`).join('');
+  const body = rows.map(r => {
+    const cells = (r.cells || []).map(c => `<td style="padding:4px 8px; border:1px solid #334155; vertical-align:top;">${_esc(c)}</td>`).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return [
+    `<details open style="margin-bottom:0.8rem; border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.8rem; background:#0f172a;">`,
+    `  <summary style="cursor:pointer; font-weight:600; color:#cbd5e1;">${_esc(title)} <span style="color:#64748b; font-size:0.8rem; font-weight:normal;">(p.${t.page_num}, ${rows.length} 行)</span></summary>`,
+    `  <div style="overflow:auto; margin-top:0.5rem;">`,
+    `    <table style="border-collapse:collapse; font-size:0.8rem;">`,
+    `      <thead><tr>${head}</tr></thead>`,
+    `      <tbody>${body}</tbody>`,
+    `    </table>`,
+    `  </div>`,
+    `</details>`,
+  ].join('\n');
+}
+
+function _esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 初期表示: 既に抽出済みなら自動ロード (軽量)
+document.addEventListener('DOMContentLoaded', () => {
+  const result = document.getElementById('hongan-tables-result');
+  if (!result) return;
+  fetch(`/case/${CASE_ID}/hongan/tables`).then(r => r.json()).then(d => {
+    if (d.exists) _renderHonganTables(d.data);
+  }).catch(() => {});
+});
+
+// ================================================================
 // キーワードグループ State
 // ================================================================
 let kwGroups = window.CASE_BOOTSTRAP.keywords || [];

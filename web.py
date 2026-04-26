@@ -575,6 +575,32 @@ def bookmark_hongan(case_id):
     return jsonify(result), code
 
 
+@app.route("/case/<case_id>/hongan/extract-tables", methods=["POST"])
+def extract_hongan_tables(case_id):
+    """本願 PDF から実施例表を Vision で抽出 (SSE で進捗配信)。
+
+    クライアント側は EventSource で接続し data: <json> を順次受信。
+    最終 stage="done" イベントの後、GET /case/<id>/hongan/tables で全文取得する。
+    """
+    from services.case_service import stream_hongan_table_extraction
+    return Response(
+        stream_hongan_table_extraction(case_id),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.route("/case/<case_id>/hongan/tables", methods=["GET"])
+def get_hongan_tables_route(case_id):
+    """抽出済みの本願表データを返す。"""
+    from services.case_service import get_hongan_tables
+    result, code = get_hongan_tables(case_id)
+    return jsonify(result), code
+
+
 @app.route("/case/<case_id>/annotate/<citation_id>", methods=["POST"])
 def annotate_citation(case_id, citation_id):
     from services.comparison_service import annotate_citation

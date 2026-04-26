@@ -683,6 +683,106 @@ def compute_related_paragraphs(case_id):
     return {"success": True, "related": related}, 200
 
 
+def get_hongan_tables(case_id):
+    """既に抽出済みの本願表データ (cases/<id>/output/tables/hongan/tables.json) を返す。"""
+    case_dir = get_case_dir(case_id)
+    tables_json = case_dir / "output" / "tables" / "hongan" / "tables.json"
+    if not tables_json.exists():
+        return {"exists": False}, 200
+    try:
+        with open(tables_json, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        return {"error": f"tables.json 読み込み失敗: {e}"}, 500
+    return {"exists": True, "data": data}, 200
+
+
+def stream_hongan_table_extraction(case_id, *, model="sonnet", effort="low"):
+    """本願 PDF から実施例表を SSE で抽出 (進捗をリアルタイム配信)。
+
+    yields: SSE 形式の "data: <json>\\n\\n" 文字列。
+    各イベントは {"stage": "...", ...} の辞書。
+    最終イベントは {"stage": "done", "summary": {...}} もしくは {"stage": "error", ...}。
+    """
+    import queue
+    import threading
+    from services.table_extractor import extract_tables_from_pdf
+
+    src_pdf = _resolve_hongan_pdf(case_id)
+    if src_pdf is None:
+        yield "data: " + json.dumps(
+            {"stage": "error", "message": "本願PDFが見つかりません"},
+            ensure_ascii=False,
+        ) + "\n\n"
+        return
+
+    case_dir = get_case_dir(case_id)
+    out_dir = case_dir / "output" / "tables" / "hongan"
+
+    events: "queue.Queue[dict]" = queue.Queue()
+
+    def progress(stage, current, total, info):
+        events.put({
+            "stage": stage, "current": current,
+            "total": total, "info": info,
+        })
+
+    result_box = {}
+
+    def run():
+        try:
+            r = extract_tables_from_pdf(
+                src_pdf, out_dir, model=model, effort=effort, progress=progress,
+            )
+            result_box["summary"] = r
+        except Exception as e:
+            result_box["error"] = f"{type(e).__name__}: {e}"
+        events.put({"stage": "_done"})
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+
+    yield "data: " + json.dumps(
+        {"stage": "start", "pdf": Path(src_pdf).name},
+        ensure_ascii=False,
+    ) + "\n\n"
+
+    while True:
+        ev = events.get()
+        if ev.get("stage") == "_done":
+            break
+        yield "data: " + json.dumps(ev, ensure_ascii=False) + "\n\n"
+
+    th.join(timeout=2)
+
+    if "error" in result_box:
+        yield "data: " + json.dumps(
+            {"stage": "error", "message": result_box["error"]},
+            ensure_ascii=False,
+        ) + "\n\n"
+        return
+
+    summary = result_box.get("summary", {})
+    # tables 本体は重いので summary には件数・コスト・パスのみ含める。
+    # 詳細は GET /case/<id>/hongan/tables で別取得。
+    light = {
+        "candidates_total": summary.get("candidates_total"),
+        "candidates_targeted": summary.get("candidates_targeted"),
+        "candidates_skipped": summary.get("candidates_skipped"),
+        "n_table": summary.get("n_table"),
+        "n_nontable": summary.get("n_nontable"),
+        "n_error": summary.get("n_error"),
+        "total_duration_ms": summary.get("total_duration_ms"),
+        "total_cost_usd_equivalent": summary.get("total_cost_usd_equivalent"),
+        "body_table_references": summary.get("body_table_references", []),
+        "output_json": summary.get("output_json"),
+    }
+    yield "data: " + json.dumps(
+        {"stage": "done", "summary": light},
+        ensure_ascii=False,
+    ) + "\n\n"
+
+
 def create_bookmarked_hongan(case_id):
     """本願PDFに分節IDラベル + ブックマークを付与した新PDFを作成"""
     import fitz
