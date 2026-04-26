@@ -781,6 +781,11 @@ def fetch_jplatpat_full_text(patent_id: str, *, language: str = "ja",
                 full_text = re.sub(r'\n{3,}', '\n\n', full_text).strip()
                 result["raw"] = full_text
 
+                # 書誌情報 (IPC / FI / Fターム / テーマコード) を抽出
+                cls = parse_classifications_from_raw(full_text)
+                if any(cls.values()):
+                    result["classifications"] = cls
+
                 # タイトル (次の【...】 or "(NN)" バイブリオ・マーカーまで)
                 m = re.search(r'【発明の名称】\s*([^【\n]{1,200})', full_text)
                 if m:
@@ -825,6 +830,113 @@ def fetch_jplatpat_full_text(patent_id: str, *, language: str = "ja",
         result["error"] = f"{type(e).__name__}: {e}"
 
     return result
+
+
+_FW2HW_CLASS = str.maketrans({
+    "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
+    "５": "5", "６": "6", "７": "7", "８": "8", "９": "9",
+    "Ａ": "A", "Ｂ": "B", "Ｃ": "C", "Ｄ": "D", "Ｅ": "E", "Ｆ": "F",
+    "Ｇ": "G", "Ｈ": "H", "Ｉ": "I", "Ｊ": "J", "Ｋ": "K", "Ｌ": "L",
+    "Ｍ": "M", "Ｎ": "N", "Ｏ": "O", "Ｐ": "P", "Ｑ": "Q", "Ｒ": "R",
+    "Ｓ": "S", "Ｔ": "T", "Ｕ": "U", "Ｖ": "V", "Ｗ": "W", "Ｘ": "X",
+    "Ｙ": "Y", "Ｚ": "Z", "／": "/", "＋": "+", "－": "-", "・": " ",
+    "　": " ", "\xa0": " ",
+})
+
+
+def parse_classifications_from_raw(raw_text: str) -> dict:
+    """J-PlatPat 詳細ページ raw text から IPC/FI/Fターム/テーマコード を抽出する。
+
+    検出パターン:
+      【国際特許分類】 / 【ＦＩ】 → IPC, FI コード列
+      【Ｆターム】 → Fターム コード列 (4桁数字+英字+3桁数字 or 短縮形)
+      【テーマコード】 → テーマコード (4桁数字+英字+3桁数字)
+
+    Returns:
+        {"ipc": [...], "fi": [...], "fterm": [...], "theme_codes": [...]}
+        各リストは重複除去済み。1 件も拾えなければ空リスト。
+    """
+    if not raw_text:
+        return {"ipc": [], "fi": [], "fterm": [], "theme_codes": []}
+
+    # 全角→半角正規化 (中黒 ・ → 空白で間に挟まる場合あり)
+    norm = raw_text.translate(_FW2HW_CLASS)
+
+    # 【ＦＩ】 直後の塊から FI 抽出 (次の 【...】 までを scope)
+    # J-PlatPat の表示は「【Ｆターム（参考）】」「【テーマコード（参考）】」のように
+    # （参考）が付くケースがあるので、両方対応する。
+    def _section(label: str, max_chars: int = 1500) -> str:
+        # 全角・半角 + 「（参考）」付き / 無し をすべて試す
+        norm_label = label.translate(_FW2HW_CLASS)
+        candidates = [
+            f"【{label}】", f"【{norm_label}】",
+            f"【{label}（参考）】", f"【{norm_label}（参考）】",
+            f"【{label}(参考)】", f"【{norm_label}(参考)】",
+        ]
+        for lab in candidates:
+            i = norm.find(lab)
+            if i < 0:
+                continue
+            j = i + len(lab)
+            # 次の 【...】 までで切る (なければ max_chars)
+            k = norm.find("【", j)
+            end = k if 0 < k - j < max_chars else j + max_chars
+            return norm[j:end]
+        return ""
+
+    # IPC / FI: A61K 8/44, B32B 27/00 など
+    _IPC_RE = re.compile(r"[A-H]\d{2}[A-Z]\s*\d+/\d+")
+    ipc_section = _section("国際特許分類")
+    fi_section = _section("FI")
+
+    ipc = list(dict.fromkeys(re.findall(_IPC_RE, ipc_section)))
+    # FI は付加情報 (例: A61K 8/44 1) や括弧書きが混ざる
+    fi_raw = re.findall(_IPC_RE, fi_section)
+    # 各コードの直後 1 文字 (展開記号 A/B/C/D/H/Z 等) を保持
+    fi_with_ext = []
+    for m in re.finditer(r"([A-H]\d{2}[A-Z]\s*\d+/\d+)\s*([A-Z])?", fi_section):
+        code = re.sub(r"\s+", " ", m.group(1).strip())
+        if m.group(2):
+            code = code + " " + m.group(2)
+        fi_with_ext.append(code)
+    fi = list(dict.fromkeys(fi_with_ext or fi_raw))
+
+    # Fターム: <1 数字><英字><3 数字> + <AA-FF 等 2 英字> + <2-3 数字>
+    # 例: 4C083AB032, 4H003AB05
+    #
+    # J-PlatPat 詳細ページでは複数の Fターム コードがスペースなしで連結された
+    # 文字列として現れる ("4C083AB0324C083AC122...4H003AB034H003AB05...")。
+    # 末尾の数字部 (2 or 3) は貪欲に 3 桁取ると次コードの先頭桁を吸収するので
+    # lookahead で「次が新コード先頭 (\d[A-Z]\d{3}) または 非英数字 / 行末」
+    # である場合のみマッチを確定させる。
+    _FT_RE_SIMPLE = re.compile(
+        r"\d[A-Z]\d{3}[A-Z]{2}\d{2,3}(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
+    )
+    _FT_RE_STRICT = re.compile(
+        r"(?<![A-Za-z0-9])\d[A-Z]\d{3}[A-Z]{2}\d{2,3}(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
+    )
+    fterm_section = _section("Fターム") + " " + _section("Fターム")
+    fterm = list(dict.fromkeys(re.findall(_FT_RE_SIMPLE, fterm_section)))
+    # フォールバック: ページ全体から (strict 版で過剰マッチ抑制)
+    if not fterm:
+        fterm = list(dict.fromkeys(re.findall(_FT_RE_STRICT, norm)))
+
+    # テーマコード: 1 桁数字 + 英字 + 3 桁数字 (例: 4C083 / 4H003 / 3E086 / 4F100)
+    # こちらもセクション内ではコードが連続結合される (例: "4C0834H003")
+    _THEME_RE_SIMPLE = re.compile(r"\d[A-Z]\d{3}")
+    _THEME_RE_STRICT = re.compile(r"(?<![A-Za-z0-9])\d[A-Z]\d{3}(?![A-Za-z0-9])")
+    theme_section = _section("テーマコード")
+    theme_codes = list(dict.fromkeys(re.findall(_THEME_RE_SIMPLE, theme_section)))
+    # フォールバック: Fターム から先頭 5 文字を抜き出して合成
+    if not theme_codes and fterm:
+        theme_codes = sorted({ft[:5] for ft in fterm if len(ft) >= 5})
+
+    return {
+        "ipc": ipc,
+        "fi": fi,
+        "fterm": fterm,
+        "theme_codes": theme_codes,
+    }
 
 
 def _cli():

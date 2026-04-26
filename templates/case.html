@@ -87,13 +87,20 @@
         <strong>抽出済み:</strong> {{ hongan.patent_number }}
         {% if hongan.patent_title %} &mdash; {{ hongan.patent_title }}{% endif %}<br>
         請求項: {{ hongan.claims|length }}件 / 段落: {{ hongan.paragraphs|length }}件 / {{ hongan.total_pages }}ページ
-        <div style="margin-top:0.6rem;">
+        <div style="margin-top:0.6rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
           <button type="button" class="btn btn-outline"
                   style="font-size:0.85rem; padding:0.3rem 0.8rem;"
                   onclick="openHonganPdf()">
             &#128196; 本願PDFを開く
           </button>
+          <button type="button" class="btn btn-outline" id="btn-fetch-classification"
+                  style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                  onclick="fetchHonganClassification()"
+                  title="J-PlatPat の固定 URL を開いて IPC/FI/Fターム/テーマコード を抽出します (Playwright, 10-15秒)">
+            &#128203; J-PlatPat から本願分類を取得
+          </button>
         </div>
+        <div id="classification-msg" style="display:none; margin-top:0.6rem; padding:0.5rem 0.8rem; border-radius:6px; font-size:0.82rem;"></div>
       </div>
       <p style="color:var(--text2); font-size:0.85rem;">再度アップロードすると上書きされます。</p>
       {% endif %}
@@ -755,6 +762,9 @@
           <div class="spinner"></div>
           <span>AI関連度スコアを計算中... (候補数により数分かかります)</span>
         </div>
+
+        <!-- グループ語フィルタ (Step 3 のキーワードグループから生成) -->
+        <div id="sr-group-filter" class="sr-group-filter"></div>
 
         <div id="sr-hits-list" class="sr-hits-list"></div>
       </div>

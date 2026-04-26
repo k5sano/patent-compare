@@ -683,6 +683,75 @@ def compute_related_paragraphs(case_id):
     return {"success": True, "related": related}, 200
 
 
+def fetch_hongan_classification_from_jplatpat(case_id):
+    """本願の公開番号で J-PlatPat に問い合わせて IPC/FI/Fターム/テーマコード を取得し
+    cases/<id>/search/classification.json に保存する。
+
+    既存の LLM 由来の classification.json は上書きせず、`fterm` フィールドだけは
+    LLM 推測値より J-PlatPat 由来 (実付与) を優先する。
+
+    Returns:
+        ({"success": True, "classifications": {...}}, 200) | (error, code)
+    """
+    from modules.jplatpat_client import fetch_jplatpat_full_text
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    pn = (meta.get("patent_number") or "").strip()
+    if not pn:
+        return {"error": "本願の公開番号が設定されていません (case meta の patent_number)"}, 400
+
+    # J-PlatPat 詳細ページから raw + classifications を取得
+    try:
+        ft = fetch_jplatpat_full_text(pn, language="ja")
+    except Exception as e:
+        return {"error": f"J-PlatPat 取得失敗: {e}"}, 500
+
+    if ft.get("error"):
+        return {"error": f"J-PlatPat 取得失敗: {ft['error']}"}, 500
+
+    cls = ft.get("classifications") or {}
+    if not any(cls.values()):
+        return {
+            "error": ("J-PlatPat 詳細ページから書誌情報を抽出できませんでした。"
+                      "公開番号が正しいか、J-PlatPat の DOM 変更が無いかを確認してください。"),
+        }, 500
+
+    # 保存形式は既存 fterm_candidates が読む {"fterm": [{"code","label","type","note"},...]} に合わせる
+    out = {
+        "patent_number": pn,
+        "source": "jplatpat",
+        "fetched_at": ft.get("fetched_at"),
+        "ipc": [{"code": c} for c in (cls.get("ipc") or [])],
+        "fi": [{"code": c} for c in (cls.get("fi") or [])],
+        "theme_codes": cls.get("theme_codes") or [],
+        "fterm": [
+            {"code": c, "label": "", "type": "本願付与", "note": "J-PlatPat より自動取得"}
+            for c in (cls.get("fterm") or [])
+        ],
+    }
+
+    search_dir = case_dir / "search"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    out_path = search_dir / "classification.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
+    return {
+        "success": True,
+        "patent_number": pn,
+        "n_ipc": len(out["ipc"]),
+        "n_fi": len(out["fi"]),
+        "n_fterm": len(out["fterm"]),
+        "n_theme": len(out["theme_codes"]),
+        "theme_codes": out["theme_codes"],
+        "saved_to": str(out_path),
+    }, 200
+
+
 def get_hongan_tables(case_id):
     """既に抽出済みの本願表データ (cases/<id>/output/tables/hongan/tables.json) を返す。"""
     case_dir = get_case_dir(case_id)

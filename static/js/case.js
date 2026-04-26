@@ -229,6 +229,41 @@ async function openHonganPdf() {
   }
 }
 
+// ===== J-PlatPat から本願分類 (IPC/FI/Fターム/テーマ) を取得 =====
+async function fetchHonganClassification() {
+  const btn = document.getElementById('btn-fetch-classification');
+  const msg = document.getElementById('classification-msg');
+  if (!btn || !msg) return;
+  btn.disabled = true;
+  const orig = btn.innerHTML;
+  btn.innerHTML = '⏳ 取得中... (10-15秒)';
+  msg.style.display = 'block';
+  msg.style.background = '#1e293b';
+  msg.style.color = '#94a3b8';
+  msg.textContent = 'J-PlatPat 詳細ページを開いて書誌情報を抽出しています...';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/classification/fetch`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || '取得失敗');
+    }
+    msg.style.background = '#14532d';
+    msg.style.color = '#4ade80';
+    msg.innerHTML = `✅ 取得完了: テーマ ${data.theme_codes.join(', ') || '-'} / IPC ${data.n_ipc} / FI ${data.n_fi} / Fターム ${data.n_fterm}`;
+    // Step 3 のFターム候補を再読み込み
+    if (typeof refreshFtermCatalog === 'function') {
+      try { await refreshFtermCatalog(); } catch(_) {}
+    }
+  } catch(e) {
+    msg.style.background = '#7f1d1d';
+    msg.style.color = '#fecaca';
+    msg.textContent = '❌ ' + e.message;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+
 // ===== 本願アップロード =====
 async function uploadHongan(file) {
   if (!file) return;

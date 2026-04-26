@@ -130,6 +130,11 @@ def case_detail(case_id):
     hongan = load_json_file(case_id, "hongan.json")
     segments = load_json_file(case_id, "segments.json")
     keywords = load_json_file(case_id, "keywords.json")
+    if keywords:
+        # F-term の desc が空なら辞書から補完して表示する (in-place)
+        from services.keyword_service import enrich_fterm_groups
+        field = (meta or {}).get("field", "cosmetics")
+        enrich_fterm_groups(keywords, field)
     related_paragraphs = load_json_file(case_id, "related_paragraphs.json") or {}
 
     citations = []
@@ -309,6 +314,13 @@ def update_keyword_group(case_id):
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates
     return _svc_response(fterm_candidates(case_id))
+
+
+@app.route("/case/<case_id>/hongan/classification/fetch", methods=["POST"])
+def fetch_hongan_classification(case_id):
+    """本願の公開番号で J-PlatPat に問い合わせて書誌情報 (IPC/FI/Fターム/テーマ) を取得・保存"""
+    from services.case_service import fetch_hongan_classification_from_jplatpat
+    return _svc_response(fetch_hongan_classification_from_jplatpat(case_id))
 
 
 @app.route("/case/<case_id>/keywords/fterm/add", methods=["POST"])
