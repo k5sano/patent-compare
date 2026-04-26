@@ -4648,7 +4648,9 @@ function srRenderHitCard(h) {
   const extractBadge = (() => {
     if (!canExtract) return '';
     if (extractStatus && extractStatus.extracted) {
-      return `<span class="sr-tbl-done" title="表抽出済み: ${extractStatus.n_table || 0}件 / コスト相当 $${extractStatus.cost || 0}">📊×${extractStatus.n_table || 0}</span>`;
+      const n = extractStatus.n_table || 0;
+      const tip = `クリックで抽出済みの表を表示 (${n}件 / コスト相当 $${extractStatus.cost || 0})`;
+      return `<span class="sr-tbl-done" title="${_pkmEsc(tip)}" onclick="srShowCitationTables('${_pkmEsc(pid).replace(/'/g, "\\'")}')" style="cursor:pointer;">📊×${n}</span>`;
     }
     return '';
   })();
@@ -5037,6 +5039,63 @@ async function srExtractOneTable(pid, btn) {
     btn.disabled = false;
     // textContent は renderSrHits で再生成されるので戻し不要
   }
+}
+
+async function srShowCitationTables(pid) {
+  // 既に開いていれば閉じる
+  let modal = document.getElementById('cit-tables-modal');
+  if (modal) { modal.remove(); return; }
+  modal = document.createElement('div');
+  modal.id = 'cit-tables-modal';
+  modal.className = 'cit-tables-modal';
+  modal.innerHTML = `
+    <div class="cit-tables-overlay" onclick="document.getElementById('cit-tables-modal').remove()"></div>
+    <div class="cit-tables-box">
+      <div class="cit-tables-head">
+        <span class="cit-tables-title">📊 ${_pkmEsc(pid)} の抽出表</span>
+        <button class="cit-tables-close" onclick="document.getElementById('cit-tables-modal').remove()">×</button>
+      </div>
+      <div id="cit-tables-body" class="cit-tables-body">読み込み中...</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  try {
+    const r = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(pid)}/tables`);
+    const d = await r.json();
+    const body = document.getElementById('cit-tables-body');
+    if (!d.exists) {
+      body.innerHTML = '<p style="color:var(--text2);">抽出データが見つかりません。</p>';
+      return;
+    }
+    body.innerHTML = _renderCitationTablesHtml(d.data, pid);
+  } catch(e) {
+    document.getElementById('cit-tables-body').innerHTML = `<p style="color:#f87171;">読み込み失敗: ${_pkmEsc(e.message)}</p>`;
+  }
+}
+
+function _renderCitationTablesHtml(payload, pid) {
+  const tables = (payload.tables || []).filter(t => t.is_table);
+  const errs = (payload.tables || []).filter(t => !t.is_table && t.error);
+  const head = [
+    `<div style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">`,
+    `  画像候補: ${payload.candidates_total || 0} / 表対象: ${payload.candidates_targeted || 0}`,
+    `   / 抽出成功: ${tables.length} / エラー: ${errs.length}`,
+    `   / 所要 ${((payload.total_duration_ms||0)/1000).toFixed(1)}s`,
+    `   / サブスク相当 $${payload.total_cost_usd_equivalent || 0}`,
+    `   <span style="margin-left:0.6rem; color:#fb923c;">source: ${_pkmEsc(payload.source_kind || 'pdf')}</span>`,
+    `</div>`,
+  ];
+  if (!tables.length) {
+    head.push('<p style="color:#f87171;">抽出された表がありません。</p>');
+    if (errs.length) {
+      head.push('<details><summary style="cursor:pointer; color:var(--text2);">エラー詳細 (' + errs.length + '件)</summary><ul>');
+      for (const e of errs) head.push(`<li style="font-size:0.78rem; color:#fca5a5;">${_pkmEsc(e.error || '')}</li>`);
+      head.push('</ul></details>');
+    }
+    return head.join('\n');
+  }
+  for (const t of tables) head.push(_renderOneTable(t));
+  return head.join('\n');
 }
 
 async function srExtractTablesBulk() {

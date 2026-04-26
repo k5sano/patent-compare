@@ -95,6 +95,20 @@
   .patent-fig figcaption { margin-top:0.5rem; font-size:0.82rem; color:var(--text2);
     text-align:left; line-height:1.5; padding:0 0.4rem; }
   .patent-fig figcaption strong { color:var(--accent); margin-right:0.3rem; }
+  .fig-extracted { margin-top:0.6rem; border-top:1px dashed var(--border); padding-top:0.5rem; }
+  .fig-extracted summary { cursor:pointer; color:#fb923c; font-weight:600; font-size:0.85rem;
+    padding:0.2rem 0.4rem; user-select:none; }
+  .fig-extracted summary:hover { color:#fdba74; }
+  .fig-table-wrap { overflow:auto; margin-top:0.5rem; }
+  .fig-table { border-collapse:collapse; font-size:0.78rem; width:100%;
+    background:var(--bg); }
+  .fig-table th { padding:4px 8px; border:1px solid #475569; background:var(--surface);
+    font-weight:600; text-align:left; vertical-align:top; white-space:nowrap; color:#cbd5e1; }
+  .fig-table td { padding:4px 8px; border:1px solid #334155; vertical-align:top;
+    color:var(--text); }
+  /* 図表セクションも絞込対象 (キーワードフィルタで該当しない図表は隠す) */
+  body.filter-active .figures-section .filter-unit:not(.unit-match) { display:none; }
+  body.filter-active .figures-section .filter-unit.unit-match { background:rgba(251,146,60,0.04); }
   @media print {
     .topbar, .legend { position:static; }
     .topbar a, .legend-clear { display:none; }
@@ -149,7 +163,8 @@
   <h2>図表 <span class="sec-count">({{ images|length }} 件)</span></h2>
   <div class="section figures-section">
     {% for im in images %}
-      <figure class="patent-fig">
+      <figure class="patent-fig filter-unit {{ 'unit-no-match' if not (im.extracted and im.extracted.groups) else '' }}"
+              data-groups="{{ (im.extracted.groups if im.extracted else [])|join(' ') }}">
         <a href="{{ im.src }}" target="_blank" rel="noopener" title="クリックで原寸表示">
           <img src="{{ im.src }}" alt="{{ im.alt|default('') }}" loading="lazy">
         </a>
@@ -157,6 +172,25 @@
           {% if im.label %}<strong>{{ im.label }}</strong> — {% endif %}
           {{ im.context|default('', true) }}
         </figcaption>
+        {% if im.extracted %}
+          <details class="fig-extracted" open>
+            <summary>📊 抽出データ ({{ im.extracted.n_rows }} 行)</summary>
+            <div class="fig-table-wrap">
+              <table class="fig-table">
+                {% if im.extracted.headers_html %}
+                <thead><tr>
+                  {% for h in im.extracted.headers_html %}<th>{{ h|safe }}</th>{% endfor %}
+                </tr></thead>
+                {% endif %}
+                <tbody>
+                  {% for row in im.extracted.rows_html %}
+                    <tr>{% for c in row %}<td>{{ c|safe }}</td>{% endfor %}</tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        {% endif %}
       </figure>
     {% endfor %}
   </div>

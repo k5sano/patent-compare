@@ -578,6 +578,21 @@
     font-size: 0.7rem; }
   .sr-tbl-done { background: #422006; color: #fb923c; padding: 1px 6px; border-radius: 8px;
     font-size: 0.7rem; font-weight: 700; }
+  .sr-tbl-done:hover { background: #5e2d09; color: #fdba74; }
+  .cit-tables-modal { position: fixed; inset: 0; z-index: 9999;
+    display: flex; align-items: center; justify-content: center; }
+  .cit-tables-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.65); }
+  .cit-tables-box { position: relative; background: #0f172a; color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px;
+    width: min(1100px, 95vw); max-height: 90vh; display: flex; flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.5); }
+  .cit-tables-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 0.8rem 1rem; border-bottom: 1px solid var(--border); }
+  .cit-tables-title { font-weight: 700; color: #fb923c; }
+  .cit-tables-close { background: none; border: none; color: var(--text2);
+    font-size: 1.4rem; cursor: pointer; line-height: 1; padding: 0 6px; }
+  .cit-tables-close:hover { color: var(--text); }
+  .cit-tables-body { padding: 1rem; overflow: auto; flex: 1; }
   .sr-hit-tblsel { width: 14px; height: 14px; cursor: pointer; }
   .sr-hit-tblsel:disabled { cursor: not-allowed; opacity: 0.3; }
 

@@ -1232,6 +1232,67 @@ def hit_full_text_view(case_id, patent_id):
 
     images = hit.get("images") or []
 
+    # 抽出済みの表データを image src で対応付ける (image_records ベース抽出時のみ)
+    extracted_tables_by_src: dict = {}
+    extracted_tables_by_label: dict = {}
+    try:
+        from services.case_service import get_citation_tables
+        ct_res, ct_code = get_citation_tables(case_id, patent_id)
+        if ct_code == 200 and ct_res.get("exists"):
+            for t in (ct_res.get("data", {}).get("tables") or []):
+                if not t.get("is_table"):
+                    continue
+                src_url = t.get("src")
+                if src_url:
+                    extracted_tables_by_src[src_url] = t
+                # キャプションラベル(【表1】等)でも引けるようにフォールバック
+                lbl = t.get("caption_label") or t.get("title")
+                if lbl:
+                    extracted_tables_by_label[lbl] = t
+    except Exception:
+        pass
+
+    # images に表抽出結果を埋め込む (テンプレート側で参照)。
+    # 各セルにも PKM ハイライトを適用してハイライト数を全体カウントに合算。
+    for im in images:
+        src_url = im.get("src")
+        match = extracted_tables_by_src.get(src_url) if src_url else None
+        if not match:
+            # ラベル一致もチェック (PDF 由来の場合 src は無いがラベルで対応)
+            lbl = im.get("label")
+            if lbl:
+                match = extracted_tables_by_label.get(lbl)
+        if not match:
+            continue
+        headers = match.get("headers") or []
+        rows = match.get("rows") or []
+        # ヘッダ・各セルにハイライト適用
+        headers_h = []
+        for h in headers:
+            hh = pkm_highlight_python(str(h), index)
+            _accum(hh["counts"])
+            headers_h.append(hh["html"])
+        rows_h = []
+        unit_groups: set = set()
+        for row in rows:
+            cells = row.get("cells") or []
+            cells_h = []
+            for c in cells:
+                ch = pkm_highlight_python(str(c), index)
+                _accum(ch["counts"])
+                for g in ch["counts"].keys():
+                    if g is not None:
+                        unit_groups.add(int(g))
+                cells_h.append(ch["html"])
+            rows_h.append(cells_h)
+        im["extracted"] = {
+            "title": match.get("title") or im.get("label"),
+            "headers_html": headers_h,
+            "rows_html": rows_h,
+            "n_rows": len(rows),
+            "groups": sorted(unit_groups),
+        }
+
     return render_template(
         "hit_view.html",
         patent_id=patent_id,

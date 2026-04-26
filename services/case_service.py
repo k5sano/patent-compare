@@ -727,24 +727,31 @@ def get_citation_tables_cells(case_id):
 
     PKM ハイライトの表ヒット集計用。各引用について、抽出された全表の全セルを
     タイトル + ヘッダ + 各行セルを改行連結した 1 つの文字列にまとめる。
+
+    引用登録 (cases/<id>/citations/*.json) されていない hit でも、
+    画像 records ベースで抽出済みなら output/tables/citations/* に存在するので
+    そちらを直接 scan する (登録済みは tables.json の doc_id でキー復元)。
     """
     case_dir = get_case_dir(case_id)
-    citations_dir = case_dir / "citations"
     cells = {}
-    if not citations_dir.exists():
+    tables_root = case_dir / "output" / "tables" / "citations"
+    if not tables_root.exists():
         return {"cells": cells}, 200
-    for cj in sorted(citations_dir.glob("*.json")):
-        cid = cj.stem
-        tj = _citation_tables_dir(case_id, cid) / "tables.json"
+    for d in sorted(tables_root.iterdir()):
+        if not d.is_dir():
+            continue
+        tj = d / "tables.json"
         if not tj.exists():
             continue
         try:
             with open(tj, "r", encoding="utf-8") as f:
-                d = json.load(f)
+                raw = json.load(f)
         except Exception:
             continue
+        # doc_id (生 patent_id) をキーに、画像 records 抽出時にもマッチさせる
+        cid = raw.get("doc_id") or d.name
         chunks = []
-        for t in d.get("tables", []):
+        for t in raw.get("tables", []):
             if not t.get("is_table"):
                 continue
             if t.get("title"):
