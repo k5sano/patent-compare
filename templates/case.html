@@ -5,6 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ meta.case_id }} - PatentCompare</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/case.css') }}">
+<script>
+  // 画面幅モード初期化 (FOUC 回避のため body 描画前に data-width-mode を確定)
+  (function () {
+    try {
+      var m = localStorage.getItem('pc-width-mode') || 'wide';
+      if (m !== 'narrow' && m !== 'wide' && m !== 'ultra') m = 'wide';
+      document.documentElement.dataset.widthMode = m;  // body 未生成のため html に仮置き
+      document.addEventListener('DOMContentLoaded', function () {
+        document.body.dataset.widthMode = m;
+      });
+    } catch (e) { /* localStorage 不可なら既定 (wide) */ }
+  })();
+</script>
 </head>
 <body>
 <!-- ページ全体ドロップオーバーレイ -->
@@ -25,6 +38,11 @@
       <span id="header-patent-title" style="cursor:pointer;" title="クリックで編集">{{ meta.patent_title or meta.title or '（題名未取得）' }}</span>
     </h1>
     <span class="badge badge-blue">{{ meta.field }}</span>
+    <div class="width-toggle" title="画面幅モード (ワイドディスプレイ向け)">
+      <button id="wm-narrow" type="button" onclick="setWidthMode('narrow')" title="標準 (1100px)">⬜</button>
+      <button id="wm-wide"   type="button" onclick="setWidthMode('wide')"   title="ワイド (1600px)">⬛</button>
+      <button id="wm-ultra"  type="button" onclick="setWidthMode('ultra')"  title="ウルトラワイド (画面幅 98%)">⬛⬛</button>
+    </div>
     <button class="btn btn-outline" style="padding:0.3rem 0.6rem; font-size:0.75rem;" onclick="editCaseMeta()">編集</button>
   </div>
 
@@ -905,8 +923,11 @@
         <div id="cat-id-groups" style="display:flex; flex-direction:column; gap:0.5rem;"></div>
       </div>
 
-      <div class="btn-row">
+      <div class="btn-row" style="align-items:center;">
         <button class="btn btn-success" onclick="exportExcel()">Excel出力</button>
+        <span id="export-scope-hint" style="font-size:0.78rem; color:var(--text2);">
+          ※「表示する列」でチェック中の文献のみ出力します
+        </span>
         <button class="btn btn-primary" onclick="annotateAll()">&#128196; 全文献の注釈PDFを開く</button>
       </div>
       <div class="loading-msg" id="loading-export">

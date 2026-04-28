@@ -28,18 +28,30 @@ def build_google_patents_url(patent_id):
 
 
 def build_jplatpat_url(patent_id):
-    """特許番号からJ-PlatPat固定URLを生成。
+    """特許番号から J-PlatPat 固定 URL を生成。
 
-    対応形式:
-      特開2023-123456 / JP2023123456A → 公開(11)
-      特願2021-012345                 → 出願(10)
-      特許6789012 / JP6789012B2       → 登録(15)
-      再表2018-012345                 → 再表(19)
-      WO2022/030405                   → 外国(50)
-      US20070292359A1 / EP...         → 外国(50)
+    形式 (I. Sawaki 「J-PlatPat における公報固定URLについて」 2024/05/01 版):
+        https://www.j-platpat.inpit.go.jp/c1801/PU/{β}/{γ}/ja
+      β = 国記号-公報番号 (JP-yyyy-nnnnnn / JP-nnnnnnn / WO-A-... / US-A-... / US-B-... 等)
+      γ = 公報種別コード (10/11/12/15/19/20/21/22/23/25/30/35/40/45/50)
+
+    対応:
+      特開yyyy-nnnnnn / 特表yyyy-nnnnnn → JP-yyyy-nnnnnn/11
+      特願yyyy-nnnnnn                  → JP-yyyy-nnnnnn/10
+      再表yyyy-nnnnnn                  → JP-yyyy-nnnnnn/19
+      特許nnnnnnn / 特許第n号 / JPnB    → JP-nnnnnnn/15
+      実登nnnnnnn / JPnUny            → JP-nnnnnnn/25
+      JPyyyynnnnnnnA / JP-yyyy-nnnnnnA → JP-yyyy-nnnnnn/11
+      WOyyyy/nnnnnn                   → WO-A-yyyy-nnnnnn/50
+      USyyyynnnnnnnA / US yyyy/nnnnnnn → US-A-yyyy-nnnnnnn/50
+      USnnnnnnnB / USnnnnnnnnB        → US-B-nnnnnnn/50
+      EPnnnnnnnA(1) / EP-A-...        → EP-A-nnnnnnn/50
+      EPnnnnnnnB(1) / EP-B-...        → EP-B-nnnnnnn/50
+      CN…A / CN…B / CN…C / CN…U / CN…Y → CN-{X}-nnn/50
+      KR…A / KR…B                     → KR-{X}-nnn/50
 
     Returns:
-        str: J-PlatPat固定URL、または生成不能なら空文字列
+        str: J-PlatPat 固定 URL、または生成不能なら空文字列
     """
     pid = patent_id.strip()
     if not pid:
@@ -58,7 +70,7 @@ def build_jplatpat_url(patent_id):
     if m:
         return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/10/ja"
 
-    # 特表yyyy-nnnnnn
+    # 特表yyyy-nnnnnn (国際公開の和文公表)
     m = re.match(r'特表\s*(\d{4})\s*[-ー]\s*(\d+)', pid)
     if m:
         return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/11/ja"
@@ -68,54 +80,102 @@ def build_jplatpat_url(patent_id):
     if m:
         return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/19/ja"
 
-    # 特許nnnnnnn（登録番号）
+    # 実登nnnnnnn / 登録実用新案nnnnnnn
+    m = re.match(r'(?:実登|登録実用新案|実用新案登録)(?:第)?\s*(\d+)(?:号)?', pid)
+    if m:
+        return f"{BASE}/JP-{m.group(1)}/25/ja"
+
+    # 実願yyyy-nnnnnn (実用新案出願)
+    m = re.match(r'実願\s*(\d{4})\s*[-ー]\s*(\d+)', pid)
+    if m:
+        return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/20/ja"
+
+    # 実開yyyy-nnnnnn (実用新案公開)
+    m = re.match(r'実開\s*(\d{4})\s*[-ー]\s*(\d+)', pid)
+    if m:
+        return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/21/ja"
+
+    # 特許nnnnnnn / 特許第n号 (登録番号)
     m = re.match(r'特許(?:第)?\s*(\d+)(?:号)?', pid)
     if m:
         return f"{BASE}/JP-{m.group(1)}/15/ja"
 
-    # --- JP番号（英字表記） ---
-    # JP2023-123456A / JP2023123456A（公開）
-    m = re.match(r'JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A', pid, re.IGNORECASE)
+    # --- JP 番号（英字表記） ---
+    # JP-yyyy-nnnnnnA / JPyyyynnnnnnnA (公開公報)
+    # 注: 出願年 4 桁 + 連番 (一部の表記揺れに対応するため数字数を緩和)
+    m = re.match(r'JP[-\s]?(\d{4})[-\s]?(\d{3,7})\s*A\d?\s*$', pid, re.IGNORECASE)
     if m:
         return f"{BASE}/JP-{m.group(1)}-{m.group(2).zfill(6)}/11/ja"
 
-    # JPnnnnnnnB / JPnnnnnnnB2（登録）
-    m = re.match(r'JP\s*(\d{5,8})\s*B\d?', pid, re.IGNORECASE)
+    # JPnnnnnnnB / JPnnnnnnnB2 (登録)
+    m = re.match(r'JP[-\s]?(\d{5,8})\s*B\d?\s*$', pid, re.IGNORECASE)
     if m:
         return f"{BASE}/JP-{m.group(1)}/15/ja"
 
-    # --- WO ---
-    m = re.match(r'WO\s*(\d{4})\s*[/]?\s*(\d+)', pid, re.IGNORECASE)
+    # JPnnnnnnnU / JPnnnnnnnY (実用新案登録)
+    m = re.match(r'JP[-\s]?(\d{5,8})\s*[UY]\d?\s*$', pid, re.IGNORECASE)
+    if m:
+        return f"{BASE}/JP-{m.group(1)}/25/ja"
+
+    # --- WO 国際公開 ---
+    # WOyyyy/nnnnnn / WO-yyyy-nnnnnn / WO yyyy nnnnnn
+    m = re.match(r'WO[-\s/]*(\d{4})[-\s/]*(\d{1,6})\s*A?\d?\s*$', pid, re.IGNORECASE)
     if m:
         return f"{BASE}/WO-A-{m.group(1)}-{m.group(2).zfill(6)}/50/ja"
 
     # --- US ---
-    # US20070292359A1 / US2005/0048102A1
-    m = re.match(r'US\s*(\d{4})\s*[/]?\s*(\d+)\s*A\d?', pid, re.IGNORECASE)
+    # 公開: USyyyynnnnnnn / US-yyyy-nnnnnnn / US yyyy/nnnnnnn (末尾 A1/A2/A 任意)
+    # 例: US20130040869, US2005/0048102A1
+    m = re.match(r'US[-\s]?(\d{4})[-\s/]*(\d{4,7})\s*A?\d?\s*$', pid, re.IGNORECASE)
     if m:
-        num = m.group(1) + m.group(2)
-        return f"{BASE}/US-{num}/50/ja"
+        return f"{BASE}/US-A-{m.group(1)}-{m.group(2).zfill(7)}/50/ja"
 
-    # US6316011B1（登録）
-    m = re.match(r'US\s*([\d,]+)\s*B\d?', pid, re.IGNORECASE)
+    # 登録: USnnnnnnn(B) / USnnnnnnnnB / US 6,316,011 B1 (8 or 9 桁、カンマ可)
+    m = re.match(r'US[-\s]?([\d,]+)\s*B\d?\s*$', pid, re.IGNORECASE)
     if m:
         num = m.group(1).replace(",", "")
-        return f"{BASE}/US-{num}/50/ja"
+        if len(num) >= 7:
+            return f"{BASE}/US-B-{num}/50/ja"
 
     # --- EP ---
-    m = re.match(r'EP\s*(\d+)', pid, re.IGNORECASE)
+    # 公開: EPnnnnnnnA(1/2)
+    m = re.match(r'EP[-\s]?(\d{6,9})\s*A\d?\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/EP-{m.group(1)}/50/ja"
+        return f"{BASE}/EP-A-{m.group(1)}/50/ja"
+    # 登録: EPnnnnnnnB(1/2)
+    m = re.match(r'EP[-\s]?(\d{6,9})\s*B\d?\s*$', pid, re.IGNORECASE)
+    if m:
+        return f"{BASE}/EP-B-{m.group(1)}/50/ja"
+    # 種別不明 → A と仮置き
+    m = re.match(r'EP[-\s]?(\d{6,9})\s*$', pid, re.IGNORECASE)
+    if m:
+        return f"{BASE}/EP-A-{m.group(1)}/50/ja"
 
     # --- CN ---
-    m = re.match(r'CN\s*(\d+)', pid, re.IGNORECASE)
+    # 公開 CN…A / 登録(発明) CN…B / 登録(別系統) CN…C / 実案 CN…U / CN…Y
+    for suffix, kind in (("A", "A"), ("B", "B"), ("C", "C"), ("U", "U"), ("Y", "Y")):
+        m = re.match(rf'CN[-\s]?(\d{{6,12}})\s*{suffix}\d?\s*$', pid, re.IGNORECASE)
+        if m:
+            return f"{BASE}/CN-{kind}-{m.group(1)}/50/ja"
+    # 種別不明
+    m = re.match(r'CN[-\s]?(\d{6,12})\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/CN-{m.group(1)}/50/ja"
+        return f"{BASE}/CN-A-{m.group(1)}/50/ja"
 
     # --- KR ---
-    m = re.match(r'KR\s*(\d+)', pid, re.IGNORECASE)
+    # 公開 KR…A / 登録 KR…B
+    m = re.match(r'KR[-\s]?(\d{6,13})\s*A\d?\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/KR-{m.group(1)}/50/ja"
+        return f"{BASE}/KR-A-{m.group(1)}/50/ja"
+    m = re.match(r'KR[-\s]?(\d{6,13})\s*B\d?\s*$', pid, re.IGNORECASE)
+    if m:
+        return f"{BASE}/KR-B-{m.group(1)}/50/ja"
+    # 種別不明
+    m = re.match(r'KR[-\s]?(\d{6,13})\s*$', pid, re.IGNORECASE)
+    if m:
+        return f"{BASE}/KR-A-{m.group(1)}/50/ja"
+
+    return ""
 
     return ""
 

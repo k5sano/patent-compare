@@ -1,5 +1,23 @@
 const CASE_ID = window.CASE_BOOTSTRAP.case_id;
 
+// === 画面幅モード切替 (3440x1440 / 2560x1440 のワイドディスプレイ向け) ===
+function setWidthMode(mode) {
+  if (mode !== 'narrow' && mode !== 'wide' && mode !== 'ultra') mode = 'wide';
+  try { localStorage.setItem('pc-width-mode', mode); } catch (e) { /* noop */ }
+  document.documentElement.dataset.widthMode = mode;
+  document.body.dataset.widthMode = mode;
+  ['narrow', 'wide', 'ultra'].forEach(function (m) {
+    const btn = document.getElementById('wm-' + m);
+    if (btn) btn.classList.toggle('active', m === mode);
+  });
+}
+document.addEventListener('DOMContentLoaded', function () {
+  let m = 'wide';
+  try { m = localStorage.getItem('pc-width-mode') || 'wide'; } catch (e) { /* noop */ }
+  setWidthMode(m);
+});
+
+
 function _jppNormalize(s) {
   if (!s) return '';
   // 全角数字・各種ハイフン・スラッシュ / 括弧 / 余分な「号公報/号/公報/平成/令和」などを除去して正規化
@@ -2535,6 +2553,148 @@ function _compJClass(j) {
   return '';
 }
 
+// === 対比表ペースト用クリップボード書き出し ===
+// 1 行 = 1 分節。請求項1 (1a/1b/1c...) は連続、請求項 2 以降は前に空行 1 つ。
+// セル内容: [判定prefix(?|x|空)][cited_location 記法] (/comment があれば末尾)
+//   判定: ○→prefix なし、△→"?"、×→"x"
+//   comment: cited_location 内の `"..."` 部分。空なら judgment_reason の短縮版でフォールバック。
+function _stripCommentMemoFromLoc(raw) {
+  if (!raw) return '';
+  // ; 区切りでトークンを取り直し、" や // で始まるものを除外
+  return raw.split(';')
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith('"') && !s.startsWith('//'))
+    .map((s) => {
+      // トークン内の " や // 以降を切り捨て
+      const cIdx = s.indexOf('"');
+      const mIdx = s.indexOf('//');
+      const cuts = [cIdx, mIdx].filter((i) => i >= 0);
+      if (cuts.length) return s.substring(0, Math.min(...cuts)).trim();
+      return s;
+    })
+    .filter((s) => s)
+    .join(';');
+}
+
+function _shortReason(s) {
+  // judgment_reason を最初の句点までで切る。途中切り捨て (…) はしない。
+  // LLM プロンプトで「相違点を 1 文で簡潔に」と指示している前提。
+  if (!s) return '';
+  let t = String(s).replace(/[\r\n]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  const dot = t.search(/[。．]/);
+  if (dot > 0) t = t.substring(0, dot);
+  return t;
+}
+
+function _formatCompForPaste(comp) {
+  if (!comp) return '';
+  const j = (comp.judgment || '').trim();
+  let prefix = '';
+  if (j === '△') prefix = '?';
+  else if (j === '×') prefix = '!';  // 該当箇所なしは !
+  // ○ や空は prefix なし
+
+  const raw = comp.cited_location || '';
+  const locOnly = _stripCommentMemoFromLoc(raw);
+  // コメントは raw の "..." を最優先、なければ judgment_reason をフォールバック (△/× 時のみ)
+  let comment = comp.cited_location_comment || '';
+  if (!comment && (j === '△' || j === '×') && comp.judgment_reason) {
+    comment = _shortReason(comp.judgment_reason);
+  }
+
+  let out = prefix + locOnly;
+  if (comment) out += '/' + comment.replace(/[\r\n\t]+/g, ' ').trim();
+  return out;
+}
+
+function _buildClipboardForCit(d, citId) {
+  const resp = d.responses && d.responses[citId];
+  if (!resp) return '';
+  const lines = [];
+  // 請求項1 の分節 (1a, 1b, 1c, ...) - 空行なし
+  for (const segId of (d.segIds || [])) {
+    const comp = (resp.comparisons || []).find((c) => c.requirement_id === segId);
+    lines.push(_formatCompForPaste(comp));
+  }
+  // 従属請求項 (請求項2 以降) - 各々の前に空行 1 つ
+  // master 側 (d.subClaims) の順序でループし、response 側 (resp.sub_claims) を引き当てる
+  // response が欠落している従属請求項は空文字 (空のセル) を出す
+  const masterSubs = (d.subClaims || []).slice().sort(
+    (a, b) => (a.claim_number || 0) - (b.claim_number || 0)
+  );
+  for (const claim of masterSubs) {
+    const sub = (resp.sub_claims || []).find((sc) => sc.claim_number === claim.claim_number);
+    lines.push('');
+    lines.push(_formatCompForPaste(sub));
+  }
+  return lines.join('\n');
+}
+
+async function copyCitClipboard(citId, btn) {
+  const d = _compSummaryData;
+  if (!d) {
+    alert('対比表データが未取得です。読み込んでから実行してください。');
+    return;
+  }
+  const text = _buildClipboardForCit(d, citId);
+  if (!text) {
+    alert('コピーする対比結果がありません: ' + citId);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = '✓ コピー済';
+      btn.classList.add('comp-copy-done');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('comp-copy-done');
+      }, 1400);
+    }
+  } catch (e) {
+    // フォールバック: textarea 経由
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch (e2) { /* */ }
+    document.body.removeChild(ta);
+    if (btn) {
+      btn.textContent = '✓ コピー済';
+      setTimeout(() => { btn.textContent = '📋 コピー'; }, 1400);
+    }
+  }
+}
+
+// 判定セル表示用: ○ は「先頭に何もつけない」慣行 → 空表示
+// raw な judgment は class/色判定に使い、表示は judgment_display を優先
+function _compJDisp(comp) {
+  if (!comp) return '—';
+  if (typeof comp.judgment_display === 'string') return comp.judgment_display;
+  const j = comp.judgment || '';
+  if (j === '○' || j === 'o' || j === 'O') return '';
+  return j;
+}
+
+// cited_location 表示: サーバ展開済み (cited_location_expanded) を優先、無ければ raw
+// 備考 (cited_location_comment) があれば併記
+function _compLocHtml(comp, citId) {
+  if (!comp) return '';
+  const loc = (typeof comp.cited_location_expanded === 'string' && comp.cited_location_expanded)
+    ? comp.cited_location_expanded
+    : (comp.cited_location || '');
+  if (!loc) return '';
+  let html = '<br><span class="comp-cite-loc">📍 ' + _compLinkifyParaRefs(_escapeHtml(loc), citId) + '</span>';
+  const cmt = comp.cited_location_comment || '';
+  if (cmt) {
+    html += '<br><span class="comp-cite-comment">📝 ' + _escapeHtml(cmt) + '</span>';
+  }
+  return html;
+}
+
 function wireCompSummaryIfNeeded() {
   if (_compSummaryWired) return;
   const root = document.getElementById('comparison-summary');
@@ -2779,9 +2939,13 @@ function renderCompSummaryTable() {
   for (const citId of activeCits) {
     const meta = _compMetaForCit(citId);
     const cat = _compCategoryForCit(citId, d.responses[citId]);
+    const safeCitId = String(citId).replace(/'/g, "\\'");
     h += '<th class="comp-th-cit" scope="col" data-cit-th="' + _escapeHtml(citId) + '">' +
       '<div class="comp-th-cit-line1">' + _escapeHtml(meta.label || citId) + '</div>' +
-      '<div class="comp-th-cat">' + _compCategoryBadgeHtml(cat) + '</div></th>';
+      '<div class="comp-th-cat">' + _compCategoryBadgeHtml(cat) + '</div>' +
+      '<button type="button" class="comp-copy-btn" title="該当箇所/コメントを対比表ペースト用にクリップボードへコピー" ' +
+      'onclick="copyCitClipboard(\'' + safeCitId + '\', this); event.stopPropagation();">📋 コピー</button>' +
+      '</th>';
   }
   h += '</tr>';
   if (thead) thead.innerHTML = h;
@@ -2799,8 +2963,9 @@ function renderCompSummaryTable() {
       for (const citId of activeCits) {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
-        const j = (comp && comp.judgment) ? String(comp.judgment) : '—';
-        body += '<td class="comp-td-j ' + _compJClass(j) + ' comp-td-zen">' + _escapeHtml(j) + '</td>';
+        const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
+        const jDisp = comp ? _compJDisp(comp) : '—';
+        body += '<td class="comp-td-j ' + _compJClass(jRaw) + ' comp-td-zen">' + _escapeHtml(jDisp) + '</td>';
       }
       body += '</tr>';
     } else {
@@ -2809,8 +2974,9 @@ function renderCompSummaryTable() {
       for (const citId of activeCits) {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
-        const j = (comp && comp.judgment) ? String(comp.judgment) : '—';
-        body += '<td class="comp-td-j ' + _compJClass(j) + '">' + _escapeHtml(j) + '</td>';
+        const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
+        const jDisp = comp ? _compJDisp(comp) : '—';
+        body += '<td class="comp-td-j ' + _compJClass(jRaw) + '">' + _escapeHtml(jDisp) + '</td>';
       }
       body += '</tr><tr>';
       for (const citId of activeCits) {
@@ -2818,9 +2984,7 @@ function renderCompSummaryTable() {
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
         if (comp) {
           const reason = _compLinkifyParaRefs(_escapeHtml(comp.judgment_reason || ''), citId);
-          const loc = comp.cited_location
-            ? '<br><span class="comp-cite-loc">📍 ' + _compLinkifyParaRefs(_escapeHtml(comp.cited_location), citId) + '</span>'
-            : '';
+          const loc = _compLocHtml(comp, citId);
           body += '<td class="comp-td-reason">' + reason + loc + '</td>';
         } else {
           body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
@@ -2842,8 +3006,9 @@ function renderCompSummaryTable() {
         for (const citId of activeCits) {
           const resp = d.responses[citId];
           const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
-          const j = (sub && sub.judgment) ? String(sub.judgment) : '—';
-          body += '<td class="comp-td-j ' + _compJClass(j) + ' comp-td-zen">' + _escapeHtml(j) + '</td>';
+          const jRaw = (sub && sub.judgment) ? String(sub.judgment) : '';
+          const jDisp = sub ? _compJDisp(sub) : '—';
+          body += '<td class="comp-td-j ' + _compJClass(jRaw) + ' comp-td-zen">' + _escapeHtml(jDisp) + '</td>';
         }
         body += '</tr>';
       } else {
@@ -2852,9 +3017,11 @@ function renderCompSummaryTable() {
           const resp = d.responses[citId];
           const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
           if (sub) {
-            const j = (sub.judgment) ? String(sub.judgment) : '—';
+            const jRaw = (sub.judgment) ? String(sub.judgment) : '';
+            const jDisp = _compJDisp(sub);
             const jr = _compLinkifyParaRefs(_escapeHtml(sub.judgment_reason || ''), citId);
-            body += '<td class="comp-td-j ' + _compJClass(j) + '" style="font-size:0.85rem;">' + _escapeHtml(j) + ' <span class="comp-sub-rationale">' + jr + '</span></td>';
+            const loc = _compLocHtml(sub, citId);
+            body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span></td>';
           } else {
             body += '<td style="color:var(--text2);">—</td>';
           }
@@ -2996,18 +3163,45 @@ async function saveCaseMeta() {
 }
 
 // ===== Excel出力 =====
+// Step 6 のチェックボックス (`.comp-col-toggle`) で表示中の文献のみ Excel に出力する。
+// 表示前 (チェックボックスが未生成) の場合は null を渡し、サーバ側で全件扱い。
+function _getSelectedCitIdsForExport() {
+  const colbar = document.getElementById('comp-summary-colbar');
+  if (!colbar) return null;
+  const boxes = Array.from(colbar.querySelectorAll('.comp-col-toggle'));
+  if (boxes.length === 0) return null;
+  const ids = boxes.filter((b) => b.checked).map((b) => b.getAttribute('data-cit-id')).filter(Boolean);
+  return ids;
+}
+
 async function exportExcel() {
   const loading = document.getElementById('loading-export');
   loading.classList.add('show');
+  const result = document.getElementById('export-result');
   try {
-    const resp = await fetch(`/case/${CASE_ID}/export/excel`, { method: 'POST' });
+    const selected = _getSelectedCitIdsForExport();
+    if (selected !== null && selected.length === 0) {
+      loading.classList.remove('show');
+      result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
+        対比表に出力する文献が選択されていません。Step 6 の「表示する列」で 1 件以上チェックしてください。
+      </div>`;
+      return;
+    }
+    const body = (selected !== null) ? JSON.stringify({ citation_ids: selected }) : JSON.stringify({});
+    const resp = await fetch(`/case/${CASE_ID}/export/excel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
     const data = await resp.json();
     loading.classList.remove('show');
 
-    const result = document.getElementById('export-result');
     if (data.success) {
+      const total = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.cit_ids || []).length;
+      const cnt = data.num_citations;
+      const subset = (selected !== null && cnt < total) ? `（${cnt}/${total} 件）` : '';
       result.innerHTML = `<div style="padding:1rem; background:#14532d; border-radius:8px; color:#4ade80;">
-        Excel出力完了!
+        Excel出力完了 ${subset}
         <a href="/case/${CASE_ID}/download/${data.filename}" style="color:#fff; text-decoration:underline; margin-left:1rem;">ダウンロード</a>
       </div>`;
     } else {
@@ -3556,12 +3750,17 @@ async function loadCitationFullTexts() {
         html += `<summary style="cursor:pointer; align-items:center; gap:0.5rem;">${_escapeHtml(citId)} の対比結果テキスト${jpLink}</summary>`;
         html += '<div style="padding:0.5rem;">';
         for (const comp of respData.comparisons) {
-          const j = comp.judgment || '—';
-          const jColor = j === '○' ? 'var(--green)' : j === '×' ? 'var(--red)' : 'var(--yellow)';
+          const jRaw = comp.judgment || '';
+          const jDisp = _compJDisp(comp) || '—';
+          const jColor = jRaw === '○' ? 'var(--green)' : jRaw === '×' ? 'var(--red)' : 'var(--yellow)';
           html += `<div style="margin-bottom:0.5rem; padding:0.4rem 0.6rem; border-left:3px solid ${jColor}; background:var(--surface2); border-radius:0 4px 4px 0;">`;
-          html += `<div style="font-size:0.8rem;"><strong>${comp.requirement_id}</strong> <span style="color:${jColor};">${j}</span></div>`;
-          if (comp.cited_location) {
-            html += `<div class="para-text" style="margin-top:2px;">📍 ${_compLinkifyParaRefs(_escapeHtml(comp.cited_location), citId)}</div>`;
+          html += `<div style="font-size:0.8rem;"><strong>${comp.requirement_id}</strong> <span style="color:${jColor};">${jDisp}</span></div>`;
+          const locTxt = comp.cited_location_expanded || comp.cited_location || '';
+          if (locTxt) {
+            html += `<div class="para-text" style="margin-top:2px;">📍 ${_compLinkifyParaRefs(_escapeHtml(locTxt), citId)}</div>`;
+          }
+          if (comp.cited_location_comment) {
+            html += `<div class="para-text" style="margin-top:2px; color:var(--text2);">📝 ${_escapeHtml(comp.cited_location_comment)}</div>`;
           }
           if (comp.judgment_reason) {
             html += `<div class="para-text" style="margin-top:2px;">${_compLinkifyParaRefs(_escapeHtml(comp.judgment_reason), citId)}</div>`;

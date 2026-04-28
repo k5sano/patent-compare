@@ -429,7 +429,9 @@ def get_citation_paragraph(case_id, citation_id, para_id):
 @app.route("/case/<case_id>/export/excel", methods=["POST"])
 def export_excel(case_id):
     from services.comparison_service import export_excel
-    return _svc_response(export_excel(case_id))
+    body = request.get_json(silent=True) or {}
+    selected = body.get("citation_ids")  # None なら全件、リストなら絞り込み
+    return _svc_response(export_excel(case_id, selected_citation_ids=selected))
 
 
 @app.route("/case/<case_id>/download/<path:filename>")

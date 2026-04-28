@@ -19,6 +19,12 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
+from modules.cited_ref_notation import (
+    comment_of as _ref_comment_of,
+    display_judgment as _display_judgment,
+    expand as _expand_ref,
+)
+
 
 # --- スタイル定義 ---
 FONT_TITLE = Font(name="游ゴシック", size=14, bold=True)
@@ -195,11 +201,224 @@ def write_comparison_table(output_path, case_meta, segments, responses, citation
 
     row = _write_rejection_strategy(ws, row, citation_order, responses, num_citations)
 
+    # ===== シート2: ペースト用（既存対比表への貼付用、コンパクト記法） =====
+    _write_paste_sheet(wb, segments, citation_order, responses, citations_meta, case_meta)
+
     # 出力ディレクトリを作成
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     # 保存
     wb.save(output_path)
+
+
+def _strip_comment_memo_from_loc(raw):
+    """``cited_location`` から `"...` コメントと `//...` メモを除去し、参照記法のみを返す。
+
+    JS 側 `_stripCommentMemoFromLoc` と同等のロジック。
+    """
+    if not raw:
+        return ""
+    out = []
+    for tok in str(raw).split(";"):
+        tok = tok.strip()
+        if not tok or tok.startswith('"') or tok.startswith("//"):
+            continue
+        # トークン内の " や // 以降を切り捨て
+        cuts = []
+        i = tok.find('"')
+        if i >= 0:
+            cuts.append(i)
+        i = tok.find("//")
+        if i >= 0:
+            cuts.append(i)
+        if cuts:
+            tok = tok[:min(cuts)].strip()
+        if tok:
+            out.append(tok)
+    return ";".join(out)
+
+
+def _short_reason(s, limit=None):
+    """judgment_reason を最初の文 (「。」まで) で切る。途中切り捨て (…) はしない。
+
+    LLM プロンプト側で「相違点を 1 文で簡潔に」と指示している前提なので、
+    無理な文字数制限は掛けず、最初の句点までを返す。複数文ある場合のみ
+    末尾「。」を 1 個分だけ落とす。
+    """
+    if not s:
+        return ""
+    import re
+    t = re.sub(r"[\r\n]+", " ", str(s))
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    m = re.search(r"[。．]", t)
+    if m and m.start() > 0:
+        t = t[: m.start()]
+    return t
+
+
+def _format_comp_for_paste(comp):
+    """comparison/sub_claim 1 件分を「貼付用」セル内容に整形。
+
+    JS 側 `_formatCompForPaste` と同等。
+      - judgment ○ → prefix なし
+      - judgment △ → "?"
+      - judgment × → "x"
+      - cited_location は raw 記法 (展開しない)。" コメントと // メモは除外。
+      - 末尾: コメント (manual) があれば "/<comment>"。
+        なければ judgment_reason (△/× のみ、短縮形) を "/" で付ける。
+    """
+    if not isinstance(comp, dict):
+        return ""
+    j = (comp.get("judgment") or "").strip()
+    prefix = ""
+    if j == "△":
+        prefix = "?"
+    elif j == "×":
+        prefix = "!"  # 該当箇所なしは !
+
+    raw = comp.get("cited_location") or ""
+    loc_only = _strip_comment_memo_from_loc(raw)
+
+    # manual comment ("...") 抽出
+    from modules.cited_ref_notation import comment_of
+    comment = (comment_of(raw) or "").strip()
+    if not comment and j in ("△", "×") and comp.get("judgment_reason"):
+        comment = _short_reason(comp.get("judgment_reason"))
+
+    out = prefix + loc_only
+    if comment:
+        # タブ/改行は貼付時にセルが暴れるので空白に置換
+        clean = comment.replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+        out += "/" + clean
+    return out
+
+
+def _claim_full_text(claim):
+    """請求項 dict から全文を組み立てる。"""
+    if not claim:
+        return ""
+    if claim.get("full_text"):
+        return claim["full_text"]
+    parts = [s.get("text", "") for s in (claim.get("segments") or []) if s.get("text")]
+    return "".join(parts)
+
+
+def _write_paste_sheet(wb, segments, citation_order, responses, citations_meta, case_meta):
+    """既存対比表への貼付専用シート。
+
+    各引例ごとに 1 列。1 行 = 1 分節 (請求項1) または 1 従属請求項。
+    請求項1 の分節は連続、請求項2 以降の各従属請求項の前に空行 1 つ。
+
+    レイアウト:
+      | 構成要件ID | 構成要件テキスト | 文献1 | 文献2 | ... |
+      | 1a        | (claim1 seg text) | CL1,..| ...   | ... |
+      | 1b        | ...               | ...   | ...   | ... |
+      | (empty row before claim 2)                          |
+      | 2a        | (claim 2 text)    | 13,51 | ...   | ... |
+      | ...                                                  |
+    """
+    ws = wb.create_sheet("ペースト用")
+    num_cit = len(citation_order)
+
+    # 列幅
+    ws.column_dimensions["A"].width = 8
+    ws.column_dimensions["B"].width = 40
+    for i in range(num_cit):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 30
+
+    # ヘッダ行
+    row = 1
+    _set_cell(ws, row, 1, "ID", font=FONT_WHITE, fill=FILL_HEADER,
+              alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+    _set_cell(ws, row, 2, "構成要件", font=FONT_WHITE, fill=FILL_HEADER,
+              alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+    for i, cit_id in enumerate(citation_order):
+        cit_info = None
+        for c in case_meta.get("citations", []):
+            if c["id"] == cit_id:
+                cit_info = c
+                break
+        label = cit_info["label"] if cit_info else cit_id
+        _set_cell(ws, row, 3 + i, f"{label}\n({cit_id})",
+                  font=FONT_WHITE, fill=FILL_HEADER,
+                  alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+    row += 1
+
+    # 案内行
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2 + num_cit)
+    _set_cell(ws, row, 1,
+              "貼付用フォーマット: 各引例の列をコピーして既存対比表へ縦方向に貼付け。"
+              "判定 ○ は prefix なし、△ は ?、× は x を冠。/ 以降はコメント。",
+              font=FONT_SMALL, alignment=ALIGNMENT_LEFT,
+              fill=FILL_HEADER_LIGHT, border=THIN_BORDER)
+    row += 1
+
+    # 請求項を分類
+    claim1 = None
+    sub_claims = []
+    for claim in segments:
+        if claim.get("claim_number") == 1:
+            claim1 = claim
+        elif claim.get("is_independent") and claim1 is None:
+            claim1 = claim
+        else:
+            sub_claims.append(claim)
+    if claim1 is None and segments:
+        # フォールバック: 最初を独立クレームとみなす
+        claim1 = segments[0]
+        sub_claims = list(segments[1:])
+    sub_claims.sort(key=lambda c: c.get("claim_number") or 0)
+
+    # 請求項1 の分節 (空行なしで連続)
+    if claim1:
+        for seg in claim1.get("segments", []):
+            seg_id = seg.get("id", "")
+            seg_text = seg.get("text", "")
+            _set_cell(ws, row, 1, seg_id, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+            _set_cell(ws, row, 2, seg_text, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+            for i, cit_id in enumerate(citation_order):
+                resp = responses.get(cit_id, {})
+                comp = _find_comparison(resp, seg_id)
+                cell_val = _format_comp_for_paste(comp) if comp else ""
+                fill = _get_judgment_fill(comp.get("judgment", "")) if comp else None
+                _set_cell(ws, row, 3 + i, cell_val, font=FONT_NORMAL,
+                          alignment=ALIGNMENT_LEFT, border=THIN_BORDER, fill=fill)
+            row += 1
+
+    # 従属請求項 (各々の前に空行 1)
+    for claim in sub_claims:
+        # 空行
+        for col in range(1, 3 + num_cit):
+            _set_cell(ws, row, col, "", border=THIN_BORDER)
+        row += 1
+        claim_num = claim.get("claim_number")
+        # 通番ID: "{claim_num}a" 形 (1a/1b と並ぶ慣行に合わせる)
+        # 元データに segments[0].id があればそれを優先 (既存形式へ追従)
+        seg_id_default = f"{claim_num}a"
+        first_seg_id = ""
+        for s in (claim.get("segments") or []):
+            if s.get("id"):
+                first_seg_id = s["id"]
+                break
+        seg_id = first_seg_id or seg_id_default
+        full_text = _claim_full_text(claim)
+
+        _set_cell(ws, row, 1, seg_id, font=FONT_NORMAL,
+                  alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+        _set_cell(ws, row, 2, full_text, font=FONT_NORMAL,
+                  alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+        for i, cit_id in enumerate(citation_order):
+            resp = responses.get(cit_id, {})
+            sub = _find_sub_claim(resp, claim_num)
+            cell_val = _format_comp_for_paste(sub) if sub else ""
+            fill = _get_judgment_fill(sub.get("judgment", "")) if sub else None
+            _set_cell(ws, row, 3 + i, cell_val, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER, fill=fill)
+        row += 1
+
+    # 列幅自動調整は openpyxl 側で限定的なので固定値で運用
 
 
 def _write_claim_comparison(ws, row, claim, citation_order, responses, citations_meta, case_meta):
@@ -244,9 +463,11 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
             resp = responses.get(cit_id, {})
             comp = _find_comparison(resp, seg_id)
             if comp:
-                judgment = comp.get("judgment", "")
-                fill = _get_judgment_fill(judgment)
-                _set_cell(ws, row, 3 + i, judgment,
+                judgment_raw = comp.get("judgment", "")
+                fill = _get_judgment_fill(judgment_raw)
+                # ○ は「先頭に何もつけない」慣行 → 表示は空、塗りは緑のまま
+                judgment_disp = _display_judgment(judgment_raw)
+                _set_cell(ws, row, 3 + i, judgment_disp,
                           font=FONT_JUDGMENT, fill=fill,
                           alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
             else:
@@ -254,7 +475,9 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
                           alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
         row += 1
 
-        # 理由行
+        # 理由行: cited_location は記法を展開して書き込む。
+        #   コメント部分 ("...) は備考扱いとして判定理由の末尾に括弧書きで合成。
+        #   メモ部分 (//...) は対外出力なので含めない。
         _set_cell(ws, row, 1, "", border=THIN_BORDER)
         _set_cell(ws, row, 2, "", border=THIN_BORDER)
 
@@ -265,8 +488,14 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
                 reason_parts = []
                 if comp.get("judgment_reason"):
                     reason_parts.append(comp["judgment_reason"])
-                if comp.get("cited_location"):
-                    reason_parts.append(f"[{comp['cited_location']}]")
+                cited_loc_raw = comp.get("cited_location", "")
+                if cited_loc_raw:
+                    expanded = _expand_ref(cited_loc_raw, with_comment=False)
+                    if expanded:
+                        reason_parts.append(f"[{expanded}]")
+                    cmt = _ref_comment_of(cited_loc_raw)
+                    if cmt:
+                        reason_parts.append(f"（備考: {cmt}）")
                 if comp.get("cited_text"):
                     reason_parts.append(f"「{comp['cited_text'][:100]}」")
                 reason_text = "\n".join(reason_parts)
@@ -310,9 +539,23 @@ def _write_sub_claims_table(ws, row, sub_claims, citation_order, responses, cita
                 # sub_claimsから検索
                 sub_comp = _find_sub_claim(resp, claim_num)
                 if sub_comp:
-                    judgment = sub_comp.get("judgment", "")
-                    fill = _get_judgment_fill(judgment)
-                    cell_text = f"{judgment}\n{sub_comp.get('judgment_reason', '')}"
+                    judgment_raw = sub_comp.get("judgment", "")
+                    fill = _get_judgment_fill(judgment_raw)
+                    judgment_disp = _display_judgment(judgment_raw)
+                    parts = []
+                    if judgment_disp:
+                        parts.append(judgment_disp)
+                    if sub_comp.get("judgment_reason"):
+                        parts.append(sub_comp["judgment_reason"])
+                    cited_loc_raw = sub_comp.get("cited_location", "")
+                    if cited_loc_raw:
+                        expanded = _expand_ref(cited_loc_raw, with_comment=False)
+                        if expanded:
+                            parts.append(f"[{expanded}]")
+                        cmt = _ref_comment_of(cited_loc_raw)
+                        if cmt:
+                            parts.append(f"（備考: {cmt}）")
+                    cell_text = "\n".join(parts)
                     _set_cell(ws, row, 3 + i, cell_text,
                               font=FONT_NORMAL, fill=fill,
                               alignment=ALIGNMENT_LEFT, border=THIN_BORDER)

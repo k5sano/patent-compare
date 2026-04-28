@@ -3,10 +3,26 @@
     --border: #475569; --text: #e2e8f0; --text2: #94a3b8;
     --accent: #3b82f6; --accent-hover: #2563eb;
     --green: #22c55e; --yellow: #eab308; --red: #ef4444;
+    /* 画面幅モード: narrow=1100px / wide=1600px / ultra=98vw (3440 等のワイド向け) */
+    --container-max: 1100px;
+    --list-min-col: 100%;  /* 1 列。wide/ultra で多段に切替 */
   }
+  /* :root と body の両方を許容: 起動時の FOUC 回避用に html に先置き、後で body にも反映する */
+  :root[data-width-mode="wide"],  body[data-width-mode="wide"]  { --container-max: 1600px; --list-min-col: 460px; }
+  :root[data-width-mode="ultra"], body[data-width-mode="ultra"] { --container-max: 98vw;   --list-min-col: 440px; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-  .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+  .container { max-width: var(--container-max); margin: 0 auto; padding: 1.5rem; }
+
+  /* 画面幅切替トグル (ヘッダ右端) */
+  .width-toggle { display: inline-flex; gap: 2px; align-items: center; margin-left: auto; }
+  .width-toggle button { background: var(--surface2); border: 1px solid var(--border); color: var(--text2);
+                         padding: 4px 8px; font-size: 0.78rem; cursor: pointer; line-height: 1; }
+  .width-toggle button:first-child { border-radius: 6px 0 0 6px; }
+  .width-toggle button:last-child  { border-radius: 0 6px 6px 0; }
+  .width-toggle button + button { margin-left: -1px; }
+  .width-toggle button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .width-toggle button:hover:not(.active) { background: var(--surface); color: var(--text); }
   .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
   .header a { color: var(--text2); font-size: 0.9rem; }
   .header h1 { font-size: 1.4rem; flex: 1; }
@@ -164,6 +180,25 @@
   .search-section h3 { font-size: 1rem; margin-bottom: 0.8rem; color: var(--accent); }
   .search-divider { border: none; border-top: 1px dashed var(--border); margin: 1.5rem 0; }
   .candidate-list { margin-top: 0.8rem; }
+  /* wide/ultra モードで多段表示 (画面幅に応じて自動列数) */
+  body[data-width-mode="wide"]  .candidate-list,
+  body[data-width-mode="ultra"] .candidate-list,
+  body[data-width-mode="wide"]  .sr-hits-list,
+  body[data-width-mode="ultra"] .sr-hits-list,
+  body[data-width-mode="wide"]  .step5-citation-list,
+  body[data-width-mode="ultra"] .step5-citation-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(var(--list-min-col), 1fr));
+    gap: 0.5rem;
+    align-items: start;
+  }
+  /* グリッド内の子要素は margin-bottom が効かないので調整 */
+  body[data-width-mode="wide"]  .candidate-item,
+  body[data-width-mode="ultra"] .candidate-item,
+  body[data-width-mode="wide"]  .sr-hit-card,
+  body[data-width-mode="ultra"] .sr-hit-card,
+  body[data-width-mode="wide"]  .step5-cit-row,
+  body[data-width-mode="ultra"] .step5-cit-row { margin-bottom: 0; }
   .candidate-item { display: flex; align-items: flex-start; gap: 0.8rem; padding: 0.8rem;
                     background: var(--surface2); border-radius: 8px; margin-bottom: 0.5rem; flex-wrap: wrap; }
   .candidate-item label { display: flex; align-items: flex-start; gap: 0.5rem; flex: 1; min-width: 0; cursor: pointer; }
@@ -755,6 +790,13 @@
   .comp-cat-na { background: var(--surface2); color: var(--text2); font-weight: 500; }
   .comp-td-zen { text-align: center; font-size: 1.05em; }
   .comp-cite-loc { color: var(--text2); font-size: 0.75rem; }
+  .comp-cite-comment { color: #fbbf24; font-size: 0.72rem; font-style: italic; }
+  .comp-copy-btn { display: inline-block; margin-top: 4px; padding: 2px 6px;
+                   font-size: 0.7rem; line-height: 1.2; cursor: pointer;
+                   background: var(--surface); color: var(--text2);
+                   border: 1px solid var(--border); border-radius: 4px; }
+  .comp-copy-btn:hover { background: var(--surface2); color: var(--text); border-color: var(--accent); }
+  .comp-copy-btn.comp-copy-done { background: var(--green); color: #052e16; border-color: var(--green); }
   .comp-td-reason { font-size: 0.8rem; }
   .comp-td-req { min-width: 9rem; max-width: 22rem; vertical-align: top; }
   .comp-req-id { display: inline-block; font-weight: 700; font-size: 0.88rem;
