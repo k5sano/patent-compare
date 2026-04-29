@@ -501,12 +501,15 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
         meta["citations"] = citations
         save_case_meta(case_id, meta)
 
-    return {
+    response = {
         "success": True,
         "doc_id": doc_id,
         "num_claims": len(result.get("claims", [])),
         "num_paragraphs": len(result.get("paragraphs", [])),
-    }, 200
+    }
+    if result.get("_warning"):
+        response["warning"] = result["_warning"]
+    return response, 200
 
 
 def delete_citation(case_id, citation_id):

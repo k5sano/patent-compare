@@ -339,7 +339,10 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
     # metaを最新のファイルから再読込（DLステップでmeta更新済み）
     meta = load_case_meta(case_id) or meta
 
+    from services.comparison_service import _is_empty_citation
+
     citations_map = {}  # doc_id -> citation_data
+    skipped_empty = []  # テキスト抽出失敗で対比不能だったID
     responses_dir = case_dir / "responses"
     for cit in meta.get("citations", []):
         cit_path = case_dir / "citations" / f"{cit['id']}.json"
@@ -347,14 +350,28 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
         # 既にresponseが存在する引用文献はスキップ
         if cit_path.exists() and not resp_path.exists():
             with open(cit_path, "r", encoding="utf-8") as f:
-                citations_map[cit["id"]] = json.load(f)
+                cit_data = json.load(f)
+            if _is_empty_citation(cit_data):
+                skipped_empty.append(cit["id"])
+                logger.warning(
+                    "引用文献 %s: テキスト未抽出のため対比をスキップ", cit["id"]
+                )
+                continue
+            citations_map[cit["id"]] = cit_data
 
     if not citations_map:
         # 全件回答済みか、引用文献なし
         existing = len([c for c in meta.get("citations", [])
                        if (responses_dir / f"{c['id']}.json").exists()]) if responses_dir.exists() else 0
         if existing > 0:
-            return {"num_docs": existing, "errors": [], "skipped": True}
+            return {"num_docs": existing, "errors": [], "skipped": True,
+                    "skipped_empty": skipped_empty}
+        if skipped_empty:
+            raise Exception(
+                "対比できる引用文献がありません: "
+                + ", ".join(skipped_empty)
+                + " はテキスト抽出に失敗しています (スキャン画像PDFの可能性)"
+            )
         raise Exception("引用文献がありません")
 
     keywords = None
@@ -419,7 +436,12 @@ def _auto_compare(case_id, case_dir, segs, meta, field):
                 logger.warning("対比エラー: %s — %s", doc_id, e)
 
     logger.info("対比完了: %d/%d件成功", len(saved_docs), len(citations_map))
-    return {"num_docs": len(saved_docs), "errors": all_errors}
+    if skipped_empty:
+        all_errors.append(
+            "テキスト未抽出のため対比をスキップ: " + ", ".join(skipped_empty)
+        )
+    return {"num_docs": len(saved_docs), "errors": all_errors,
+            "skipped_empty": skipped_empty}
 
 
 def _auto_export_excel(case_dir, segs, meta):

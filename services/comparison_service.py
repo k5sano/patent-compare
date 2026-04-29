@@ -73,12 +73,23 @@ def generate_prompt_multi(case_id, citation_ids):
         return {"error": "対象文献を選択してください"}, 400
 
     citations = []
+    empty_ids = []
     for cit_id in citation_ids:
         cit_path = case_dir / "citations" / f"{cit_id}.json"
         if not cit_path.exists():
             return {"error": f"引用文献 '{cit_id}' が見つかりません"}, 404
         with open(cit_path, "r", encoding="utf-8") as f:
-            citations.append(json.load(f))
+            cit = json.load(f)
+        if _is_empty_citation(cit):
+            empty_ids.append((cit_id, cit))
+        citations.append(cit)
+
+    if empty_ids:
+        msgs = [_empty_citation_error(cid, c) for cid, c in empty_ids]
+        return {
+            "error": " / ".join(msgs),
+            "empty_citation_ids": [cid for cid, _ in empty_ids],
+        }, 400
 
     keywords = None
     kw_path = case_dir / "keywords.json"
@@ -119,6 +130,12 @@ def generate_prompt_single(case_id, citation_id):
     with open(citation_path, "r", encoding="utf-8") as f:
         citation = json.load(f)
 
+    if _is_empty_citation(citation):
+        return {
+            "error": _empty_citation_error(citation_id, citation),
+            "empty_citation_ids": [citation_id],
+        }, 400
+
     keywords = None
     kw_path = case_dir / "keywords.json"
     if kw_path.exists():
@@ -141,6 +158,33 @@ def _get_all_segment_ids(segs):
         for seg in claim["segments"]:
             ids.append(seg["id"])
     return ids
+
+
+def _is_empty_citation(cit):
+    """引用文献の本文が空 (テキスト抽出失敗) かを判定。
+
+    claims / paragraphs / tables が全て空なら、プロンプトに入れても見出しだけになり
+    Claude が判定できないため空扱いとする。
+    """
+    if (cit.get("claims") or [])[:1]:
+        return False
+    if (cit.get("paragraphs") or [])[:1]:
+        return False
+    if (cit.get("tables") or [])[:1]:
+        return False
+    return True
+
+
+def _empty_citation_error(cit_id, cit):
+    """空 citation 用のユーザー向けエラーメッセージを構築。"""
+    warning = (cit.get("_warning") or "").strip()
+    base = f"引用文献 '{cit_id}' のテキストが抽出できていません"
+    if warning:
+        base += f"（{warning}）"
+    return (
+        base
+        + "。スキャン画像PDFの可能性があります。再アップロードまたは削除してから再実行してください。"
+    )
 
 
 def _normalize_doc_id(s):
@@ -609,12 +653,23 @@ def compare_execute(case_id, citation_ids):
         return {"error": "対象文献を選択してください"}, 400
 
     citations = []
+    empty_ids = []
     for cit_id in citation_ids:
         cit_path = case_dir / "citations" / f"{cit_id}.json"
         if not cit_path.exists():
             return {"error": f"引用文献 '{cit_id}' が見つかりません"}, 404
         with open(cit_path, "r", encoding="utf-8") as f:
-            citations.append(json.load(f))
+            cit = json.load(f)
+        if _is_empty_citation(cit):
+            empty_ids.append((cit_id, cit))
+        citations.append(cit)
+
+    if empty_ids:
+        msgs = [_empty_citation_error(cid, c) for cid, c in empty_ids]
+        return {
+            "error": " / ".join(msgs),
+            "empty_citation_ids": [cid for cid, _ in empty_ids],
+        }, 400
 
     keywords = None
     kw_path = case_dir / "keywords.json"
