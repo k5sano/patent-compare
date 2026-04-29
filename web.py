@@ -310,6 +310,12 @@ def update_keyword_group(case_id):
     return _svc_response(update_keyword_group(case_id, data.get("group_id"), data))
 
 
+@app.route("/case/<case_id>/keywords/rebuild-from-tech-analysis", methods=["POST"])
+def rebuild_keywords_from_tech_analysis_route(case_id):
+    from services.keyword_service import rebuild_keywords_from_tech_analysis
+    return _svc_response(rebuild_keywords_from_tech_analysis(case_id))
+
+
 @app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates

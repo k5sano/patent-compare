@@ -1480,6 +1480,38 @@ async function suggestKeywords() {
   }
 }
 
+// Step 4 Stage 1 の tech_analysis.json を真実の源として、Step 3 のキーワードグループを
+// 技術概念単位 (E1/E2/...) に作り直す。
+// 既存の手動 KW / Fターム は segment_ids の重なりで新グループへ自動移行する。
+async function rebuildGroupsFromTechAnalysis() {
+  const ok = confirm(
+    'Step 4 Stage 1 の技術構造化 (要素 E1/E2/...) に合わせて Step 3 のグループを作り直します。\n' +
+    '\n' +
+    '・グループは要素ごとに 1 つずつ作り直されます\n' +
+    '・既存の手動追加キーワード/Fターム は segment_ids の重なりで新グループへ自動移行されます\n' +
+    '・ハイライト (赤字) 状態は失われる場合があります\n' +
+    '\n' +
+    'よろしいですか?'
+  );
+  if (!ok) return;
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/rebuild-from-tech-analysis`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      alert(data.error || '再構築に失敗しました');
+      return;
+    }
+    kwGroups = data.groups || [];
+    renderGroups();
+    showKwSaveMsg(`Step 4 構造に合わせて ${data.num_groups} グループに再構築しました`);
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 async function addNewGroup(evt) {
   if (evt) { evt.preventDefault(); evt.stopPropagation(); }
   const label = '新規グループ';

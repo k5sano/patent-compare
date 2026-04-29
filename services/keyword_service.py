@@ -106,6 +106,170 @@ def edit_keyword(case_id, group_id, old_term, new_term):
     return {"success": True}, 200
 
 
+def rebuild_keywords_from_tech_analysis(case_id):
+    """Step 4 Stage 1 の `tech_analysis.json` を真実の源として、
+    Step 3 のキーワードグループを **要素単位 (E1/E2/...)** に再構築する。
+
+    - element ごとに 1 グループ (group_id を 1 から順に振り直す)
+    - label = element.label
+    - segment_ids = element.segment_ids
+    - keywords は element の各語彙ソース (claim/definition/example/synonyms) を統合
+    - 既存 keywords.json に **手動追加された語句や F-term** は、
+      segment_ids の重なりが最大の新グループへ自動移行 (重なりなしなら最初の要素 へ)。
+    """
+    from services.case_service import get_case_dir as _gcd
+    case_dir = _gcd(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    ta_path = case_dir / "search" / "tech_analysis.json"
+    if not ta_path.exists():
+        return {
+            "error": "Step 4 Stage 1 の技術構造化が未実行です。先に Step 4 → Stage 1 を完了してください。",
+        }, 400
+    try:
+        with open(ta_path, "r", encoding="utf-8") as f:
+            ta = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"error": f"tech_analysis.json 読み込みエラー: {e}"}, 500
+
+    elements = ta.get("elements") or {}
+    if not elements:
+        return {"error": "tech_analysis.json に elements がありません"}, 400
+
+    # element key の順序維持 (Python 3.7+ で dict 挿入順保持)
+    element_items = list(elements.items())
+
+    # 1) 既存グループから「ユーザー手動追加分」と「F-term」を抽出 (再投入用)
+    existing, kw_path = _load_keywords(case_id)
+    existing = existing or []
+    # キーワードをまとめて (term -> {kw, original_segs})
+    extra_kws = []     # term/type/source/segments_of_origin
+    extra_fterms = []  # F-term tags
+    for og in existing:
+        og_segs = set(og.get("segment_ids") or [])
+        for kw in (og.get("keywords") or []):
+            src = (kw.get("source") or "").strip()
+            typ = (kw.get("type") or "").strip()
+            # F-term は特別扱い
+            if typ == "Fターム" or "fterm" in src.lower():
+                extra_fterms.append({"kw": kw, "segs": og_segs})
+                continue
+            # 手動追加 / 手動ソースは保持
+            if src == "手動" or typ == "手動追加":
+                extra_kws.append({"kw": kw, "segs": og_segs})
+
+    # 2) 新グループを elements から生成
+    new_groups = []
+    for idx, (key, elem) in enumerate(element_items, start=1):
+        label = (elem.get("label") or key or f"要素{idx}").strip() or f"要素{idx}"
+        seg_ids = list(elem.get("segment_ids") or [])
+
+        keywords = []
+        seen_terms = set()
+
+        def _add_term(term, type_, source):
+            t = (term or "").strip()
+            if not t or t in seen_terms:
+                return
+            seen_terms.add(t)
+            keywords.append({"term": t, "type": type_, "source": source})
+
+        # claim_terms (str list)
+        for t in (elem.get("claim_terms") or []):
+            _add_term(t, "請求項由来", "claim")
+
+        # definition_terms (dict list)
+        for d in (elem.get("definition_terms") or []):
+            if isinstance(d, dict):
+                _add_term(d.get("term", ""), d.get("type") or "定義", f"定義 段落{d.get('para', '')}")
+            elif isinstance(d, str):
+                _add_term(d, "定義", "定義")
+
+        # example_terms (dict list)
+        for d in (elem.get("example_terms") or []):
+            if isinstance(d, dict):
+                _add_term(d.get("term", ""), "実施例由来", f"実施例 段落{d.get('para', '')}")
+            elif isinstance(d, str):
+                _add_term(d, "実施例由来", "実施例")
+
+        # synonyms
+        syn = elem.get("synonyms") or {}
+        for t in (syn.get("ja") or []):
+            _add_term(t, "同義語(和)", "synonym_ja")
+        for t in (syn.get("en") or []):
+            _add_term(t, "同義語(英)", "synonym_en")
+
+        new_groups.append({
+            "group_id": idx,
+            "label": label,
+            "segment_ids": seg_ids,
+            "keywords": keywords,
+            "search_codes": {},
+            "_seen_terms": seen_terms,  # マージ重複判定用 (最後に削除)
+        })
+
+    if not new_groups:
+        return {"error": "elements から有効なグループを生成できませんでした"}, 500
+
+    # 3) 既存の手動 KW / Fターム を segment_ids の重なりが最大の新グループへ移行
+    def _best_group_for(orig_segs):
+        if not orig_segs:
+            return new_groups[0]
+        best = new_groups[0]
+        best_overlap = -1
+        for g in new_groups:
+            overlap = len(set(g["segment_ids"]) & orig_segs)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = g
+        return best
+
+    for item in extra_kws:
+        kw = item["kw"]
+        term = (kw.get("term") or "").strip()
+        if not term:
+            continue
+        target = _best_group_for(item["segs"])
+        if term in target["_seen_terms"]:
+            continue
+        target["_seen_terms"].add(term)
+        target["keywords"].append(kw)
+
+    for item in extra_fterms:
+        # F-term は keywords 配列ではなく専用フィールド (search_codes.fterm) に置かれている場合あり
+        # 既存の置き場所を尊重して keywords に入れる (renderKwTag 側で type で判別)
+        target = _best_group_for(item["segs"])
+        kw = item["kw"]
+        code = (kw.get("term") or kw.get("code") or "").strip()
+        if not code:
+            continue
+        if code in target["_seen_terms"]:
+            continue
+        target["_seen_terms"].add(code)
+        target["keywords"].append(kw)
+
+    # 一時フィールドを削除
+    for g in new_groups:
+        g.pop("_seen_terms", None)
+
+    # 4) 保存
+    if kw_path is None:
+        kw_path = case_dir / "keywords.json"
+    _save_keywords(kw_path, new_groups)
+
+    return {
+        "success": True,
+        "num_groups": len(new_groups),
+        "groups": new_groups,
+        "summary": [
+            {"group_id": g["group_id"], "label": g["label"],
+             "segment_ids": g["segment_ids"], "num_keywords": len(g["keywords"])}
+            for g in new_groups
+        ],
+    }, 200
+
+
 def add_keyword_group(case_id, label="新規グループ", segment_ids=None):
     case_dir = get_case_dir(case_id)
     kw_path = case_dir / "keywords.json"

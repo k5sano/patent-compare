@@ -225,6 +225,10 @@
         <button class="btn btn-primary" id="btn-suggest" onclick="suggestKeywords()">
           AI自動提案
         </button>
+        <button class="btn btn-outline" onclick="rebuildGroupsFromTechAnalysis()"
+                title="Step 4 Stage 1 の技術構造化 (要素 E1/E2/...) と同じ分け方でグループを作り直す。手動追加した語句と Fターム は新グループへ自動移行。">
+          🔄 Step 4 構造に合わせる
+        </button>
         <button class="btn btn-outline" onclick="addNewGroup(event)">+ グループ追加</button>
         <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
         <div class="loading-msg" id="loading-suggest" style="margin:0;">
