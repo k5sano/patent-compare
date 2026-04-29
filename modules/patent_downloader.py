@@ -19,12 +19,118 @@ _HEADERS = {
 }
 
 
+_ERA_TO_LETTER = {"明": "M", "大": "T", "昭": "S", "平": "H", "令": "R"}
+
+
+def _gp(stub, lang):
+    return f"https://patents.google.com/patent/{stub}/{lang}"
+
+
+def build_google_patents_url_candidates(patent_id):
+    """特許番号から Google Patents URL の候補リストを優先順に返す。
+
+    日本語表記 (特開/特表/特許/再表/実登 等) を ASCII Kind-code 付き形式に変換してから
+    候補 URL を組み立てる。複数の表記揺れを試行できるようリストで返す。
+
+    例:
+        特開2020-169128       → ['.../JP2020169128A/ja']
+        特開平5-12345        → ['.../JPH0512345A/ja']
+        特開昭60-12345       → ['.../JPS6012345A/ja']
+        特表2020-500001      → ['.../JP2020500001A/ja']
+        特許6789012          → ['.../JP6789012B2/ja', '.../JP6789012B1/ja']
+        再表2012-029514      → ['.../WO2012029514A1/en', '.../JPWO2012029514A1/ja']
+        WO2022/030405        → ['.../WO2022030405A1/en']
+        JP2020169128A        → そのまま
+        US20130040869A1      → そのまま (en)
+    """
+    pid = (patent_id or "").strip()
+    if not pid:
+        return []
+    cands = []
+
+    # --- 日本語表記 (西暦) 特開/特表 ---
+    m = re.match(r"特(?:開|表)\s*(\d{4})\s*[-ー－]\s*(\d+)\s*$", pid)
+    if m:
+        y, n = m.group(1), m.group(2)
+        # 主要形 (no zero-pad), 念のため 6 桁 zfill 版も
+        cands.append(_gp(f"JP{y}{n}A", "ja"))
+        if len(n) < 6:
+            cands.append(_gp(f"JP{y}{n.zfill(6)}A", "ja"))
+        return cands
+
+    # --- 日本語表記 (元号) 特開昭/平/令... ---
+    m = re.match(r"特(?:開|表)\s*([明大昭平令])\s*(\d{1,2})\s*[-ー－]\s*(\d+)\s*$", pid)
+    if m:
+        era = _ERA_TO_LETTER[m.group(1)]
+        y = m.group(2).zfill(2)
+        n = m.group(3)
+        cands.append(_gp(f"JP{era}{y}{n}A", "ja"))
+        if len(n) < 6:
+            cands.append(_gp(f"JP{era}{y}{n.zfill(6)}A", "ja"))
+        return cands
+
+    # --- 特許 (登録番号) ---
+    m = re.match(r"特許\s*(?:第)?\s*(\d+)\s*(?:号)?\s*$", pid)
+    if m:
+        n = m.group(1)
+        cands.append(_gp(f"JP{n}B2", "ja"))
+        cands.append(_gp(f"JP{n}B1", "ja"))
+        return cands
+
+    # --- 再表 / 再公表 (国際公開の和訳系) ---
+    m = re.match(r"再(?:公)?表\s*(\d{4})\s*[-ー－/／]\s*(\d+)\s*$", pid)
+    if m:
+        y, n = m.group(1), m.group(2)
+        cands.append(_gp(f"WO{y}{n.zfill(6)}A1", "en"))
+        cands.append(_gp(f"JPWO{y}{n.zfill(6)}A1", "ja"))
+        return cands
+
+    # --- 実用新案登録 ---
+    m = re.match(r"(?:実登|登録実用新案|実用新案登録)(?:第)?\s*(\d+)\s*(?:号)?\s*$", pid)
+    if m:
+        n = m.group(1)
+        cands.append(_gp(f"JPU{n}", "ja"))
+        cands.append(_gp(f"JP{n}U", "ja"))
+        return cands
+
+    # --- 特願 (出願番号、Google Patents は通常未収録だが念のため) ---
+    m = re.match(r"特願\s*(\d{4})\s*[-ー－]\s*(\d+)\s*$", pid)
+    if m:
+        y, n = m.group(1), m.group(2)
+        cands.append(_gp(f"JP{y}{n}A", "ja"))
+        return cands
+
+    # --- ASCII 国コード付き ---
+    cleaned = re.sub(r"[\s\-/／]", "", pid)
+    upper = cleaned.upper()
+
+    # WO 表記正規化
+    m = re.match(r"WO(\d{4})(\d+)([A-Z]\d?)?$", upper)
+    if m:
+        y, n = m.group(1), m.group(2)
+        kc = m.group(3) or "A1"
+        cands.append(_gp(f"WO{y}{n.zfill(6)}{kc}", "en"))
+        return cands
+
+    # JP / US / EP / CN / KR その他は cleaned をそのまま使う
+    if upper.startswith("JP"):
+        cands.append(_gp(cleaned, "ja"))
+        cands.append(_gp(cleaned, "en"))
+    elif upper[:2].isalpha():
+        cands.append(_gp(cleaned, "en"))
+    else:
+        # 完全な未識別形式: en で試す
+        cands.append(_gp(cleaned, "en"))
+    return cands
+
+
 def build_google_patents_url(patent_id):
-    """特許番号からGoogle PatentsページURLを構築"""
-    cleaned = re.sub(r'[\s\-/]', '', patent_id)
-    if cleaned.upper().startswith("JP"):
-        return f"https://patents.google.com/patent/{cleaned}/ja"
-    return f"https://patents.google.com/patent/{cleaned}/en"
+    """後方互換: 最優先の候補 URL を返す。"""
+    cands = build_google_patents_url_candidates(patent_id)
+    if cands:
+        return cands[0]
+    cleaned = re.sub(r"[\s\-/／]", "", patent_id or "")
+    return _gp(cleaned, "en")
 
 
 def build_jplatpat_url(patent_id):
@@ -198,14 +304,14 @@ def _extract_pdf_url_from_html(html):
 
 
 def download_patent_pdf(patent_id, save_dir, timeout=30):
-    """特許PDFをダウンロード
+    """特許PDFを Google Patents 経由でダウンロード。
 
-    1. Google Patents ページを取得
-    2. HTMLからPDF直リンク (patentimages.storage.googleapis.com/...) を抽出
-    3. PDFをダウンロード
+    日本語表記 (特開/特表/特許/再表/実登) を ASCII Kind-code 付き形式に変換した
+    候補 URL を順次試行し、最初に PDF が取得できたものを採用。
 
     Parameters:
-        patent_id: 特許番号 (例: "US5286475", "JP2020082440A")
+        patent_id: 特許番号 (例: "US5286475", "JP2020082440A", "特開2020-169128",
+                              "特許6789012", "再表2012-029514")
         save_dir: 保存先ディレクトリ (Path or str)
         timeout: タイムアウト秒数
 
@@ -214,82 +320,68 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
             success: bool
             path: ファイルパス (成功時)
             error: エラーメッセージ (失敗時)
-            google_patents_url: Google PatentsのURL (常に含む)
+            google_patents_url: 最後に試した Google Patents URL
     """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # ファイル名用にサニタイズ
-    safe_name = re.sub(r'[^\w\-]', '', patent_id)
+    # ファイル名用にサニタイズ (日本語の特開等は \w に含まれないので英数字 ID へ変換)
+    safe_name = re.sub(r"[^\w\-]", "", patent_id)
     if not safe_name:
         safe_name = "unknown"
 
-    google_url = build_google_patents_url(patent_id)
-
-    # Step 1: Google Patents ページを取得してPDF URLを抽出
-    try:
-        page_resp = requests.get(google_url, headers=_HEADERS, timeout=timeout,
-                                 allow_redirects=True)
-
-        if page_resp.status_code != 200:
-            return {
-                "success": False,
-                "error": f"Google Patentsページ取得失敗 (status={page_resp.status_code})",
-                "google_patents_url": google_url,
-            }
-
-        pdf_url = _extract_pdf_url_from_html(page_resp.text)
-
-        if not pdf_url:
-            return {
-                "success": False,
-                "error": "Google PatentsページからPDFリンクを検出できませんでした",
-                "google_patents_url": google_url,
-            }
-
-    except requests.Timeout:
+    candidates = build_google_patents_url_candidates(patent_id)
+    if not candidates:
         return {
             "success": False,
-            "error": "Google Patentsページ取得がタイムアウトしました",
-            "google_patents_url": google_url,
-        }
-    except requests.RequestException as e:
-        return {
-            "success": False,
-            "error": f"Google Patentsページ取得エラー: {e}",
-            "google_patents_url": google_url,
+            "error": "Google Patents URL を生成できませんでした",
+            "google_patents_url": "",
         }
 
-    # Step 2: PDFをダウンロード
-    try:
-        pdf_resp = requests.get(pdf_url, headers=_HEADERS, timeout=timeout,
-                                allow_redirects=True)
+    last_error = None
+    last_url = candidates[-1]
 
-        if (pdf_resp.status_code == 200 and
-                'pdf' in pdf_resp.headers.get('content-type', '').lower()):
-            path = save_dir / f"{safe_name}.pdf"
-            path.write_bytes(pdf_resp.content)
-            return {
-                "success": True,
-                "path": str(path),
-                "google_patents_url": google_url,
-            }
+    for google_url in candidates:
+        last_url = google_url
+        # Step 1: Google Patents ページを取得して PDF URL を抽出
+        try:
+            page_resp = requests.get(google_url, headers=_HEADERS, timeout=timeout,
+                                     allow_redirects=True)
+            if page_resp.status_code != 200:
+                last_error = f"Google Patents ページ取得失敗 (status={page_resp.status_code})"
+                continue
+            pdf_url = _extract_pdf_url_from_html(page_resp.text)
+            if not pdf_url:
+                last_error = "Google Patents ページから PDF リンクを検出できませんでした"
+                continue
+        except requests.Timeout:
+            last_error = "Google Patents ページ取得がタイムアウトしました"
+            continue
+        except requests.RequestException as e:
+            last_error = f"Google Patents ページ取得エラー: {e}"
+            continue
 
-        return {
-            "success": False,
-            "error": f"PDFダウンロード失敗 (status={pdf_resp.status_code})",
-            "google_patents_url": google_url,
-        }
+        # Step 2: PDF をダウンロード
+        try:
+            pdf_resp = requests.get(pdf_url, headers=_HEADERS, timeout=timeout,
+                                    allow_redirects=True)
+            if (pdf_resp.status_code == 200 and
+                    "pdf" in pdf_resp.headers.get("content-type", "").lower()):
+                path = save_dir / f"{safe_name}.pdf"
+                path.write_bytes(pdf_resp.content)
+                return {
+                    "success": True,
+                    "path": str(path),
+                    "google_patents_url": google_url,
+                }
+            last_error = f"PDF ダウンロード失敗 (status={pdf_resp.status_code})"
+        except requests.Timeout:
+            last_error = "PDF ダウンロードがタイムアウトしました"
+        except requests.RequestException as e:
+            last_error = f"PDF ダウンロードエラー: {e}"
 
-    except requests.Timeout:
-        return {
-            "success": False,
-            "error": "PDFダウンロードがタイムアウトしました",
-            "google_patents_url": google_url,
-        }
-    except requests.RequestException as e:
-        return {
-            "success": False,
-            "error": f"PDFダウンロードエラー: {e}",
-            "google_patents_url": google_url,
-        }
+    return {
+        "success": False,
+        "error": last_error or "全候補 URL で PDF を取得できませんでした",
+        "google_patents_url": last_url,
+    }
