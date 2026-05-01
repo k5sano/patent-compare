@@ -25,15 +25,57 @@ function _hanEsc(s) {
   }[c]));
 }
 
-function _hanFormatValue(v) {
+// 1.3 技術分野を特化フォーマットでコンパクト表示
+function _hanFormatClassification(v) {
+  if (!v || typeof v !== 'object') return _hanFormatValue(v);
+  const lines = [];
+  const ipc = v.IPC || [];
+  if (ipc.length) {
+    const codes = ipc.map(x => _hanEsc(x.code || x)).join('、');
+    lines.push(`<div><strong style="color:#94a3b8;">IPC：</strong>${codes}</div>`);
+  }
+  const fi = v.FI || [];
+  if (fi.length) {
+    // 「コード（説明）」をカンマ区切りで 1 行に
+    const parts = fi.map(x => {
+      const c = _hanEsc(x.code || '');
+      const lab = (x.label || '').trim();
+      return lab ? `${c}（${_hanEsc(lab)}）` : c;
+    });
+    lines.push(`<div><strong style="color:#94a3b8;">FI：</strong>${parts.join('、')}</div>`);
+  }
+  const theme = v["テーマコード"] || v.theme_codes || [];
+  if (theme.length) {
+    lines.push(`<div><strong style="color:#94a3b8;">テーマコード：</strong>${theme.map(_hanEsc).join('、')}</div>`);
+  }
+  const grouped = v["Fターム_grouped"] || {};
+  const themes = Object.keys(grouped);
+  if (themes.length) {
+    lines.push('<div style="margin-top:0.25rem;"><strong style="color:#94a3b8;">Fターム：</strong></div>');
+    for (const t of themes) {
+      const g = grouped[t] || {};
+      const tlabel = g.theme_label ? `（${_hanEsc(g.theme_label)}）` : '';
+      const items = (g.items || []).map(it => {
+        const code = _hanEsc(it.code || '');
+        const lab = (it.label || '').trim();
+        return lab ? `${code}（${_hanEsc(lab)}）` : code;
+      }).join('、');
+      lines.push(
+        `<div style="margin-left:0.7rem; font-size:0.83rem;">` +
+        `<span style="color:#cbd5e1;">${_hanEsc(t)}${tlabel}：</span>${items}</div>`
+      );
+    }
+  }
+  return lines.join('');
+}
+
+function _hanFormatValue(v, ctxId) {
   if (v == null || v === '') return '<span style="color:#64748b;">(未取得)</span>';
   if (typeof v === 'string') {
-    // 改行を <br>
     return _hanEsc(v).replace(/\n/g, '<br>');
   }
   if (Array.isArray(v)) {
     if (!v.length) return '<span style="color:#64748b;">(空)</span>';
-    // 文字列配列ならピル表示、オブジェクト配列なら箇条書き
     if (v.every(x => typeof x === 'string')) {
       return v.map(x =>
         `<span style="display:inline-block; padding:0.15rem 0.55rem; margin:0.1rem 0.2rem 0.1rem 0; background:#1e293b; border:1px solid var(--border); border-radius:4px; font-size:0.8rem;">${_hanEsc(x)}</span>`
@@ -43,6 +85,8 @@ function _hanFormatValue(v) {
       v.map(x => `<li>${_hanFormatValue(x)}</li>`).join('') + '</ul>';
   }
   if (typeof v === 'object') {
+    // 1.3 用の特化表示
+    if (ctxId === '1.3') return _hanFormatClassification(v);
     const rows = Object.entries(v).map(([k, val]) =>
       `<div style="margin:0.15rem 0;"><strong style="color:#94a3b8;">${_hanEsc(k)}:</strong> ${_hanFormatValue(val)}</div>`
     );
@@ -82,7 +126,7 @@ function _hanRenderResult(data, summary) {
           </div>
           ${desc}
           <div style="font-size:0.85rem; color:#e2e8f0; line-height:1.55;">
-            ${_hanFormatValue(it.value)}
+            ${_hanFormatValue(it.value, it.id)}
           </div>
         </div>
       `;

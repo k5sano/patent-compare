@@ -133,13 +133,19 @@ class TestAutoResolution:
         assert result["success"] is True
         sections = result["data"]["sections"]
 
-        # 1.3 (jplatpat_classification)
+        # 1.3 (jplatpat_classification) — enrich された構造
         item_1_3 = sections[0]["items"][1]
         assert item_1_3["id"] == "1.3"
         v = item_1_3["value"]
-        assert "A61K 8/00" in v["IPC"]
-        assert "A61K 8/22" in v["FI"]
-        assert "4C083AA12" in v["Fターム"]
+        ipc_codes = [x["code"] for x in v["IPC"]]
+        assert "A61K 8/00" in ipc_codes
+        fi_codes = [x["code"] for x in v["FI"]]
+        assert "A61K 8/22" in fi_codes
+        # Fターム は theme でグルーピング
+        grouped = v["Fターム_grouped"]
+        assert "4C083" in grouped
+        suffixes = [x["code"] for x in grouped["4C083"]["items"]]
+        assert "AA12" in suffixes
         assert "4C083" in v["テーマコード"]
 
         # 2.1 (meta)
@@ -213,7 +219,8 @@ class TestLlmResolution:
         # auto 項目は埋まる (LLM 失敗でも skeleton は返す)
         sections = result["data"]["sections"]
         item_1_3 = sections[0]["items"][1]
-        assert "A61K 8/00" in item_1_3["value"]["IPC"]
+        ipc_codes = [x["code"] for x in item_1_3["value"]["IPC"]]
+        assert "A61K 8/00" in ipc_codes
         # LLM 項目は None のまま
         item_1_1 = sections[0]["items"][0]
         assert item_1_1["value"] is None

@@ -96,13 +96,14 @@ def is_claude_available():
     return shutil.which("claude") is not None
 
 
-def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
+def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None):
     """Claude Code CLI にプロンプトを送信し、回答テキストを返す。
 
     Parameters:
         prompt_text: プロンプト文字列
         timeout: タイムアウト秒数（デフォルト600秒）
         use_search: True の場合、MCP検索サーバーを有効にする
+        model: モデル ID (例: "claude-opus-4-6")。None の場合 CLI 既定を使用。
 
     Returns:
         str: Claude の回答テキスト
@@ -124,6 +125,8 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
 
     # コマンド構築
     cmd = ["claude", "-p"]
+    if model:
+        cmd.extend(["--model", model])
 
     # MCP検索サーバー設定
     mcp_config_path = None

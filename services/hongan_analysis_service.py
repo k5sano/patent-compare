@@ -9,6 +9,7 @@ LLM 項目は Claude を 1 回呼んで JSON 一括生成する。
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -21,6 +22,9 @@ from services import case_service
 from services.case_service import get_case_dir, load_case_meta
 
 logger = logging.getLogger(__name__)
+
+# 1.3 用に使う Claude のモデル (重めの分析タスクなので Opus 4.6)
+_CLAUDE_MODEL = "claude-opus-4-6"
 
 # プロンプトに含める段落本文の合計上限 (Claude の context を圧迫しないように)
 _MAX_PARA_CHARS = 60000
@@ -72,6 +76,105 @@ def _load_case_data(case_id: str) -> dict:
     meta = load_case_meta(case_id) or {}
     data["meta"] = meta
     return data
+
+
+@functools.lru_cache(maxsize=4)
+def _load_fi_codebook(field: str) -> dict:
+    """FI ツリー辞書 (dictionaries/<field>/fi_*tree.json) からコード → label の dict を返す。"""
+    out: dict = {}
+    fdir = _project_root() / "dictionaries" / field
+    if not fdir.exists():
+        return out
+    for p in fdir.glob("fi_*tree.json"):
+        try:
+            with p.open(encoding="utf-8") as f:
+                tree = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for code, node in (tree.get("nodes") or {}).items():
+            if isinstance(node, dict):
+                label = (node.get("label") or "").strip()
+                if label and code not in out:
+                    out[code] = label
+    return out
+
+
+def _coerce_to_code_label(entry):
+    """文字列 / dict のどちらでも (code, existing_label) のタプルに正規化。"""
+    if isinstance(entry, dict):
+        return (str(entry.get("code") or "").strip(),
+                str(entry.get("label") or "").strip())
+    return (str(entry or "").strip(), "")
+
+
+def _enrich_fi_codes(codes: list, field: str) -> list[dict]:
+    """FI コード列を {code, label} dict のリストに正規化＋辞書補完。
+
+    入力は文字列 list か、既に {code, label, ...} dict の list。
+    """
+    book = _load_fi_codebook(field)
+    out = []
+    for raw in codes or []:
+        c, existing_label = _coerce_to_code_label(raw)
+        if not c:
+            continue
+        label = existing_label or book.get(c) or book.get(c.replace(" ", "")) or ""
+        if not label:
+            import re as _re
+            m = _re.match(r"^([A-Z]\d{2}[A-Z])(\d.*)$", c.replace(" ", ""))
+            if m:
+                spaced = f"{m.group(1)} {m.group(2)}"
+                label = book.get(spaced) or ""
+        out.append({"code": c, "label": label})
+    return out
+
+
+def _enrich_fterm_codes(codes: list[str], field: str) -> dict:
+    """F-term コードのリストを theme ごとにグルーピングし suffix + label を付ける。
+
+    Returns:
+        {
+          "<theme>": {
+              "theme_label": "...",
+              "items": [{"code": "AA161", "label": "..."}, ...]
+          }
+        }
+    """
+    try:
+        from modules.fterm_dict import get_nodes
+    except ImportError:
+        return {}
+    nodes = {}
+    try:
+        nodes = get_nodes(field) or {}
+    except Exception:
+        nodes = {}
+
+    grouped: dict = {}
+    for raw in codes or []:
+        c, existing_label = _coerce_to_code_label(raw)
+        if not c:
+            continue
+        # F-term コード "4C083AA161" → theme="4C083", suffix="AA161"
+        import re as _re
+        m = _re.match(r"^(\d{1,2}[A-Z]\d{3})([A-Z]{2}\d{2,3})$", c)
+        if m:
+            theme, suffix = m.group(1), m.group(2)
+        else:
+            theme, suffix = "", c
+        # 辞書 lookup (既に label 済みなら優先、そうでなければ辞書を引く)
+        label = existing_label
+        if not label:
+            for key in (c, suffix, suffix[:-1] if len(suffix) >= 4 else None):
+                if key and key in nodes:
+                    label = (nodes[key].get("label") or "").strip()
+                    if label:
+                        break
+        bucket = grouped.setdefault(theme, {"theme_label": "", "items": []})
+        if not bucket["theme_label"] and theme and theme in nodes:
+            bucket["theme_label"] = (nodes[theme].get("label") or "").strip()
+        bucket["items"].append({"code": suffix or c, "label": label})
+    return grouped
 
 
 def _section_text_excerpt(hongan: dict, section_names: list[str], budget: int) -> str:
@@ -143,7 +246,21 @@ def _resolve_auto_item(item: dict, ctx: dict) -> Any:
         fi = classification.get("fi") or []
         fterm = classification.get("fterm") or []
         theme = classification.get("theme_codes") or classification.get("theme") or []
-        return {"IPC": ipc, "FI": fi, "Fターム": fterm, "テーマコード": theme}
+        meta_field = (ctx.get("meta") or {}).get("field") or "cosmetics"
+        # IPC は専用辞書がないので code+既存 label のみ正規化
+        ipc_norm = []
+        for entry in ipc:
+            c, lab = _coerce_to_code_label(entry)
+            if c:
+                ipc_norm.append({"code": c, "label": lab})
+        # テーマコードは文字列 list を期待
+        theme_norm = [str(t).strip() for t in theme if t]
+        return {
+            "IPC": ipc_norm,
+            "FI": _enrich_fi_codes(fi, meta_field),
+            "Fターム_grouped": _enrich_fterm_codes(fterm, meta_field),
+            "テーマコード": theme_norm,
+        }
 
     if src == "claim_segmenter":
         if iid == "4.1":
@@ -357,7 +474,7 @@ def run_analysis(case_id: str, version: str = "v0.1",
             llm_error = f"claude_client import 失敗: {e}"
         else:
             try:
-                raw = call_claude(prompt, timeout=claude_timeout)
+                raw = call_claude(prompt, timeout=claude_timeout, model=_CLAUDE_MODEL)
                 llm_results = _extract_json_from_response(raw)
                 if not llm_results:
                     llm_error = "LLM 応答から JSON を抽出できませんでした"
