@@ -104,7 +104,7 @@
       <div style="margin-bottom:1rem; padding:1rem; background:var(--surface2); border-radius:8px;">
         <strong>抽出済み:</strong> {{ hongan.patent_number }}
         {% if hongan.patent_title %} &mdash; {{ hongan.patent_title }}{% endif %}<br>
-        請求項: {{ hongan.claims|length }}件 / 段落: {{ hongan.paragraphs|length }}件 / {{ hongan.total_pages }}ページ
+        請求項: {{ hongan.claims|length }}件 / 段落: {{ hongan.paragraphs|length }}件 / 表: {{ (hongan.tables or [])|length }}件 / {{ hongan.total_pages }}ページ
         <div style="margin-top:0.6rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
           <button type="button" class="btn btn-outline"
                   style="font-size:0.85rem; padding:0.3rem 0.8rem;"
@@ -117,8 +117,40 @@
                   title="J-PlatPat の固定 URL を開いて IPC/FI/Fターム/テーマコード を抽出します (Playwright, 10-15秒)">
             &#128203; J-PlatPat から本願分類を取得
           </button>
+          {% if hongan.tables %}
+          <button type="button" class="btn btn-outline"
+                  style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                  onclick="showHonganPdfTables()"
+                  title="PDFテキストパーサが拾った表 (実施例の配合表など) を一覧で確認できます">
+            &#128203; PDF抽出の表 {{ hongan.tables|length }}件
+          </button>
+          {% endif %}
         </div>
         <div id="classification-msg" style="display:none; margin-top:0.6rem; padding:0.5rem 0.8rem; border-radius:6px; font-size:0.82rem;"></div>
+        {% if hongan.tables %}
+        <div id="hongan-pdf-tables-modal" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.6);">
+          <div style="position:absolute; top:5%; left:50%; transform:translateX(-50%); width:min(900px,92vw); max-height:88vh; background:#0f172a; border:1px solid var(--border); border-radius:10px; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+            <div style="display:flex; align-items:center; justify-content:space-between; padding:0.8rem 1rem; border-bottom:1px solid var(--border);">
+              <strong style="color:#cbd5e1;">📊 本願 PDF 抽出の表 ({{ hongan.tables|length }}件)</strong>
+              <button onclick="document.getElementById('hongan-pdf-tables-modal').style.display='none'"
+                      style="background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer; line-height:1;">×</button>
+            </div>
+            <div style="overflow:auto; padding:1rem;">
+              {% for t in hongan.tables %}
+              <details style="margin-bottom:0.8rem; border:1px solid var(--border); border-radius:8px; padding:0.6rem 0.8rem; background:#1e293b;">
+                <summary style="cursor:pointer; font-weight:600; color:#cbd5e1;">
+                  {{ t.id or '表?' }}
+                  <span style="color:#64748b; font-size:0.82rem; font-weight:normal;">
+                    (p.{{ t.page or '?' }}{% if t.section %} / {{ t.section }}{% endif %}{% if t.paragraph_id %} / 段落{{ t.paragraph_id }}{% endif %})
+                  </span>
+                </summary>
+                <pre style="margin-top:0.5rem; padding:0.6rem; background:#0f172a; border-radius:6px; font-size:0.78rem; color:#cbd5e1; white-space:pre-wrap; word-break:break-word; max-height:380px; overflow:auto;">{{ t.content }}</pre>
+              </details>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endif %}
       </div>
       <p style="color:var(--text2); font-size:0.85rem;">再度アップロードすると上書きされます。</p>
       {% endif %}
