@@ -604,6 +604,35 @@ def _parse_row(row) -> JplatpatHit:
     return hit
 
 
+def build_search_label_candidates(patent_id: str) -> list[str]:
+    """J-PlatPat 検索結果の公開番号セルクリック用に、表記揺れ候補リストを生成。
+
+    PDF パーサが「特開YYYY-NNNNNN」と記録していても、実体は「特表」(PCT 翻訳公報、
+    6 桁 5xx,xxx 番台が典型) のことがあるため、両プレフィクスを候補に入れる。
+    重複は除外、入力順は保持。
+    """
+    if not patent_id:
+        return []
+    cands = [patent_id, patent_id.replace(" ", "")]
+    m = re.search(r"(\d{4})\s*[-]?\s*(\d+)", patent_id or "")
+    if m:
+        year, num = m.group(1), m.group(2)
+        cands.append(f"{year}-{num}")
+        for prefix in ("特開", "特表"):
+            cands.append(f"{prefix}{year}-{num}")
+            cands.append(f"{prefix} {year}-{num}")
+    m_jp = re.search(r"JP\s*(\d{5,8})\s*B", patent_id or "", re.I)
+    if m_jp:
+        cands.append(f"特許第{m_jp.group(1)}号")
+        cands.append(f"特許{m_jp.group(1)}")
+    m_jpa = re.search(r"JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A", patent_id or "", re.I)
+    if m_jpa:
+        cands.append(f"特開{m_jpa.group(1)}-{m_jpa.group(2)}")
+        cands.append(f"特表{m_jpa.group(1)}-{m_jpa.group(2)}")
+    seen = set()
+    return [c for c in cands if c and not (c in seen or seen.add(c))]
+
+
 # --- CLI テスト用 ---
 
 def build_jplatpat_fixed_url(patent_id: str) -> str:
@@ -716,24 +745,8 @@ def fetch_jplatpat_full_text(patent_id: str, *, language: str = "ja",
                 page.goto(fixed_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_timeout(3500)
                 # 公開番号セルをクリック → 詳細ページ (p0200) が新タブで開く
-                # patent_id 文字列のバリエーションをいくつか試す
                 opened = None
-                # 取得したい文字列パターン: 特開YYYY-NNNNNN / 特許第NNNN号 / WO-A-... など
-                # 入力 patent_id から複数の表記を作る
-                cands = [patent_id, patent_id.replace(" ", "")]
-                m = re.search(r'(\d{4})\s*[-]?\s*(\d+)', patent_id)
-                if m:
-                    cands.append(f"{m.group(1)}-{m.group(2)}")
-                m_jp = re.search(r'JP\s*(\d{5,8})\s*B', patent_id, re.I)
-                if m_jp:
-                    cands.append(f"特許第{m_jp.group(1)}号")
-                    cands.append(f"特許{m_jp.group(1)}")
-                m_jpa = re.search(r'JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A', patent_id, re.I)
-                if m_jpa:
-                    cands.append(f"特開{m_jpa.group(1)}-{m_jpa.group(2)}")
-                # 重複除去 (順序保持)
-                seen = set()
-                cands = [c for c in cands if c and not (c in seen or seen.add(c))]
+                cands = build_search_label_candidates(patent_id)
 
                 for label in cands:
                     try:
