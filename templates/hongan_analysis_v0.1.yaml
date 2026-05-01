@@ -1,0 +1,210 @@
+# 本願分析テンプレート v0.1
+# 特許出願の分析・先行文献調査・拒絶理由応答の起点となる構造化ドキュメント。
+# 各項目は type により自動取得 (auto) / LLM生成 (llm) / 人手記入 (manual) に分類される。
+
+template_id: hongan_v0.1
+name: 本願分析テンプレート
+version: "0.1"
+purpose: [search, oa_response, analysis]
+
+sections:
+
+  # ------------------------------------------------------------
+  - id: 1
+    title: 発明の本質
+    description: 本願発明を一言で捉えるためのコアパート。分析の起点。
+    items:
+      - id: 1.1
+        label: 発明の一言要約
+        description: 本願発明の技術的本質を30〜80字で表現する
+        type: llm
+        required: true
+      - id: 1.2
+        label: 発明のカテゴリ
+        description: 物、方法、用途、プログラム、システム等の別
+        type: llm
+      - id: 1.3
+        label: 技術分野
+        description: IPC / FI / Fターム（主要なもの）
+        type: auto
+        source: jplatpat_classification
+
+  # ------------------------------------------------------------
+  - id: 2
+    title: 書誌情報
+    description: 出願に関する事実情報。
+    items:
+      - id: 2.1
+        label: 出願番号・出願日・公開番号・公開日
+        type: auto
+        source: meta
+      - id: 2.2
+        label: 出願人
+        type: auto
+        source: meta
+      - id: 2.3
+        label: 発明者
+        type: auto
+        source: meta
+      - id: 2.4
+        label: 優先権・分割・継続の有無
+        type: manual
+
+  # ------------------------------------------------------------
+  - id: 3
+    title: 技術的ストーリー
+    description: 明細書の論理構造を要約。課題から効果までの一貫した流れを押さえる。
+    items:
+      - id: 3.1
+        label: 背景技術と従来技術の限界
+        type: llm
+        source_sections: [背景技術]
+      - id: 3.2
+        label: 解決しようとする課題
+        type: llm
+        source_sections: [発明が解決しようとする課題]
+      - id: 3.3
+        label: 課題解決の手段（概要）
+        type: llm
+        source_sections: [課題を解決するための手段]
+      - id: 3.4
+        label: 発明の効果
+        type: llm
+        source_sections: [発明の効果]
+      - id: 3.5
+        label: 従来技術との差別化ポイント
+        description: 出願人が新規と考えている要素
+        type: llm
+        depends_on: [3.1, 3.3]
+
+  # ------------------------------------------------------------
+  - id: 4
+    title: 請求項の構造解析
+    description: 権利範囲を規定する請求項の分解。対比・検索の基礎データ。
+    items:
+      - id: 4.1
+        label: 独立請求項の列挙とカテゴリ
+        type: auto
+        source: claim_segmenter
+      - id: 4.2
+        label: 従属関係のツリー
+        type: auto
+        source: claim_segmenter
+      - id: 4.3
+        label: 発明特定事項（構成要素）への分解
+        description: 独立請求項を A, B, C... の構成要素単位に分解
+        type: auto
+        source: claim_segmenter
+      - id: 4.4
+        label: 各構成要素の技術的意味
+        description: 各要素が発明全体の中で果たす役割の一言説明
+        type: llm
+        depends_on: [4.3]
+      - id: 4.5
+        label: 構成要素の明細書上の根拠箇所
+        description: 各構成要素が明細書のどの段落・図面に対応するか
+        type: llm
+        source: paragraph_matcher
+        depends_on: [4.3]
+
+  # ------------------------------------------------------------
+  - id: 5
+    title: 実施形態・実施例
+    description: クレーム解釈の裏付けとなる具体例の整理。
+    items:
+      - id: 5.1
+        label: 実施形態の構成と動作
+        type: llm
+        source_sections: [発明を実施するための形態]
+      - id: 5.2
+        label: 図面の要約
+        description: 各図が示す構造・フロー・関係
+        type: llm
+      - id: 5.3
+        label: 実施例間の共通点と相違点
+        type: llm
+      - id: 5.4
+        label: 必須構成と任意構成の切り分け
+        description: 実施例から推認される必須要件
+        type: llm
+        depends_on: [4.3, 5.1]
+
+  # ------------------------------------------------------------
+  - id: 6
+    title: 先行文献調査の設計
+    description: 探すべき文献のイメージを明確化し、検索式作成の前提を整える。
+    purpose_filter: [search, analysis]
+    items:
+      - id: 6.1
+        label: 構成要素ごとの調査観点
+        description: 各構成要素 (4.3) について「何を調査対象とするか」を言語化
+        type: llm
+        depends_on: [4.3, 4.4]
+      - id: 6.2
+        label: 置換可能な要素と周知技術
+        description: 構成要素のうち、置き換えが容易で周知技術として扱われ得るもの
+        type: llm
+        depends_on: [4.3]
+      - id: 6.3
+        label: 組合せが示唆され得る要素
+        description: 他文献との組合せで進歩性が否定され得る観点
+        type: llm
+        depends_on: [4.3, 3.5]
+      - id: 6.4
+        label: 想定する文献像
+        description: |
+          新規性否定候補、進歩性主引例候補、副引例候補、周知技術文献の
+          それぞれについて「どんな内容の文献を探すか」を記述
+        type: llm
+        depends_on: [6.1, 6.2, 6.3]
+
+  # ------------------------------------------------------------
+  - id: 7
+    title: 検索要素の抽出
+    description: 実際の検索式を組み立てるための材料。
+    purpose_filter: [search, analysis]
+    items:
+      - id: 7.1
+        label: 主要キーワード
+        description: 構成要素・効果・課題から抽出した検索語
+        type: llm
+        depends_on: [4.3, 3.2, 3.4]
+      - id: 7.2
+        label: 同義語・表現揺れ・上位/下位概念
+        type: llm
+        depends_on: [7.1]
+      - id: 7.3
+        label: 優先度の高い分類コード
+        description: FI / Fターム / CPC の候補
+        type: llm
+        depends_on: [1.3, 4.3]
+      - id: 7.4
+        label: 除外すべきノイズ表現
+        description: 検索結果のノイズ源となりやすい語（別分野で同語が使われる等）
+        type: llm
+        depends_on: [7.1]
+
+  # ------------------------------------------------------------
+  - id: 8
+    title: 論点の予測（任意）
+    description: 想定される審査・対応のシナリオ。OA応答時に参照。
+    purpose_filter: [oa_response, analysis]
+    items:
+      - id: 8.1
+        label: 新規性に関する論点
+        type: llm
+        depends_on: [4.3, 6.4]
+      - id: 8.2
+        label: 進歩性に関する論点
+        description: 主引例+副引例での組合せ論点、動機付け・阻害要因
+        type: llm
+        depends_on: [4.3, 6.3]
+      - id: 8.3
+        label: 記載要件に関する論点
+        description: サポート要件、明確性、実施可能要件の観点
+        type: llm
+        depends_on: [4.3, 4.4, 5.4]
+      - id: 8.4
+        label: 用語の定義・解釈に関する論点
+        type: llm
+        depends_on: [4.3]

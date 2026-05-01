@@ -1566,6 +1566,25 @@ def search_run_snippets(case_id):
     return jsonify(get_keyword_snippets(case_id))
 
 
+# ===== 本願分析 (Step 2 サブタブ SUB 3) =====
+
+@app.route("/case/<case_id>/hongan-analysis", methods=["GET"])
+def hongan_analysis_load(case_id):
+    """既存の分析結果 (cases/<id>/analysis/hongan_analysis.json) を返す"""
+    from services.hongan_analysis_service import load_existing_analysis
+    return _svc_response(load_existing_analysis(case_id))
+
+
+@app.route("/case/<case_id>/hongan-analysis/run", methods=["POST"])
+def hongan_analysis_run(case_id):
+    """本願分析テンプレートを実行 (auto + LLM 一括) して保存・返却する"""
+    from services.hongan_analysis_service import run_analysis
+    data = request.get_json() or {}
+    version = data.get("version") or "v0.1"
+    skip_llm = bool(data.get("skip_llm"))
+    return _svc_response(run_analysis(case_id, version=version, skip_llm=skip_llm))
+
+
 # ===== 予備調査 (Step 2 サブタブ) =====
 
 @app.route("/api/preliminary_research/fields", methods=["GET"])

@@ -149,6 +149,9 @@
         <div class="stage-ind" id="step2-sub-ind-2" onclick="showStep2Sub(2)">
           <span class="stage-num">SUB 2</span>予備調査
         </div>
+        <div class="stage-ind" id="step2-sub-ind-3" onclick="showStep2Sub(3)">
+          <span class="stage-num">SUB 3</span>本願分析
+        </div>
       </div>
 
       <!-- Sub 1: 分節 (既存) -->
@@ -230,6 +233,11 @@
       <!-- Sub 2: 予備調査 -->
       <div class="stage-panel" id="step2-sub-panel-2">
         {% include "partials/preliminary_research_tab.html" %}
+      </div>
+
+      <!-- Sub 3: 本願分析 -->
+      <div class="stage-panel" id="step2-sub-panel-3">
+        {% include "partials/hongan_analysis_tab.html" %}
       </div>
 
     </div>
@@ -1071,10 +1079,11 @@ window.CASE_BOOTSTRAP = {
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>
 <script src="{{ url_for('static', filename='js/preliminary_research.js') }}"></script>
+<script src="{{ url_for('static', filename='js/hongan_analysis.js') }}"></script>
 <script>
 // Step 2 内サブタブ切替 (showStage との競合回避のため独立関数)
 function showStep2Sub(n) {
-  for (let i = 1; i <= 2; i++) {
+  for (let i = 1; i <= 3; i++) {
     const ind = document.getElementById(`step2-sub-ind-${i}`);
     const panel = document.getElementById(`step2-sub-panel-${i}`);
     if (ind) ind.classList.toggle('active', i === n);
