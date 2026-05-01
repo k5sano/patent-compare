@@ -664,15 +664,34 @@ _TABLE_HEADER_RE = re.compile(
     re.IGNORECASE,
 )
 
+_CJK_CHAR_RE = re.compile(r"[一-龯ぁ-んァ-ヶー]")
+
+
+def _is_ocr_garbled_table(text):
+    """画像ベース表を OCR したときに発生する「孤立 1 文字漢字/かなの羅列」を検出。
+
+    本物のテキスト表は単語 (2 文字以上) が並ぶが、画像 OCR 失敗時は単一 CJK 文字が
+    空白区切りで並ぶ。実データで本物 vs 化けを分離するしきい値:
+        単一 CJK 文字 token 率 > 40% → 化け
+    例: '回 責 男 画 画 画 男' → 化け / '成分A 実施例1 実施例2' → 本物
+    """
+    tokens = text.split()
+    if not tokens:
+        return False
+    single_cjk = sum(
+        1 for tok in tokens if len(tok) == 1 and _CJK_CHAR_RE.match(tok)
+    )
+    return single_cjk / len(tokens) > 0.40
+
 
 def detect_tables(paragraphs):
     """段落データから「実際の表」だけを検出する。
 
-    `_looks_like_table` のヒューリスティック (タブ/数値多めの行) だけでは、
-    特許 PDF テキスト抽出時に紛れ込むページ罫線/フッター
-    (例: '10 20 30 40 50 JP 2024-37328 A 2024.3.19') を含む通常段落まで
-    拾ってしまっていた。本物の表は公報上 `【表1】` 等の明示ヘッダーが付くので
-    それを必須条件にして誤検出を抑える。
+    フィルタ条件:
+      1. 50 文字超
+      2. `【表N】` 等の表ヘッダーを含む (誤検出された段落本文を弾く)
+      3. `_looks_like_table` (タブ/数値多めの行) を満たす
+      4. 単一 CJK 文字 token 率 ≤ 40% (画像表 OCR 化けを弾く)
     """
     tables = []
     table_id = 0
@@ -683,6 +702,8 @@ def detect_tables(paragraphs):
         if not _TABLE_HEADER_RE.search(text):
             continue
         if not _looks_like_table(text):
+            continue
+        if _is_ocr_garbled_table(text):
             continue
         table_id += 1
         tables.append({

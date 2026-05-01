@@ -86,6 +86,41 @@ class TestAcceptRealTables:
         assert result[1]["id"] == "表2"
 
 
+class TestRejectOcrGarbledTables:
+    """画像表を OCR したときに発生する「孤立 1 文字 CJK の羅列」を弾く。
+
+    実データ (2024-080911 / 2024-051653 / 2025-47348 など) で検出された
+    OCR 化け表の特徴:
+      - 単一 CJK 文字 token (例: '回 責 男 画 画') が token 全体の 50%超
+      - 一見すると【表N】を含んでいて、_looks_like_table も通ってしまう
+    本物の表は単語 (2 文字以上) が並ぶので、ratio で確実に分離できる。
+    """
+
+    def test_garbled_single_chars_rejected(self):
+        # 表ヘッダーは含むが、中身が 1 文字 CJK の羅列 (実データ 2024-080911 表1 を簡略化)
+        garbled = (
+            "(14) JP 2024-80911 A 2024.6.17 【 表 2 】 "
+            + " ".join(["回", "責", "男", "画", "画", "画", "男", "男"] * 30)
+            + " 10 20 30 40 50"
+        )
+        paras = [{"id": "0089", "page": 13, "section": "実施例", "text": garbled}]
+        assert detect_tables(paras) == [], "OCR 化け表は除外されるべき"
+
+    def test_real_table_with_meaningful_tokens_kept(self):
+        # 意味ある単語 (2+ chars) が並ぶ本物の表 (wa-2024-541157 の表に類似)
+        rows = "\n".join([
+            "成分名\t実施例1\t実施例2\t実施例3\t実施例4",
+            "フェニルベンゾイミダゾール\t10\t20\t30\t40",
+            "メチレンビススルホン酸\t5\t10\t15\t20",
+            "ステアリン酸グリセリル\t100\t100\t100\t100",
+            "比較例の配合データ\t1.0\t2.0\t3.0\t4.0",
+        ])
+        text = f"【表1】\n{rows}"
+        paras = [{"id": "0040", "page": 5, "section": "実施例", "text": text}]
+        result = detect_tables(paras)
+        assert len(result) == 1, "意味あるトークンが並ぶ本物の表は採用されるべき"
+
+
 class TestEdgeCases:
     def test_short_text_rejected(self):
         # 50 字以下は拒否
