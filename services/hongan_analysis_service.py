@@ -346,8 +346,11 @@ def _build_llm_prompt(template: dict, ctx: dict, llm_item_ids: list[str]) -> str
     return (
         f"あなたは特許サーチャーのアシスタントです。以下の本願明細書 ({pn} {title}) を読み、\n"
         f"指定の項目について端的に日本語で回答してください。\n"
-        f"出力は **JSON オブジェクト 1 個のみ** で、各キーが項目 ID、値が回答 (string か array of string) です。\n"
+        f"出力は JSON オブジェクト 1 個のみ で、各キーが項目 ID、値が回答 (string か array of string) です。\n"
         f"前置きや説明は不要、JSON のみを出力してください。\n\n"
+        f"重要: 各回答テキスト内で「技術的に重要なキーワード/差別化点/数値範囲/関係式」は\n"
+        f"   <<HL>>...<</HL>> でハイライトしてください (JSON 内の文字列リテラルとしてそのまま含めること)。\n"
+        f"   1 項目あたり 1〜3 か所が目安。乱用しない。\n\n"
         f"---- 本願の請求項 ----\n{seg_block}\n\n"
         f"---- 明細書本文の抜粋 ----\n{excerpt_block}\n\n"
         f"---- 出力すべき項目 ----\n"
@@ -426,6 +429,71 @@ def _build_skeleton(template: dict, ctx: dict, llm_results: dict) -> dict:
 
 def _output_path(case_id: str) -> Path:
     return get_case_dir(case_id) / "analysis" / "hongan_analysis.json"
+
+
+_ALLOWED_MARKERS = ("<<HL>>", "<</HL>>", "<<UL>>", "<</UL>>")
+
+
+def update_item_value(case_id: str, item_id: str, value):
+    """保存済み hongan_analysis.json の特定 item の value を更新する。
+
+    value は文字列前提 (LLM/manual の編集用)。マーカー <<HL>> <<UL>> は許可、
+    生 HTML タグは混入しない設計だが念のため `<` は <<...>> マーカー以外を除去する。
+    """
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+    if not item_id or not isinstance(item_id, str):
+        return {"error": "item_id が必要です"}, 400
+    if value is not None and not isinstance(value, str):
+        return {"error": "value は文字列のみ対応"}, 400
+
+    # 簡易サニタイズ: 許可マーカー以外で `<` が始まる箇所は &lt; に置換
+    if isinstance(value, str):
+        value = _sanitize_marker_string(value)
+
+    p = _output_path(case_id)
+    if not p.exists():
+        return {"error": "分析結果が存在しません。先に実行してください"}, 404
+    try:
+        with p.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return {"error": f"読み込みエラー: {e}"}, 500
+
+    found = False
+    for sec in data.get("sections") or []:
+        for it in sec.get("items") or []:
+            if str(it.get("id")).strip() == item_id.strip():
+                it["value"] = value
+                found = True
+                break
+        if found:
+            break
+    if not found:
+        return {"error": f"項目 '{item_id}' が見つかりません"}, 404
+
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"success": True, "item_id": item_id, "value": value}, 200
+
+
+def _sanitize_marker_string(s: str) -> str:
+    """許可マーカー (<<HL>>, <</HL>>, <<UL>>, <</UL>>) 以外の `<` を `&lt;` に置換。
+
+    マーカーは一旦 placeholder に退避 → `<` を全置換 → placeholder を戻す。
+    """
+    if not s:
+        return s
+    placeholders = []
+    work = s
+    for i, m in enumerate(_ALLOWED_MARKERS):
+        ph = f"\x00MARK{i}\x00"
+        placeholders.append((ph, m))
+        work = work.replace(m, ph)
+    work = work.replace("<", "&lt;")
+    for ph, m in placeholders:
+        work = work.replace(ph, m)
+    return work
 
 
 def load_existing_analysis(case_id: str):

@@ -1585,6 +1585,16 @@ def hongan_analysis_run(case_id):
     return _svc_response(run_analysis(case_id, version=version, skip_llm=skip_llm))
 
 
+@app.route("/case/<case_id>/hongan-analysis/item", methods=["POST"])
+def hongan_analysis_update_item(case_id):
+    """単一項目の value を更新 (ユーザー編集による下線/ハイライトの反映)"""
+    from services.hongan_analysis_service import update_item_value
+    data = request.get_json() or {}
+    return _svc_response(
+        update_item_value(case_id, data.get("item_id", ""), data.get("value"))
+    )
+
+
 # ===== 予備調査 (Step 2 サブタブ) =====
 
 @app.route("/api/preliminary_research/fields", methods=["GET"])

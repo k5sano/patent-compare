@@ -275,6 +275,42 @@ class TestLoadExisting:
         assert result["data"]["template_id"] == "hongan_v0.1"
 
 
+class TestUpdateItemValue:
+    def test_update_and_persist(self, case_with_data):
+        case_id, case_dir = case_with_data
+        # まず空の分析を保存
+        has.run_analysis(case_id, skip_llm=True)
+        # 1.1 (LLM 項目) を編集
+        result, code = has.update_item_value(case_id, "1.1", "<<HL>>重要なキー<</HL>>を含む発明")
+        assert code == 200
+        assert result["success"] is True
+        # 永続化確認
+        with (case_dir / "analysis" / "hongan_analysis.json").open(encoding="utf-8") as f:
+            saved = json.load(f)
+        item_1_1 = saved["sections"][0]["items"][0]
+        assert item_1_1["id"] == "1.1"
+        assert "<<HL>>" in item_1_1["value"]
+
+    def test_unknown_item(self, case_with_data):
+        case_id, _ = case_with_data
+        has.run_analysis(case_id, skip_llm=True)
+        result, code = has.update_item_value(case_id, "9.9", "x")
+        assert code == 404
+
+    def test_sanitize_strips_html_but_keeps_markers(self, case_with_data):
+        case_id, case_dir = case_with_data
+        has.run_analysis(case_id, skip_llm=True)
+        evil = "<script>alert(1)</script><<UL>>下線<</UL>>"
+        result, code = has.update_item_value(case_id, "1.1", evil)
+        assert code == 200
+        # `<` だけ &lt; にエスケープされる (script タグの開閉が両方無効化される)。
+        # `>` はそのままだが `<` を escape すれば HTML 実行されないので OK。
+        v = result["value"]
+        assert "<script>" not in v
+        assert "&lt;script>" in v
+        assert "<<UL>>下線<</UL>>" in v
+
+
 class TestExtractJson:
     def test_plain_json(self):
         assert has._extract_json_from_response('{"a": 1}') == {"a": 1}

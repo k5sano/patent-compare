@@ -25,6 +25,20 @@ function _hanEsc(s) {
   }[c]));
 }
 
+// マーカー <<HL>>..<</HL>> (LLM 由来の重要箇所) と <<UL>>..<</UL>> (ユーザー下線) を
+// それぞれ <mark> / <u> に変換した HTML を返す。それ以外はエスケープ。
+function _hanMarkupToHtml(s) {
+  if (s == null) return '';
+  let out = _hanEsc(String(s));
+  // エスケープ後なので <<HL>> は &lt;&lt;HL&gt;&gt; になっている
+  out = out.replace(/&lt;&lt;HL&gt;&gt;([\s\S]*?)&lt;&lt;\/HL&gt;&gt;/g,
+    '<mark style="background:#fde68a; color:#451a03; padding:0 2px; border-radius:2px;">$1</mark>');
+  out = out.replace(/&lt;&lt;UL&gt;&gt;([\s\S]*?)&lt;&lt;\/UL&gt;&gt;/g,
+    '<u style="text-decoration: underline; text-decoration-color:#f87171; text-decoration-thickness:2px;">$1</u>');
+  out = out.replace(/\n/g, '<br>');
+  return out;
+}
+
 // 1.3 技術分野を特化フォーマットでコンパクト表示
 function _hanFormatClassification(v) {
   if (!v || typeof v !== 'object') return _hanFormatValue(v);
@@ -72,13 +86,14 @@ function _hanFormatClassification(v) {
 function _hanFormatValue(v, ctxId) {
   if (v == null || v === '') return '<span style="color:#64748b;">(未取得)</span>';
   if (typeof v === 'string') {
-    return _hanEsc(v).replace(/\n/g, '<br>');
+    // <<HL>> / <<UL>> マーカーを HTML に変換
+    return _hanMarkupToHtml(v);
   }
   if (Array.isArray(v)) {
     if (!v.length) return '<span style="color:#64748b;">(空)</span>';
     if (v.every(x => typeof x === 'string')) {
       return v.map(x =>
-        `<span style="display:inline-block; padding:0.15rem 0.55rem; margin:0.1rem 0.2rem 0.1rem 0; background:#1e293b; border:1px solid var(--border); border-radius:4px; font-size:0.8rem;">${_hanEsc(x)}</span>`
+        `<span style="display:inline-block; padding:0.15rem 0.55rem; margin:0.1rem 0.2rem 0.1rem 0; background:#1e293b; border:1px solid var(--border); border-radius:4px; font-size:0.8rem;">${_hanMarkupToHtml(x)}</span>`
       ).join('');
     }
     return '<ul style="margin:0; padding-left:1.2rem;">' +
@@ -102,6 +117,8 @@ function _hanRenderResult(data, summary) {
     wrap.innerHTML = '<p style="color:var(--text2);">データなし</p>';
     return;
   }
+  // 後で編集 UI から参照するため最新データを保持
+  window._hanData = data;
   const blocks = [];
   if (summary) {
     blocks.push(`
@@ -118,14 +135,23 @@ function _hanRenderResult(data, summary) {
         it.type === 'manual' ? '<span style="font-size:0.68rem; padding:0.1rem 0.4rem; background:#3f3f46; color:#d4d4d8; border-radius:3px;">MANUAL</span>' : '';
       const desc = it.description
         ? `<div style="font-size:0.74rem; color:#64748b; margin-bottom:0.25rem;">${_hanEsc(it.description)}</div>` : '';
+      // 文字列値の項目 (LLM, manual) は編集ボタンを出す
+      const editable = (it.type === 'llm' || it.type === 'manual')
+        && (typeof it.value === 'string' || it.value == null);
+      const editBtn = editable
+        ? `<button class="btn btn-outline" style="font-size:0.7rem; padding:0.1rem 0.5rem;"
+                  onclick="hanEditItem('${_hanEsc(it.id)}')" title="編集 (下線追加・テキスト修正)">✏</button>`
+        : '';
       return `
-        <div style="margin-bottom:0.7rem; padding:0.55rem 0.7rem; background:#0f172a; border:1px solid var(--border); border-radius:6px;">
+        <div id="han-item-${_hanEsc(it.id)}" style="margin-bottom:0.7rem; padding:0.55rem 0.7rem; background:#0f172a; border:1px solid var(--border); border-radius:6px;">
           <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.3rem;">
             <strong style="color:#cbd5e1; font-size:0.85rem;">${_hanEsc(it.id)} ${_hanEsc(it.label)}</strong>
             ${typeBadge}
+            <span style="flex:1;"></span>
+            ${editBtn}
           </div>
           ${desc}
-          <div style="font-size:0.85rem; color:#e2e8f0; line-height:1.55;">
+          <div class="han-value" style="font-size:0.85rem; color:#e2e8f0; line-height:1.55;">
             ${_hanFormatValue(it.value, it.id)}
           </div>
         </div>
@@ -196,6 +222,128 @@ async function hanLoadAnalysis() {
     _hanStatus('読み込み完了', 'success');
   } catch (e) {
     _hanStatus('通信エラー: ' + e.message, 'error');
+  }
+}
+
+// ----------------------------------------------------------------
+// 項目編集 (下線追加・テキスト修正)
+// ----------------------------------------------------------------
+// 値を文字列でストレージに残すため、ハイライトはマーカー <<HL>>...<</HL>> /
+// 下線は <<UL>>...<</UL>> で持つ。textarea で生のマーカー入りテキストを
+// 編集してもらい、選択範囲に下線追加ボタンで <<UL>> マーカーを挿入する。
+function _hanFindItem(id) {
+  const data = window._hanData || {};
+  for (const sec of data.sections || []) {
+    for (const it of sec.items || []) {
+      if (it.id === id) return it;
+    }
+  }
+  return null;
+}
+
+function hanEditItem(itemId) {
+  const it = _hanFindItem(itemId);
+  if (!it) return;
+  const wrap = document.getElementById('han-item-' + itemId);
+  if (!wrap) return;
+  const valueDiv = wrap.querySelector('.han-value');
+  if (!valueDiv) return;
+  // 既存編集 UI があれば閉じる
+  if (valueDiv.dataset.editing === '1') {
+    hanCancelEdit(itemId);
+    return;
+  }
+  valueDiv.dataset.editing = '1';
+  valueDiv.dataset.original = it.value == null ? '' : String(it.value);
+  const raw = valueDiv.dataset.original;
+  valueDiv.innerHTML = `
+    <div style="display:flex; gap:0.4rem; margin-bottom:0.3rem; flex-wrap:wrap;">
+      <button class="btn btn-primary" style="font-size:0.75rem; padding:0.15rem 0.6rem;"
+              onclick="hanInsertUnderline('${_hanEsc(itemId)}')" title="選択範囲を下線にする (UL マーカー)">下線</button>
+      <button class="btn btn-outline" style="font-size:0.75rem; padding:0.15rem 0.6rem;"
+              onclick="hanInsertHighlight('${_hanEsc(itemId)}')" title="選択範囲をハイライトにする (HL マーカー)">ハイライト</button>
+      <button class="btn btn-outline" style="font-size:0.75rem; padding:0.15rem 0.6rem;"
+              onclick="hanStripMarkers('${_hanEsc(itemId)}')" title="このセルから全マーカーを除去">マーカー解除</button>
+      <span style="flex:1;"></span>
+      <button class="btn btn-success" style="font-size:0.75rem; padding:0.15rem 0.6rem;"
+              onclick="hanSaveItem('${_hanEsc(itemId)}')">保存</button>
+      <button class="btn btn-outline" style="font-size:0.75rem; padding:0.15rem 0.6rem;"
+              onclick="hanCancelEdit('${_hanEsc(itemId)}')">キャンセル</button>
+    </div>
+    <textarea id="han-edit-ta-${_hanEsc(itemId)}" rows="5"
+      style="width:100%; padding:0.4rem 0.55rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-family:ui-monospace,monospace; font-size:0.82rem; line-height:1.5;">${_hanEsc(raw)}</textarea>
+    <div style="font-size:0.72rem; color:#64748b; margin-top:0.25rem;">
+      マーカー記法: &lt;&lt;HL&gt;&gt;...&lt;&lt;/HL&gt;&gt; (黄色ハイライト)、&lt;&lt;UL&gt;&gt;...&lt;&lt;/UL&gt;&gt; (赤下線)
+    </div>
+  `;
+}
+
+function _hanWrapSelection(itemId, openTag, closeTag) {
+  const ta = document.getElementById('han-edit-ta-' + itemId);
+  if (!ta) return;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  if (start === end) {
+    alert('テキストを選択してから押してください');
+    return;
+  }
+  const before = ta.value.slice(0, start);
+  const sel = ta.value.slice(start, end);
+  const after = ta.value.slice(end);
+  ta.value = before + openTag + sel + closeTag + after;
+  ta.focus();
+  ta.selectionStart = before.length + openTag.length;
+  ta.selectionEnd = before.length + openTag.length + sel.length;
+}
+
+function hanInsertUnderline(itemId) { _hanWrapSelection(itemId, '<<UL>>', '<</UL>>'); }
+function hanInsertHighlight(itemId) { _hanWrapSelection(itemId, '<<HL>>', '<</HL>>'); }
+
+function hanStripMarkers(itemId) {
+  const ta = document.getElementById('han-edit-ta-' + itemId);
+  if (!ta) return;
+  ta.value = ta.value
+    .replace(/<<HL>>/g, '').replace(/<<\/HL>>/g, '')
+    .replace(/<<UL>>/g, '').replace(/<<\/UL>>/g, '');
+}
+
+function hanCancelEdit(itemId) {
+  const it = _hanFindItem(itemId);
+  if (!it) return;
+  const wrap = document.getElementById('han-item-' + itemId);
+  const valueDiv = wrap && wrap.querySelector('.han-value');
+  if (!valueDiv) return;
+  valueDiv.dataset.editing = '';
+  valueDiv.innerHTML = _hanFormatValue(it.value, it.id);
+}
+
+async function hanSaveItem(itemId) {
+  const ta = document.getElementById('han-edit-ta-' + itemId);
+  if (!ta) return;
+  const newVal = ta.value;
+  try {
+    const resp = await fetch(`/case/${_hanCaseId()}/hongan-analysis/item`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({item_id: itemId, value: newVal}),
+    });
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      alert(d.error || `エラー (HTTP ${resp.status})`);
+      return;
+    }
+    // 内部データを更新して再描画
+    const it = _hanFindItem(itemId);
+    if (it) it.value = newVal;
+    const wrap = document.getElementById('han-item-' + itemId);
+    const valueDiv = wrap && wrap.querySelector('.han-value');
+    if (valueDiv) {
+      valueDiv.dataset.editing = '';
+      valueDiv.innerHTML = _hanFormatValue(newVal, itemId);
+    }
+    _hanStatus(`項目 ${itemId} を保存しました`, 'success');
+  } catch (e) {
+    alert('通信エラー: ' + e.message);
   }
 }
 
