@@ -2,35 +2,41 @@ field: cosmetics
 display_name: 化粧品
 description: 化粧品原料・成分の予備調査用情報源
 sources:
-  - id: cosmetic_info_jp
-    name: Cosmetic-Info.jp
-    description: 市販化粧品の全成分リスト検索。成分名から配合商品を逆引きできる
-    search_url_template: "https://cosmetic-info.jp/prod/result.php?keyword={query}&search_type=1"
-    query_param: keyword
+  - id: cosmetic_info_mate
+    name: Cosmetic-Info.jp 原料検索
+    description: 「化粧品表示名称」欄に成分名を入力 → 原料情報・配合目的を確認 (フォーム手入力)
+    search_url_template: "https://www.cosmetic-info.jp/mate/index.php"
     encoding: utf-8
     priority: 1
-    notes: 表示名称で検索。AND/OR 指定可。結果は商品リスト→商品詳細で全成分表示
+    notes: クエリパラメータ非対応のフォーム検索。「開く」後にユーザーが手で入力する
+  - id: cosmetic_info_prod
+    name: Cosmetic-Info.jp 配合製品検索
+    description: 「表示名称」欄に成分名を入力＋検索条件を「を含む」に変更 → 配合された商品リスト (フォーム手入力)
+    search_url_template: "https://www.cosmetic-info.jp/prod/index.php"
+    encoding: utf-8
+    priority: 2
+    notes: クエリパラメータ非対応。タブを「を含む」に切替えるとヒットしやすい
   - id: cosmetic_ingredients_online
     name: 化粧品成分オンライン
     description: 化粧品成分の機能・配合目的・関連成分情報
     search_url_template: "https://cosmetic-ingredients.org/?s={query}"
     query_param: s
     encoding: utf-8
-    priority: 2
+    priority: 3
   - id: pubchem
     name: PubChem
     description: 化合物の物性・構造情報
     search_url_template: "https://pubchem.ncbi.nlm.nih.gov/#query={query}"
     query_param: query
     encoding: utf-8
-    priority: 3
+    priority: 4
   - id: wikipedia_ja
     name: Wikipedia（日本語）
     description: 一般的な情報
     search_url_template: "https://ja.wikipedia.org/w/index.php?search={query}"
     query_param: search
     encoding: utf-8
-    priority: 4
+    priority: 5
 synonym_expansion:
   enabled: true
   prompt_hint: |

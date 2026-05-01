@@ -63,36 +63,52 @@ def load_recipe(field: str) -> dict:
 def generate_search_urls(recipe: dict, queries: Iterable[str]) -> list[dict]:
     """レシピの各 source について、各クエリの検索 URL を生成。
 
-    並び順: priority 昇順 → クエリ入力順 → source 入力順 (安定ソート)。
-    UI 側で「情報源ごと×クエリごと」のテーブルとして表示できる形に整える。
+    挙動:
+      - search_url_template に `{query}` を含む source: 各クエリごとに 1 行ずつ生成
+      - `{query}` を含まない source: クエリに依存しない「フォームページ直アクセス」用と
+        みなし、source あたり 1 行だけ生成 (query 欄は空文字で返す)。
+        例: Cosmetic-Info.jp の /mate/index.php や /prod/index.php は
+        フォーム手入力なので URL に成分名を埋め込めない。
+
+    並び順: priority 昇順 → (クエリ入力順) → source 入力順 (安定ソート)。
     """
-    queries = [q for q in (queries or []) if q and q.strip()]
+    queries = [q.strip() for q in (queries or []) if q and q.strip()]
     if not queries:
         return []
     sources = recipe.get("sources") or []
-    results = []
-    # クエリ入力順を保つため index を付与
-    for q_idx, query in enumerate(queries):
-        q = query.strip()
-        for s_idx, source in enumerate(sources):
-            tmpl = source.get("search_url_template") or ""
-            if "{query}" not in tmpl:
-                continue
-            encoded = quote(q, encoding=source.get("encoding") or "utf-8")
-            url = tmpl.replace("{query}", encoded)
+    results: list[dict] = []
+    for s_idx, source in enumerate(sources):
+        tmpl = source.get("search_url_template") or ""
+        if not tmpl:
+            continue
+        common = {
+            "source_id": source.get("id", f"source_{s_idx}"),
+            "source_name": source.get("name", ""),
+            "description": source.get("description", ""),
+            "priority": source.get("priority", 999),
+            "_s_idx": s_idx,
+        }
+        if "{query}" in tmpl:
+            for q_idx, q in enumerate(queries):
+                encoded = quote(q, encoding=source.get("encoding") or "utf-8")
+                results.append({
+                    **common,
+                    "query": q,
+                    "url": tmpl.replace("{query}", encoded),
+                    "query_required": True,
+                    "_q_idx": q_idx,
+                })
+        else:
+            # フォームページ直アクセス: 1 source につき 1 行
             results.append({
-                "source_id": source.get("id", f"source_{s_idx}"),
-                "source_name": source.get("name", ""),
-                "description": source.get("description", ""),
-                "query": q,
-                "url": url,
-                "priority": source.get("priority", 999),
-                "_q_idx": q_idx,
-                "_s_idx": s_idx,
+                **common,
+                "query": "",
+                "url": tmpl,
+                "query_required": False,
+                "_q_idx": -1,  # クエリ前置きで先に並ぶ
             })
     # priority → クエリ順 → source 順
     results.sort(key=lambda r: (r["priority"], r["_q_idx"], r["_s_idx"]))
-    # 内部用 index を落とす
     for r in results:
         r.pop("_q_idx", None)
         r.pop("_s_idx", None)

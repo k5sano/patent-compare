@@ -29,18 +29,25 @@ def isolated_root(tmp_path, monkeypatch):
         "display_name": "化粧品",
         "sources": [
             {
-                "id": "cosmetic_info_jp",
-                "name": "Cosmetic-Info.jp",
-                "search_url_template": "https://cosmetic-info.jp/prod/result.php?keyword={query}&search_type=1",
+                "id": "cosmetic_info_mate",
+                "name": "Cosmetic-Info.jp 原料検索",
+                "search_url_template": "https://www.cosmetic-info.jp/mate/index.php",
                 "encoding": "utf-8",
                 "priority": 1,
+            },
+            {
+                "id": "cosmetic_info_prod",
+                "name": "Cosmetic-Info.jp 配合製品検索",
+                "search_url_template": "https://www.cosmetic-info.jp/prod/index.php",
+                "encoding": "utf-8",
+                "priority": 2,
             },
             {
                 "id": "cosmetic_ingredients_online",
                 "name": "化粧品成分オンライン",
                 "search_url_template": "https://cosmetic-ingredients.org/?s={query}",
                 "encoding": "utf-8",
-                "priority": 2,
+                "priority": 3,
             },
         ],
         "synonym_expansion": {"enabled": True, "prompt_hint": "化粧品成分の表記揺れ"},
@@ -84,7 +91,10 @@ class TestLoadRecipe:
     def test_loads_known_field(self, isolated_root):
         r = prs.load_recipe("cosmetics")
         assert r["field"] == "cosmetics"
-        assert any(s["id"] == "cosmetic_ingredients_online" for s in r["sources"])
+        ids = {s["id"] for s in r["sources"]}
+        assert "cosmetic_ingredients_online" in ids
+        assert "cosmetic_info_mate" in ids
+        assert "cosmetic_info_prod" in ids
 
     def test_unknown_field_falls_back_to_generic(self, isolated_root):
         r = prs.load_recipe("layered_materials")
@@ -103,23 +113,36 @@ class TestGenerateSearchUrls:
     def test_single_query(self, isolated_root):
         recipe = prs.load_recipe("cosmetics")
         urls = prs.generate_search_urls(recipe, ["サッカリン"])
-        assert len(urls) == 2  # 2 sources × 1 query
+        # 2 つの cosmetic_info_* (クエリ非対応) × 1 + 1 つの cosmetic_ingredients_online × 1 = 3 行
+        assert len(urls) == 3
         # 並びは priority 順
-        assert urls[0]["source_id"] == "cosmetic_info_jp"
-        assert urls[1]["source_id"] == "cosmetic_ingredients_online"
+        assert urls[0]["source_id"] == "cosmetic_info_mate"
+        assert urls[0]["query_required"] is False
+        assert urls[0]["query"] == ""
+        assert urls[1]["source_id"] == "cosmetic_info_prod"
+        assert urls[1]["query_required"] is False
+        assert urls[2]["source_id"] == "cosmetic_ingredients_online"
+        assert urls[2]["query_required"] is True
         # URL に encoded 日本語が入っている
-        assert "%E3%82%B5" in urls[0]["url"]  # サ の UTF-8 先頭
-        assert urls[1]["url"].startswith("https://cosmetic-ingredients.org/?s=")
+        assert "%E3%82%B5" in urls[2]["url"]  # サ の UTF-8 先頭
+        assert urls[2]["url"].startswith("https://cosmetic-ingredients.org/?s=")
 
     def test_multiple_queries_keeps_order(self, isolated_root):
         recipe = prs.load_recipe("cosmetics")
         urls = prs.generate_search_urls(recipe, ["A", "B"])
+        # クエリ非対応 2 sources × 1 行 + クエリ対応 1 source × 2 クエリ = 4 行
         assert len(urls) == 4
-        # priority 1 (cosmetic_info_jp) → A, B、その後 priority 2 → A, B
-        assert urls[0]["query"] == "A" and urls[0]["source_id"] == "cosmetic_info_jp"
-        assert urls[1]["query"] == "B" and urls[1]["source_id"] == "cosmetic_info_jp"
-        assert urls[2]["query"] == "A" and urls[2]["source_id"] == "cosmetic_ingredients_online"
-        assert urls[3]["query"] == "B" and urls[3]["source_id"] == "cosmetic_ingredients_online"
+        # priority 1 (cosmetic_info_mate) — クエリ非対応なので 1 行
+        assert urls[0]["source_id"] == "cosmetic_info_mate"
+        assert urls[0]["query_required"] is False
+        # priority 2 (cosmetic_info_prod) — 同じく 1 行
+        assert urls[1]["source_id"] == "cosmetic_info_prod"
+        assert urls[1]["query_required"] is False
+        # priority 3 (cosmetic_ingredients_online) — A, B の順で 2 行
+        assert urls[2]["source_id"] == "cosmetic_ingredients_online"
+        assert urls[2]["query"] == "A"
+        assert urls[3]["source_id"] == "cosmetic_ingredients_online"
+        assert urls[3]["query"] == "B"
 
     def test_japanese_url_encoding(self, isolated_root):
         recipe = prs.load_recipe("generic")
@@ -145,6 +168,30 @@ class TestGenerateSearchUrls:
         urls = prs.generate_search_urls(recipe, ["test"])
         assert len(urls) == 1
         assert urls[0]["source_id"] == "ok"
+
+    def test_form_only_source_emits_one_row_regardless_of_queries(self, isolated_root):
+        """`{query}` 非対応の source は複数クエリ指定でも 1 行のみ生成する"""
+        recipe = {
+            "sources": [
+                {"id": "form_only", "name": "form-only site", "priority": 1,
+                 "search_url_template": "https://example.com/search-form"},
+                {"id": "with_query", "name": "query site", "priority": 2,
+                 "search_url_template": "https://example.com/?q={query}"},
+            ]
+        }
+        urls = prs.generate_search_urls(recipe, ["A", "B", "C"])
+        # form_only: 1 行 / with_query: 3 行 = 計 4 行
+        assert len(urls) == 4
+        form_rows = [u for u in urls if u["source_id"] == "form_only"]
+        assert len(form_rows) == 1
+        assert form_rows[0]["query"] == ""
+        assert form_rows[0]["query_required"] is False
+        assert form_rows[0]["url"] == "https://example.com/search-form"
+
+        query_rows = [u for u in urls if u["source_id"] == "with_query"]
+        assert len(query_rows) == 3
+        assert all(r["query_required"] is True for r in query_rows)
+        assert [r["query"] for r in query_rows] == ["A", "B", "C"]
 
 
 class TestSaveNote:

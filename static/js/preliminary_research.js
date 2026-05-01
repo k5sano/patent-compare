@@ -178,9 +178,14 @@ function _prelimRenderUrls() {
   }
   const blocks = [];
   for (const [sid, group] of bySource) {
-    const rows = group.items.map(u => `
+    const rows = group.items.map(u => {
+      // クエリ非対応 (フォーム手入力) はラベルを「(直接アクセス・手入力)」に
+      const queryLabel = u.query_required === false
+        ? '<span style="color:#94a3b8; font-style:italic;">(ページを開いて手入力)</span>'
+        : _prelimEsc(u.query);
+      return `
       <div style="display:flex; gap:0.5rem; align-items:center; padding:0.3rem 0.5rem; background:#0f172a; border-radius:6px;">
-        <span style="flex:1; font-size:0.85rem; color:#e2e8f0;">${_prelimEsc(u.query)}</span>
+        <span style="flex:1; font-size:0.85rem; color:#e2e8f0;">${queryLabel}</span>
         <a href="${_prelimEsc(u.url)}" target="_blank" rel="noopener noreferrer"
            onclick="prelimMarkOpened('${_prelimEsc(u.url)}')"
            style="font-size:0.75rem; color:#64748b; text-decoration:none;"
@@ -192,8 +197,8 @@ function _prelimRenderUrls() {
                 onclick="prelimOpenUrl('${_prelimEsc(u.url)}')">
           開く
         </button>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
     blocks.push(`
       <div style="margin-bottom:0.6rem;">
         <div style="font-weight:600; font-size:0.88rem; margin-bottom:0.3rem;">${_prelimEsc(group.name)}
