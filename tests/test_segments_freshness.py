@@ -80,8 +80,22 @@ class TestMatched:
         assert out["response_count"] == 1
         assert out["missing_in_responses"] == []
         assert out["orphans_in_responses"] == {}
+        assert out["citation_ids_with_responses"] == ["DOC1"]
         # mtime は同時生成 ≈ 同じ → stale_by_mtime False
         assert out["needs_recompare"] is False
+
+    def test_citation_ids_sorted_for_multiple_docs(self, case_with_segments):
+        """自動再対比のターゲットになる ID 群を sorted で返す (UI 表示順安定化)"""
+        case_id, case_dir = case_with_segments
+        _make_response(case_dir, "DOC2", ["1A"])
+        _make_response(case_dir, "DOC1", ["1B"])
+        _make_response(case_dir, "DOC3", ["1C"])
+        out, _ = check_segments_freshness(case_id)
+        assert out["citation_ids_with_responses"] == ["DOC1", "DOC2", "DOC3"]
+        # _ アンダースコア始まりは除外
+        (case_dir / "responses" / "_last_raw_response.txt").write_text("x")
+        out2, _ = check_segments_freshness(case_id)
+        assert out2["citation_ids_with_responses"] == ["DOC1", "DOC2", "DOC3"]
 
     def test_underscore_files_excluded(self, case_with_segments):
         """_raw_*.txt や _last_raw_response.txt 等の作業ファイルはカウントしない"""

@@ -191,6 +191,7 @@ def check_segments_freshness(case_id):
         "current_segment_count": 0,
         "missing_in_responses": [],
         "orphans_in_responses": {},
+        "citation_ids_with_responses": [],  # 「前回選択分」の自動再対比に使う
         "needs_recompare": False,
     }
 
@@ -216,6 +217,7 @@ def check_segments_freshness(case_id):
 
     out["has_responses"] = True
     out["response_count"] = len(resp_files)
+    out["citation_ids_with_responses"] = sorted(p.stem for p in resp_files)
 
     mtimes = [p.stat().st_mtime for p in resp_files]
     out["oldest_response_mtime"] = min(mtimes)

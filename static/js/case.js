@@ -996,24 +996,32 @@ function delSeg(btn) {
   renumberSegIds(block);
 }
 
-// ユーザーがこのページで一度「分節を保存」の確認に OK したら、同セッション中は再確認しない
+// 「保存 → 自動再対比」確認の同セッション内 ack
 window._segmentsSaveWarnAcked = window._segmentsSaveWarnAcked || false;
+// 自動再対比を「やる」「やらない」のセッション内記憶
+window._segmentsAutoRecompareAcked = window._segmentsAutoRecompareAcked || null; // null | true | false
 
 async function saveSegmentsFromEditor() {
-  // 対比結果が既にある場合は警告 (silent stale 防止)
+  // 対比結果が既にある場合は警告 + 自動再対比の意思確認 (silent stale 防止)
   const fresh = (window.CASE_BOOTSTRAP || {}).freshness || {};
-  if (fresh.has_responses && !window._segmentsSaveWarnAcked) {
-    const n = fresh.response_count || 0;
-    const ok = confirm(
-      `この案件には既に ${n} 件の対比結果 (responses/*.json) があります。\n\n` +
-      `分節を変更すると、対比結果に古い分節 ID が残り、Excel 出力で\n` +
-      `「-」(判定なし) が並んだり、孤立した判定データが無視されたりします。\n\n` +
-      `Step 5 で再対比をかけ直すことを強くおすすめします。\n` +
-      `(本セッション中はこの確認を再表示しません)\n\n` +
-      `分節を保存して続けますか?`
-    );
-    if (!ok) return false;
-    window._segmentsSaveWarnAcked = true;
+  const targetIds = (fresh.citation_ids_with_responses || []).slice();
+  let shouldRecompare = false;
+  if (fresh.has_responses && targetIds.length) {
+    if (!window._segmentsSaveWarnAcked) {
+      const n = fresh.response_count || 0;
+      const ok = confirm(
+        `この案件には既に ${n} 件の対比結果 (responses/*.json) があります。\n\n` +
+        `分節を変更すると、対比結果に古い分節 ID が残り、Excel 出力で\n` +
+        `「-」(判定なし) が並んだり、孤立した判定データが無視されたりします。\n\n` +
+        `保存後、その ${n} 件で自動的に再対比を実行します (Claude 5〜10 分)。\n` +
+        `[OK] = 保存 + 自動再対比 を実行 / [キャンセル] = 何もしない\n\n` +
+        `(本セッション中はこの確認を再表示しません)`
+      );
+      if (!ok) return false;
+      window._segmentsSaveWarnAcked = true;
+      window._segmentsAutoRecompareAcked = true;
+    }
+    shouldRecompare = window._segmentsAutoRecompareAcked === true;
   }
 
   const blocks = document.querySelectorAll('.seg-claim-block');
@@ -1047,10 +1055,78 @@ async function saveSegmentsFromEditor() {
     msg.textContent = '保存しました';
     msg.style.display = 'block';
     setTimeout(() => msg.style.display = 'none', 2000);
-    return true;
   } catch(e) {
     alert('保存エラー: ' + e.message);
     return false;
+  }
+  // 保存成功 → 自動再対比 (ユーザーが ack 済みの場合のみ)
+  if (shouldRecompare) {
+    await _runAutoRecompare(targetIds);
+  }
+  return true;
+}
+
+// ----------------------------------------------------------------
+// 分節保存後の「前回選択分での自動再対比」
+// ----------------------------------------------------------------
+function _showRecompareOverlay(text) {
+  let ov = document.getElementById('auto-recompare-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'auto-recompare-overlay';
+    ov.style.cssText = `
+      position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.7);
+      display:flex; align-items:center; justify-content:center;
+    `;
+    ov.innerHTML = `
+      <div style="background:#0f172a; border:1px solid var(--border); border-radius:10px;
+                  padding:1.4rem 1.8rem; min-width:360px; max-width:80vw; text-align:center;
+                  box-shadow:0 20px 60px rgba(0,0,0,0.7);">
+        <div style="font-size:2rem; margin-bottom:0.6rem;">⏳</div>
+        <div id="auto-recompare-text" style="color:#e2e8f0; font-size:0.95rem; line-height:1.5;"></div>
+        <div style="margin-top:0.7rem; color:var(--text2); font-size:0.78rem;">
+          完了まで 5〜10 分かかります。タブを閉じないでください。
+        </div>
+      </div>
+    `;
+    document.body.appendChild(ov);
+  }
+  document.getElementById('auto-recompare-text').textContent = text;
+  ov.style.display = 'flex';
+}
+function _hideRecompareOverlay() {
+  const ov = document.getElementById('auto-recompare-overlay');
+  if (ov) ov.style.display = 'none';
+}
+
+async function _runAutoRecompare(citationIds) {
+  if (!citationIds || !citationIds.length) return;
+  _showRecompareOverlay(
+    `分節保存完了。前回選択の ${citationIds.length} 件で自動再対比を実行中...`
+  );
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ citation_ids: citationIds }),
+    });
+    const data = await resp.json();
+    _hideRecompareOverlay();
+    if (!resp.ok || data.error) {
+      alert('自動再対比でエラー: ' + (data.error || `HTTP ${resp.status}`));
+      return;
+    }
+    const docs = (data.saved_docs || []).join(', ');
+    alert(
+      `✅ 自動再対比 完了 (${data.num_docs || citationIds.length} 件)\n` +
+      (docs ? `保存先: ${docs}\n` : '') +
+      `ページを再読み込みして整合性バナーが消えることを確認してください。`
+    );
+    // freshness を反映するためページリロード
+    location.reload();
+  } catch (e) {
+    _hideRecompareOverlay();
+    alert('自動再対比 通信エラー: ' + e.message);
   }
 }
 
