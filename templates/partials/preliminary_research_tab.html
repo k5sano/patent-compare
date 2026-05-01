@@ -1,0 +1,81 @@
+{# 予備調査サブタブ (Step 2 内)。
+   親テンプレート (case.html) で `case_id` `meta` `prelim_fields` `prelim_default_field` を渡す。
+#}
+<div id="prelim-root" data-case-id="{{ case_id }}"
+     data-default-field="{{ prelim_default_field or 'cosmetics' }}">
+
+  <p style="color:var(--text2); font-size:0.85rem; margin-bottom:0.8rem;">
+    分野別の情報源テンプレートに沿って、特徴成分や技術用語を Web で予備調査します。
+    成分名を入力 → 表記揺れを LLM で展開 → 採用したクエリで各情報源の検索 URL を生成 →
+    ワンクリックでブラウザを開きます。メモは
+    <code>cases/{{ case_id }}/analysis/hongan_understanding.md</code> に追記されます。
+  </p>
+
+  <!-- 分野選択 + 用語入力 -->
+  <div style="display:flex; gap:0.6rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:0.8rem;">
+    <div>
+      <label style="display:block; font-size:0.78rem; color:var(--text2); margin-bottom:0.2rem;">分野</label>
+      <select id="prelim-field" style="padding:0.4rem 0.6rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:6px;">
+        {% for f in prelim_fields %}
+          <option value="{{ f }}" {% if f == (prelim_default_field or 'cosmetics') %}selected{% endif %}>{{ f }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1; min-width:240px;">
+      <label style="display:block; font-size:0.78rem; color:var(--text2); margin-bottom:0.2rem;">調査対象の成分名・用語</label>
+      <input type="text" id="prelim-term"
+             placeholder="例: サッカリン / アスコルビン酸 / カプリル酸グリセリル"
+             style="width:100%; padding:0.4rem 0.6rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:6px;"
+             onkeydown="if(event.key==='Enter'){event.preventDefault(); prelimExpandSynonyms();}">
+    </div>
+    <button class="btn btn-primary" onclick="prelimExpandSynonyms()"
+            title="LLM で表記揺れ・別名・英訳を列挙します">
+      🔍 表記揺れを展開
+    </button>
+  </div>
+  <div id="prelim-expand-msg" style="display:none; margin-bottom:0.6rem; padding:0.4rem 0.7rem; border-radius:6px; font-size:0.8rem;"></div>
+
+  <!-- 表記揺れ候補 (チェックボックスで選別) -->
+  <div id="prelim-candidates-block" style="display:none; margin-bottom:0.8rem; padding:0.8rem; background:var(--surface2); border-radius:8px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+      <strong style="font-size:0.9rem;">表記揺れ候補 (採用するもののチェックを入れる)</strong>
+      <div style="display:flex; gap:0.4rem;">
+        <button class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                onclick="prelimToggleAll(true)">全選択</button>
+        <button class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                onclick="prelimToggleAll(false)">全解除</button>
+        <button class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                onclick="prelimAddManualCandidate()">+ 候補追加</button>
+      </div>
+    </div>
+    <div id="prelim-candidates" style="display:flex; flex-wrap:wrap; gap:0.4rem;"></div>
+    <div style="margin-top:0.7rem;">
+      <button class="btn btn-success" onclick="prelimGenerateUrls()">
+        🔗 検索 URL を生成
+      </button>
+    </div>
+  </div>
+
+  <!-- 生成された URL 一覧 -->
+  <div id="prelim-urls-block" style="display:none; margin-bottom:0.8rem;">
+    <strong style="font-size:0.9rem; display:block; margin-bottom:0.4rem;">検索 URL 一覧</strong>
+    <div id="prelim-urls" style="display:flex; flex-direction:column; gap:0.3rem;"></div>
+  </div>
+
+  <!-- メモ入力 + 保存 -->
+  <div style="margin-top:1rem; padding-top:0.8rem; border-top:1px dashed var(--border);">
+    <label style="display:block; font-size:0.85rem; margin-bottom:0.3rem;">
+      <strong>予備調査メモ</strong>
+      <span style="color:var(--text2); font-size:0.78rem; margin-left:0.5rem;">
+        分かったこと・関連商品・後段の検索式に活かしたい知見を Markdown でメモ
+      </span>
+    </label>
+    <textarea id="prelim-note" rows="6"
+              placeholder="例: サッカリンは甘味料用途。化粧品では他の甘味料(ステビアなど)と併用される例あり。原料.com で配合目的=甘味剤として確認。"
+              style="width:100%; padding:0.5rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:6px; font-family:ui-monospace,monospace; font-size:0.85rem;"></textarea>
+    <div style="display:flex; gap:0.5rem; align-items:center; margin-top:0.5rem;">
+      <button class="btn btn-success" onclick="prelimSaveNote()">💾 メモを保存</button>
+      <span id="prelim-save-msg" style="color:var(--text2); font-size:0.82rem;"></span>
+    </div>
+  </div>
+</div>

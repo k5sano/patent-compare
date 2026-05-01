@@ -157,11 +157,38 @@ def case_detail(case_id):
 
     excel_files = list((case_dir / "output").glob("*.xlsx")) if (case_dir / "output").exists() else []
 
+    # 予備調査タブ用 (Step 2 サブタブ): 利用可能分野リストとデフォルト分野
+    from services.preliminary_research_service import (
+        list_available_fields as _prelim_fields,
+    )
+    prelim_fields = _prelim_fields() or ["generic"]
+    prelim_default_field = (
+        meta.get("field") if meta.get("field") in prelim_fields else None
+    ) or _load_prelim_default() or (
+        "cosmetics" if "cosmetics" in prelim_fields else prelim_fields[0]
+    )
+
     return render_template("case.html",
                            meta=meta, hongan=hongan, segments=segments,
                            keywords=keywords, citations=citations,
                            related_paragraphs=related_paragraphs,
-                           excel_files=excel_files, case_id=case_id)
+                           excel_files=excel_files, case_id=case_id,
+                           prelim_fields=prelim_fields,
+                           prelim_default_field=prelim_default_field)
+
+
+def _load_prelim_default():
+    """config.yaml の preliminary_research.default_field を読む (キャッシュなし、軽量なので毎回 OK)"""
+    try:
+        import yaml as _yaml
+        cfg_path = PROJECT_ROOT / "config.yaml"
+        if not cfg_path.exists():
+            return None
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = _yaml.safe_load(f) or {}
+        return (cfg.get("preliminary_research") or {}).get("default_field")
+    except Exception:
+        return None
 
 
 @app.route("/case/<case_id>/meta", methods=["POST"])
@@ -1523,6 +1550,73 @@ def search_run_snippets(case_id):
     """検索式エディタ用のキーワード/FI/Fterm 挿入候補を返す。"""
     from services.search_run_service import get_keyword_snippets
     return jsonify(get_keyword_snippets(case_id))
+
+
+# ===== 予備調査 (Step 2 サブタブ) =====
+
+@app.route("/api/preliminary_research/fields", methods=["GET"])
+def prelim_list_fields():
+    """利用可能な分野レシピのスラッグ一覧"""
+    from services.preliminary_research_service import list_available_fields
+    return jsonify({"fields": list_available_fields()})
+
+
+@app.route("/api/preliminary_research/expand_synonyms", methods=["POST"])
+def prelim_expand_synonyms():
+    """成分名/技術用語の表記揺れを LLM で展開して候補リストを返す"""
+    from services.preliminary_research_service import load_recipe
+    from modules.synonym_expander import expand_synonyms
+
+    data = request.get_json() or {}
+    term = (data.get("term") or "").strip()
+    field = data.get("field") or "generic"
+    if not term:
+        return jsonify({"error": "term は必須です"}), 400
+
+    recipe = load_recipe(field)
+    syn_cfg = recipe.get("synonym_expansion") or {}
+    if not syn_cfg.get("enabled"):
+        return jsonify({"synonyms": [term]})
+
+    synonyms = expand_synonyms(term, syn_cfg.get("prompt_hint"))
+    return jsonify({"synonyms": synonyms})
+
+
+@app.route("/api/preliminary_research/generate_urls", methods=["POST"])
+def prelim_generate_urls():
+    """採用クエリと分野から検索 URL を生成"""
+    from services.preliminary_research_service import (
+        load_recipe, generate_search_urls,
+    )
+    data = request.get_json() or {}
+    queries = data.get("queries") or []
+    field = data.get("field") or "generic"
+    if not isinstance(queries, list) or not queries:
+        return jsonify({"error": "queries (1 件以上) を指定してください"}), 400
+
+    recipe = load_recipe(field)
+    urls = generate_search_urls(recipe, queries)
+    return jsonify({"urls": urls, "field": recipe.get("field", field)})
+
+
+@app.route("/api/preliminary_research/save_note", methods=["POST"])
+def prelim_save_note():
+    """予備調査メモを cases/<case_id>/analysis/hongan_understanding.md に追記"""
+    from services.preliminary_research_service import save_note
+    data = request.get_json() or {}
+    case_id = data.get("case_id")
+    if not case_id:
+        return jsonify({"error": "case_id は必須です"}), 400
+    result = save_note(
+        case_id=case_id,
+        component=data.get("component", ""),
+        note=data.get("note", ""),
+        urls_opened=data.get("urls_opened") or [],
+        queries=data.get("queries") or [],
+        field=data.get("field"),
+    )
+    status = result.pop("_status", 200) if isinstance(result, dict) else 200
+    return jsonify(result), status
 
 
 # ===== オートモード =====

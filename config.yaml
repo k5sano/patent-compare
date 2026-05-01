@@ -40,6 +40,11 @@ prompt:
     - 背景技術
     - 技術分野
 
+# 予備調査 (Step 2 サブタブ) 設定
+preliminary_research:
+  default_field: cosmetics
+  recipe_dir: templates/preliminary_research
+
 # Excel出力設定
 excel:
   max_citation_columns: 10

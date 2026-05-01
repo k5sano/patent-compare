@@ -136,10 +136,23 @@
     </div>
   </div>
 
-  <!-- ===== Step 2: 分節 ===== -->
+  <!-- ===== Step 2: 分節・本願理解 ===== -->
   <div class="panel" id="panel-1">
     <div class="card">
-      <h2>Step 2: 請求項の分節</h2>
+      <h2>Step 2: 分節・本願理解</h2>
+
+      <!-- サブタブインジケータ (Step 4 の stage-indicators スタイルを再利用) -->
+      <div class="stage-indicators">
+        <div class="stage-ind active" id="step2-sub-ind-1" onclick="showStep2Sub(1)">
+          <span class="stage-num">SUB 1</span>分節
+        </div>
+        <div class="stage-ind" id="step2-sub-ind-2" onclick="showStep2Sub(2)">
+          <span class="stage-num">SUB 2</span>予備調査
+        </div>
+      </div>
+
+      <!-- Sub 1: 分節 (既存) -->
+      <div class="stage-panel active" id="step2-sub-panel-1">
       <p style="color:var(--text2); font-size:0.85rem; margin-bottom:1rem;">
         自動分節の結果です。テキストを直接クリックして編集できます。行の分割・結合・削除・追加も可能です。
       </p>
@@ -212,6 +225,13 @@
       {% else %}
       <p style="color:var(--text2);">本願PDFを先にアップロードしてください。分節は自動生成されます。</p>
       {% endif %}
+      </div><!-- /step2-sub-panel-1 -->
+
+      <!-- Sub 2: 予備調査 -->
+      <div class="stage-panel" id="step2-sub-panel-2">
+        {% include "partials/preliminary_research_tab.html" %}
+      </div>
+
     </div>
   </div>
 
@@ -1045,5 +1065,17 @@ window.CASE_BOOTSTRAP = {
 };
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>
+<script src="{{ url_for('static', filename='js/preliminary_research.js') }}"></script>
+<script>
+// Step 2 内サブタブ切替 (showStage との競合回避のため独立関数)
+function showStep2Sub(n) {
+  for (let i = 1; i <= 2; i++) {
+    const ind = document.getElementById(`step2-sub-ind-${i}`);
+    const panel = document.getElementById(`step2-sub-panel-${i}`);
+    if (ind) ind.classList.toggle('active', i === n);
+    if (panel) panel.classList.toggle('active', i === n);
+  }
+}
+</script>
 </body>
 </html>

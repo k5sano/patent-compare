@@ -142,7 +142,7 @@ def create_minimal_case(case_id, title="", field="cosmetics"):
     if case_dir.exists():
         return {"error": f"案件 '{case_id}' は既に存在します"}, 409
 
-    for sub in ["input", "citations", "prompts", "responses", "output"]:
+    for sub in ["input", "citations", "prompts", "responses", "output", "analysis"]:
         (case_dir / sub).mkdir(parents=True, exist_ok=True)
 
     meta = {
@@ -302,7 +302,7 @@ def create_case(case_number, year="", month="", field="cosmetics",
     if case_dir.exists():
         return {"error": f"案件 '{case_id}' は既に存在します", "case_id": case_id}
 
-    for sub in ["input", "citations", "prompts", "responses", "output"]:
+    for sub in ["input", "citations", "prompts", "responses", "output", "analysis"]:
         (case_dir / sub).mkdir(parents=True, exist_ok=True)
 
     meta = {

@@ -1,0 +1,25 @@
+field: generic
+display_name: 汎用
+description: 分野不明または汎用の予備調査
+sources:
+  - id: wikipedia_ja
+    name: Wikipedia（日本語）
+    search_url_template: "https://ja.wikipedia.org/w/index.php?search={query}"
+    query_param: search
+    encoding: utf-8
+    priority: 1
+  - id: google
+    name: Google
+    search_url_template: "https://www.google.com/search?q={query}"
+    query_param: q
+    encoding: utf-8
+    priority: 2
+  - id: google_patents
+    name: Google Patents
+    search_url_template: "https://patents.google.com/?q={query}"
+    query_param: q
+    encoding: utf-8
+    priority: 3
+synonym_expansion:
+  enabled: true
+  prompt_hint: 技術用語の別名、略称、英訳を列挙してください
