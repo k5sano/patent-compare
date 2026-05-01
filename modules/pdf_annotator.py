@@ -65,9 +65,10 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
     # 2. 段落横の分節ラベル
     label_count = _draw_segment_labels(doc, response, para_page_map, claims_page)
 
-    # 3. ブックマーク
+    # 3. ブックマーク (set_toc は /XYZ で書くので、後段で /FitH に書き換える)
     toc = _build_toc(response, para_page_map, claims_page)
     doc.set_toc(toc)
+    _convert_outlines_to_fith(doc)
 
     doc.save(str(output_path))
     doc.close()
@@ -277,7 +278,6 @@ def _build_toc(response, para_page_map, claims_page):
                 toc.append([2, label, page])
             emitted = True
         if not emitted:
-            # 引用箇所が特定できなかった場合のフォールバック
             toc.append([2, f"{label_prefix} {judgment} {cited_loc or '(不明)'}", 1])
 
     for comp in response.get("comparisons", []):
@@ -287,3 +287,75 @@ def _build_toc(response, para_page_map, claims_page):
         _emit(f"請求項{sub['claim_number']}", sub["judgment"], sub.get("cited_location", ""))
 
     return toc
+
+
+def _convert_outlines_to_fith(doc, top_offset_from_top=36):
+    """set_toc で生成された /XYZ ベースのブックマーク dest を /FitH 形式に書き換える。
+
+    PDF-XChange Editor 等で /XYZ x y 0 (zoom=0) のブックマークを押してもページ移動が
+    起きない報告があり、原 PDF が使っている /FitH 形式に揃えると動作する。
+    `top_offset_from_top` は画面座標 (top-down) でのオフセット (デフォルト 36)。
+    """
+    # outline ツリーをトラバースして /A /GoTo /D を /FitH に書き換える
+    catalog_outlines_xref = None
+    try:
+        ol = doc.xref_get_key(doc.pdf_catalog(), "Outlines")
+        if ol and ol[0] == "xref":
+            catalog_outlines_xref = int(ol[1].split()[0])
+    except Exception:
+        return 0
+    if not catalog_outlines_xref:
+        return 0
+
+    pages_height_cache = {}
+    def _page_height_for_xref(page_xref):
+        if page_xref in pages_height_cache:
+            return pages_height_cache[page_xref]
+        for i in range(doc.page_count):
+            if doc[i].xref == page_xref:
+                h = doc[i].mediabox.height
+                pages_height_cache[page_xref] = h
+                return h
+        pages_height_cache[page_xref] = None
+        return None
+
+    converted = 0
+    visited = set()
+    stack = [catalog_outlines_xref]
+    while stack:
+        xref = stack.pop()
+        if xref in visited:
+            continue
+        visited.add(xref)
+        try:
+            obj = doc.xref_object(xref)
+        except Exception:
+            continue
+        # 子要素を辿る
+        for key in ("First", "Last", "Next", "Prev"):
+            try:
+                v = doc.xref_get_key(xref, key)
+                if v and v[0] == "xref":
+                    stack.append(int(v[1].split()[0]))
+            except Exception:
+                pass
+        # /A /D を解析して /FitH に書き換え
+        m = re.search(
+            r'/A\s*<<\s*/S\s*/GoTo\s*/D\s*\[\s*(\d+)\s+0\s+R\s*/XYZ\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s*\]\s*>>',
+            obj,
+        )
+        if not m:
+            continue
+        page_xref = int(m.group(1))
+        ph = _page_height_for_xref(page_xref)
+        if ph is None:
+            continue
+        # /FitH の y は元の画面座標 36 を維持 (= PDF 座標で page_height - 36)
+        fith_y = ph - float(top_offset_from_top)
+        new_a = f"<</S/GoTo/D[{page_xref} 0 R/FitH {fith_y:.4f}]>>"
+        try:
+            doc.xref_set_key(xref, "A", new_a)
+            converted += 1
+        except Exception:
+            pass
+    return converted
