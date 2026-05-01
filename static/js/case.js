@@ -1111,25 +1111,6 @@ if (INITIAL_RELATED && Object.keys(INITIAL_RELATED).length > 0) {
 }
 
 // ================================================================
-// 本願 PDF テキストパーサ抽出の表 (hongan.json[tables]) モーダル表示
-// Vision 抽出ではなく、PDF テキスト構造化時に拾った素朴な表データを閲覧する。
-// ================================================================
-function showHonganPdfTables() {
-  const m = document.getElementById('hongan-pdf-tables-modal');
-  if (!m) return;
-  m.style.display = 'block';
-  // 背景クリックで閉じる
-  m.onclick = (e) => { if (e.target === m) m.style.display = 'none'; };
-  // ESC で閉じる (一度だけバインド)
-  if (!m._escBound) {
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && m.style.display !== 'none') m.style.display = 'none';
-    });
-    m._escBound = true;
-  }
-}
-
-// ================================================================
 // 本願 PDF 図表 Vision 抽出
 // ================================================================
 function _appendTableProgress(line) {
