@@ -168,13 +168,20 @@ def case_detail(case_id):
         "cosmetics" if "cosmetics" in prelim_fields else prelim_fields[0]
     )
 
+    # 分節↔対比 整合性 (Step 5/6 のバナー + Step 2 保存時の警告に使う)
+    from services.comparison_service import check_segments_freshness
+    freshness, _ = check_segments_freshness(case_id)
+    if not isinstance(freshness, dict):
+        freshness = {}
+
     return render_template("case.html",
                            meta=meta, hongan=hongan, segments=segments,
                            keywords=keywords, citations=citations,
                            related_paragraphs=related_paragraphs,
                            excel_files=excel_files, case_id=case_id,
                            prelim_fields=prelim_fields,
-                           prelim_default_field=prelim_default_field)
+                           prelim_default_field=prelim_default_field,
+                           freshness=freshness)
 
 
 def _load_prelim_default():
@@ -273,6 +280,13 @@ def save_segments(case_id):
     from services.case_service import save_json_file
     save_json_file(case_id, "segments.json", request.get_json())
     return jsonify({"success": True})
+
+
+@app.route("/case/<case_id>/segments/freshness", methods=["GET"])
+def segments_freshness(case_id):
+    """現在の segments.json と responses/*.json の整合性チェック (silent stale 検出)"""
+    from services.comparison_service import check_segments_freshness
+    return _svc_response(check_segments_freshness(case_id))
 
 
 # ===== キーワード =====

@@ -151,6 +151,103 @@ def generate_prompt_single(case_id, citation_id):
     return {"prompt": prompt_text, "char_count": len(prompt_text)}, 200
 
 
+def check_segments_freshness(case_id):
+    """現在の segments.json と responses/*.json の整合性を点検する。
+
+    分節を Step 2 で編集した後に再対比をかけずに Step 5/6 へ進むと、新しい分節の
+    judgment データが無いまま Excel に "-" が並ぶ silent stale が起きる。
+    これを UI バナーで気づけるよう、サーバー側で 1 回計算して返す。
+
+    Returns 200 OK with:
+        {
+          "has_responses": bool,
+          "response_count": int,
+          "segments_mtime": float | None,
+          "oldest_response_mtime": float | None,
+          "newest_response_mtime": float | None,
+          "stale_by_mtime": bool,            # segments_mtime > oldest_response_mtime
+          "current_segment_count": int,
+          "missing_in_responses": [str],      # 現分節 ID で どの response にも無いもの
+          "orphans_in_responses": {           # responses 側にあるが現分節に無い ID 群
+              "<citation_id>": [str], ...
+          },
+          "needs_recompare": bool,            # missing or orphans があれば True
+        }
+    """
+    case_dir = get_case_dir(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    seg_path = case_dir / "segments.json"
+    resp_dir = case_dir / "responses"
+
+    out = {
+        "has_responses": False,
+        "response_count": 0,
+        "segments_mtime": None,
+        "oldest_response_mtime": None,
+        "newest_response_mtime": None,
+        "stale_by_mtime": False,
+        "current_segment_count": 0,
+        "missing_in_responses": [],
+        "orphans_in_responses": {},
+        "needs_recompare": False,
+    }
+
+    current_ids = []
+    if seg_path.exists():
+        out["segments_mtime"] = seg_path.stat().st_mtime
+        try:
+            with open(seg_path, "r", encoding="utf-8") as f:
+                segs = json.load(f)
+            current_ids = _get_all_segment_ids(segs)
+        except (OSError, json.JSONDecodeError):
+            current_ids = []
+    out["current_segment_count"] = len(current_ids)
+    current_set = set(current_ids)
+
+    if not resp_dir.exists():
+        return out, 200
+
+    # 集計対象: responses/*.json (アンダースコア始まりの作業ファイルは除外)
+    resp_files = [p for p in resp_dir.glob("*.json") if not p.name.startswith("_")]
+    if not resp_files:
+        return out, 200
+
+    out["has_responses"] = True
+    out["response_count"] = len(resp_files)
+
+    mtimes = [p.stat().st_mtime for p in resp_files]
+    out["oldest_response_mtime"] = min(mtimes)
+    out["newest_response_mtime"] = max(mtimes)
+    if out["segments_mtime"] is not None and out["oldest_response_mtime"] is not None:
+        out["stale_by_mtime"] = out["segments_mtime"] > out["oldest_response_mtime"]
+
+    seen_in_responses = set()
+    orphans_per_doc = {}
+    for p in resp_files:
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                rdata = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        comps = rdata.get("comparisons") or []
+        ids = [(c.get("requirement_id") or "").strip() for c in comps if c.get("requirement_id")]
+        seen_in_responses.update(ids)
+        # この文献の orphan = 現分節に無い response 側 ID
+        orphans = sorted(set(i for i in ids if i and i not in current_set))
+        if orphans:
+            orphans_per_doc[p.stem] = orphans
+
+    if current_set:
+        out["missing_in_responses"] = sorted(s for s in current_set if s not in seen_in_responses)
+    out["orphans_in_responses"] = orphans_per_doc
+    out["needs_recompare"] = (
+        bool(out["missing_in_responses"]) or bool(orphans_per_doc) or out["stale_by_mtime"]
+    )
+    return out, 200
+
+
 def _get_all_segment_ids(segs):
     """分節データから全分節IDを取得"""
     ids = []

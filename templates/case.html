@@ -818,6 +818,8 @@
     <div class="card">
       <h2>Step 5: 対比プロンプト生成 & 回答取り込み</h2>
 
+      {% include "partials/segments_freshness_banner.html" %}
+
       <!-- 文献選択（複数選択対応） -->
       <div style="margin-bottom:1rem;">
         <label style="font-size:0.9rem; color:var(--text2);">対象文献（複数選択可）:</label>
@@ -904,6 +906,8 @@
   <div class="panel" id="panel-5">
     <div class="card">
       <h2>Step 6: 対比表Excel出力</h2>
+
+      {% include "partials/segments_freshness_banner.html" %}
 
       <!-- 対比結果サマリ（表は case.js の renderCompSummaryTable で描画） -->
       <div id="comparison-summary" class="comp-summary-outer">
@@ -1061,7 +1065,8 @@ window.CASE_BOOTSTRAP = {
     { "id": {{ cit.id | tojson }}, "label": {{ (cit.label or cit.id) | tojson }},
       "category": {{ (cit._category or "") | tojson }} }{% if not loop.last %},{% endif %}
     {% endfor %}
-  ]
+  ],
+  freshness: {{ freshness | tojson if freshness else '{}' }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>

@@ -1,0 +1,55 @@
+{# 分節↔対比 整合性バナー
+   親テンプレートから `freshness` (services.comparison_service.check_segments_freshness の結果) を渡す。
+   - response が無いとき: 何も出さない
+   - 整合: 何も出さない
+   - 不整合: ⚠ 黄色バナーで件数とアクションを案内
+#}
+{% if freshness and freshness.has_responses and freshness.needs_recompare %}
+<div class="freshness-banner"
+     style="margin:0 0 1rem 0; padding:0.7rem 1rem; background:#78350f; border:1px solid #f59e0b;
+            border-radius:8px; color:#fde68a; font-size:0.85rem; line-height:1.55;">
+  <div style="display:flex; gap:0.6rem; align-items:flex-start;">
+    <span style="font-size:1.1rem; line-height:1;">⚠</span>
+    <div style="flex:1;">
+      <strong>分節と対比結果に不整合があります</strong>
+      ({{ freshness.response_count }} 件の対比結果に対して
+      {% if freshness.missing_in_responses %}
+        現分節 <strong>{{ freshness.missing_in_responses|length }} 件</strong>に判定なし
+      {% endif %}
+      {% if freshness.missing_in_responses and freshness.orphans_in_responses %}, {% endif %}
+      {% if freshness.orphans_in_responses %}
+        対比側に
+        {% set ns = namespace(total=0) %}
+        {% for doc, ids in freshness.orphans_in_responses.items() %}{% set ns.total = ns.total + ids|length %}{% endfor %}
+        <strong>{{ ns.total }} 件</strong>の孤立分節
+      {% endif %}
+      {% if freshness.stale_by_mtime %}
+        / 分節編集が一部対比後
+      {% endif %}
+      )
+      <div style="margin-top:0.3rem; font-size:0.8rem; color:#fcd34d;">
+        Step 2 で分節を編集すると、既存の対比結果は古い分節 ID のまま残ります。
+        Step 5 で再対比をかけて整合させてください。
+      </div>
+      {% if freshness.missing_in_responses %}
+      <details style="margin-top:0.3rem;">
+        <summary style="cursor:pointer; font-size:0.78rem; color:#fcd34d;">判定なし分節 ID ({{ freshness.missing_in_responses|length }})</summary>
+        <code style="display:block; margin-top:0.2rem; font-size:0.78rem; color:#fef3c7; word-break:break-all;">
+          {{ freshness.missing_in_responses|join(', ') }}
+        </code>
+      </details>
+      {% endif %}
+      {% if freshness.orphans_in_responses %}
+      <details style="margin-top:0.3rem;">
+        <summary style="cursor:pointer; font-size:0.78rem; color:#fcd34d;">対比側の孤立分節 (文献別)</summary>
+        <div style="margin-top:0.2rem; font-size:0.78rem; color:#fef3c7;">
+          {% for doc, ids in freshness.orphans_in_responses.items() %}
+          <div><strong>{{ doc }}</strong>: <code>{{ ids|join(', ') }}</code></div>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}

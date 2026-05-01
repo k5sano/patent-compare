@@ -996,7 +996,26 @@ function delSeg(btn) {
   renumberSegIds(block);
 }
 
+// ユーザーがこのページで一度「分節を保存」の確認に OK したら、同セッション中は再確認しない
+window._segmentsSaveWarnAcked = window._segmentsSaveWarnAcked || false;
+
 async function saveSegmentsFromEditor() {
+  // 対比結果が既にある場合は警告 (silent stale 防止)
+  const fresh = (window.CASE_BOOTSTRAP || {}).freshness || {};
+  if (fresh.has_responses && !window._segmentsSaveWarnAcked) {
+    const n = fresh.response_count || 0;
+    const ok = confirm(
+      `この案件には既に ${n} 件の対比結果 (responses/*.json) があります。\n\n` +
+      `分節を変更すると、対比結果に古い分節 ID が残り、Excel 出力で\n` +
+      `「-」(判定なし) が並んだり、孤立した判定データが無視されたりします。\n\n` +
+      `Step 5 で再対比をかけ直すことを強くおすすめします。\n` +
+      `(本セッション中はこの確認を再表示しません)\n\n` +
+      `分節を保存して続けますか?`
+    );
+    if (!ok) return false;
+    window._segmentsSaveWarnAcked = true;
+  }
+
   const blocks = document.querySelectorAll('.seg-claim-block');
   const segments = [];
   blocks.forEach(block => {
@@ -1028,8 +1047,10 @@ async function saveSegmentsFromEditor() {
     msg.textContent = '保存しました';
     msg.style.display = 'block';
     setTimeout(() => msg.style.display = 'none', 2000);
+    return true;
   } catch(e) {
     alert('保存エラー: ' + e.message);
+    return false;
   }
 }
 
