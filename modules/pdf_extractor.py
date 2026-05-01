@@ -658,20 +658,40 @@ def _looks_like_table(text):
     return False
 
 
+_TABLE_HEADER_RE = re.compile(
+    r"(?:【\s*表\s*\d+|〔\s*表\s*\d+|\[\s*表\s*\d+|表\s*\d+\s*[】〕\]]"
+    r"|Table\s*\d+|TABLE\s*\d+)",
+    re.IGNORECASE,
+)
+
+
 def detect_tables(paragraphs):
-    """段落データからテーブルを検出・抽出"""
+    """段落データから「実際の表」だけを検出する。
+
+    `_looks_like_table` のヒューリスティック (タブ/数値多めの行) だけでは、
+    特許 PDF テキスト抽出時に紛れ込むページ罫線/フッター
+    (例: '10 20 30 40 50 JP 2024-37328 A 2024.3.19') を含む通常段落まで
+    拾ってしまっていた。本物の表は公報上 `【表1】` 等の明示ヘッダーが付くので
+    それを必須条件にして誤検出を抑える。
+    """
     tables = []
     table_id = 0
     for para in paragraphs:
-        if _looks_like_table(para["text"]) and len(para["text"]) > 50:
-            table_id += 1
-            tables.append({
-                "id": f"表{table_id}",
-                "page": para["page"],
-                "section": para["section"],
-                "paragraph_id": para["id"],
-                "content": para["text"],
-            })
+        text = para["text"] or ""
+        if len(text) <= 50:
+            continue
+        if not _TABLE_HEADER_RE.search(text):
+            continue
+        if not _looks_like_table(text):
+            continue
+        table_id += 1
+        tables.append({
+            "id": f"表{table_id}",
+            "page": para["page"],
+            "section": para["section"],
+            "paragraph_id": para["id"],
+            "content": text,
+        })
     return tables
 
 
