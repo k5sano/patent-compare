@@ -546,7 +546,7 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
     case_dir = get_case_dir(case_id)
     input_dir = case_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
-    from modules.patent_downloader import download_patent_pdf
+    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
 
     results = []
     for r in refs:
@@ -559,11 +559,14 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
             continue
         dl = download_patent_pdf(r["patent_id"], save_dir=input_dir)
         if not dl.get("success"):
+            # 失敗時は J-PlatPat 固定 URL も返して UI で手動 DL を促す
+            # (Google Patents は古い特許 / マイナー国の特許で失敗しやすい)
             results.append({
                 "ref_no": r["ref_no"], "patent_id": r["patent_id"],
                 "success": False,
                 "error": dl.get("error", "DL 失敗"),
                 "google_patents_url": dl.get("google_patents_url", ""),
+                "jplatpat_url": build_jplatpat_url(r["patent_id"]),
             })
             continue
         # citation として登録 (role=「本願引用N」、label は doc_id を採用)

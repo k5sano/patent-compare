@@ -389,9 +389,20 @@ async function downloadHonganRefs() {
     const ok = d.success_count || 0;
     const wrap = document.getElementById('hongan-refs-list');
     const rows = results.map(r => {
-      const status = r.success
-        ? `<span style="color:#86efac;">✅ 登録 (${r.doc_id || ''})</span>`
-        : `<span style="color:#fca5a5;">❌ ${_hrefEsc(r.error || '失敗')}</span>`;
+      let status;
+      if (r.success) {
+        status = `<span style="color:#86efac;">✅ 登録 (${r.doc_id || ''})</span>`;
+      } else {
+        // 失敗時は J-PlatPat / Google Patents のリンクを併記して手動 DL を案内
+        const links = [];
+        if (r.jplatpat_url) {
+          links.push(`<a href="${_hrefEsc(r.jplatpat_url)}" target="_blank" rel="noopener" style="color:#60a5fa; margin-left:0.4rem;">J-PlatPat</a>`);
+        }
+        if (r.google_patents_url) {
+          links.push(`<a href="${_hrefEsc(r.google_patents_url)}" target="_blank" rel="noopener" style="color:#60a5fa; margin-left:0.4rem;">Google Patents</a>`);
+        }
+        status = `<span style="color:#fca5a5;">❌ ${_hrefEsc(r.error || '失敗')}</span>${links.join('')}`;
+      }
       return `<tr>
         <td style="padding:0.2rem 0.5rem; color:#94a3b8;">本願引用${r.ref_no}</td>
         <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${_hrefEsc(r.patent_id || '')}</td>
@@ -408,9 +419,12 @@ async function downloadHonganRefs() {
         <tbody>${rows}</tbody>
       </table>
     `;
-    _hrefStatus(`${ok}/${results.length} 件 成功 (再読み込みでカード反映)`, 'success');
-    // 引文カード一覧の再描画はリロードが手早い
-    setTimeout(() => location.reload(), 1500);
+    const ng = results.length - ok;
+    _hrefStatus(`${ok}/${results.length} 件 成功${ng > 0 ? ` (失敗 ${ng} 件は J-PlatPat リンクから手動 DL)` : ''}`, 'success');
+    // 全件成功時のみ自動リロード (失敗があれば手動 DL リンクを残す)
+    if (ng === 0 && ok > 0) {
+      setTimeout(() => location.reload(), 1500);
+    }
   } catch (e) {
     _hrefStatus('エラー: ' + e.message, 'error');
   }
