@@ -636,7 +636,8 @@ def export_excel(case_id, selected_citation_ids=None):
 
 
 def annotate_citation(case_id, citation_id):
-    """引用文献PDFに注釈を追加"""
+    """引用文献PDFに注釈を追加。id (公開番号) で見つからない時は case.yaml の
+    label (登録番号など別表記) もフォールバックとして探索する。"""
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
     if not meta:
@@ -649,7 +650,19 @@ def annotate_citation(case_id, citation_id):
     with open(resp_path, "r", encoding="utf-8") as f:
         response_data = json.load(f)
 
+    # citation JSON / PDF の解決には id だけでなく label も試す
+    # (例: id=特開2021-20391 / label=JP7088138B2 / input/JP7088138B2.pdf)
+    label = ""
+    for cit in meta.get("citations", []):
+        if cit.get("id") == citation_id:
+            label = (cit.get("label") or "").strip()
+            break
+
     cit_path = case_dir / "citations" / f"{citation_id}.json"
+    if not cit_path.exists() and label and label != citation_id:
+        alt = case_dir / "citations" / f"{label}.json"
+        if alt.exists():
+            cit_path = alt
     if not cit_path.exists():
         return {"error": f"引用文献データがありません: {citation_id}"}, 404
 
@@ -657,6 +670,8 @@ def annotate_citation(case_id, citation_id):
         citation_data = json.load(f)
 
     pdf_path = find_citation_pdf(case_dir / "input", citation_id)
+    if not pdf_path and label and label != citation_id:
+        pdf_path = find_citation_pdf(case_dir / "input", label)
     if not pdf_path:
         return {"error": f"引用文献PDFが見つかりません: {citation_id}"}, 404
 

@@ -143,7 +143,14 @@ def case_detail(case_id):
         resp_path = case_dir / "responses" / f"{cit['id']}.json"
         cit["_has_data"] = cit_path.exists()
         cit["_has_response"] = resp_path.exists()
-        cit["_has_pdf"] = bool(find_citation_pdf(case_dir / "input", cit['id']))
+        # PDF 検索は id (公開番号) で先に試し、見つからなければ label (登録番号など
+        # 別表記) でも試す。case.yaml に id=特開2021-20391 / label=JP7088138B2 と
+        # 入っていて input に JP7088138B2.pdf がある場合などに必要。
+        input_dir = case_dir / "input"
+        pdf_p = find_citation_pdf(input_dir, cit['id'])
+        if not pdf_p and cit.get("label") and cit["label"] != cit["id"]:
+            pdf_p = find_citation_pdf(input_dir, cit["label"])
+        cit["_has_pdf"] = bool(pdf_p)
         cit["_category"] = ""
         if resp_path.exists():
             try:
