@@ -1189,14 +1189,9 @@ async function bookmarkHongan() {
   if (!confirm('分節の編集内容を保存し、本願PDFにブックマーク付きコピーを作成して PDF-XChange で開きます。よろしいですか？')) return;
   showRelatedMsg('ブックマーク生成中...', 'info');
   // 分節保存 → 本願 PDF 生成 → 開く の順を確実に走らせる。
-  // 自動再対比は PDF を開いた後で別途プロンプトする (再対比失敗で PDF 開けない
-  // 問題を回避)。
-  let recompareTargetIds = [];
+  // 自動再対比は PDF を開いた後で「実際に不整合がある場合に限り」別途プロンプト
+  // (再対比失敗で PDF 開けない問題を回避 / 既に整合済なら聞かない)。
   try {
-    const fresh0 = (window.CASE_BOOTSTRAP || {}).freshness || {};
-    if (fresh0.has_responses && (fresh0.citation_ids_with_responses || []).length) {
-      recompareTargetIds = fresh0.citation_ids_with_responses.slice();
-    }
     const saved = await saveSegmentsFromEditor({skipAutoRecompare: true});
     if (saved === false) {
       showRelatedMsg('保存をキャンセルしました', 'info');
@@ -1216,19 +1211,27 @@ async function bookmarkHongan() {
   } catch(e) {
     showRelatedMsg('ブックマーク作成に失敗: ' + e.message, 'error');
   }
-  // PDF を開いた後で「対比結果が古いままです、再対比しますか?」を別途確認
-  if (recompareTargetIds.length && window._segmentsAutoRecompareAcked === null) {
-    setTimeout(async () => {
+  // PDF を開いた後で「実際に不整合がある場合だけ」再対比を確認
+  // (response が存在するだけでは聞かない — 既に整合済なら無音)
+  setTimeout(async () => {
+    try {
+      const fr = await fetch(`/case/${CASE_ID}/segments/freshness`);
+      if (!fr.ok) return;
+      const fd = await fr.json();
+      if (!fd.needs_recompare) return;  // 不整合なし → 何もしない
+      const targetIds = fd.citation_ids_with_responses || [];
+      if (!targetIds.length) return;
+      if (window._segmentsAutoRecompareAcked === false) return;  // 同セッションで「No」済
       const ok = confirm(
         `本願 PDF を開きました。\n\n` +
-        `対比結果が ${recompareTargetIds.length} 件あり、分節編集により古い分節 ID が\n` +
-        `残っている可能性があります。Claude で再対比を実行しますか? (5〜10 分)\n\n` +
+        `分節編集と既存対比結果の間に不整合があります (${targetIds.length} 件)。\n` +
+        `Claude で再対比を実行しますか? (5〜10 分)\n\n` +
         `[OK] = 再対比を実行 / [キャンセル] = あとで Step 5 から実行`
       );
       window._segmentsAutoRecompareAcked = ok;
-      if (ok) await _runAutoRecompare(recompareTargetIds);
-    }, 600);
-  }
+      if (ok) await _runAutoRecompare(targetIds);
+    } catch(_) { /* freshness 取得失敗は静かに */ }
+  }, 600);
 }
 
 // 初期描画: サーバーから引き渡された関連段落データがあれば表示
