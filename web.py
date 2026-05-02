@@ -728,7 +728,9 @@ def get_citation_tables_cells_route(case_id):
 @app.route("/case/<case_id>/annotate/<citation_id>", methods=["POST"])
 def annotate_citation(case_id, citation_id):
     from services.comparison_service import annotate_citation
-    result, code = annotate_citation(case_id, citation_id)
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get("force_new_file"))
+    result, code = annotate_citation(case_id, citation_id, force_new_file=force)
     if code == 200 and result.get("success"):
         pdf_path = get_case_dir(case_id) / "output" / result["filename"]
         result["opened"] = _open_with_pdf_xchange(pdf_path)

@@ -635,9 +635,13 @@ def export_excel(case_id, selected_citation_ids=None):
     }, 200
 
 
-def annotate_citation(case_id, citation_id):
+def annotate_citation(case_id, citation_id, force_new_file=False):
     """引用文献PDFに注釈を追加。id (公開番号) で見つからない時は case.yaml の
-    label (登録番号など別表記) もフォールバックとして探索する。"""
+    label (登録番号など別表記) もフォールバックとして探索する。
+
+    force_new_file=True の場合は出力ファイル名にタイムスタンプを付けて必ず新規
+    ファイルとして書き出す (PDF-XChange 等で古い注釈 PDF を開いたままになっても
+    確実に新しいファイルが手に入るように)。"""
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
     if not meta:
@@ -682,6 +686,10 @@ def annotate_citation(case_id, citation_id):
             keywords = json.load(f)
 
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
+    if force_new_file:
+        # 強制再生成: タイムスタンプ付きで別名 (確実に新規ファイル)
+        ts = datetime.now().strftime("%H%M%S")
+        safe_name = f"{safe_name}_{ts}"
 
     try:
         result, actual_path = _write_annotated_pdf(

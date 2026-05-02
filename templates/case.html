@@ -582,6 +582,10 @@
             <button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
                     type="button"
                     onclick="annotateCitation('{{ cit.id }}', this)">注釈PDF</button>
+            <button class="btn btn-outline" style="padding:0.3rem 0.55rem; font-size:0.8rem;"
+                    type="button"
+                    title="強制再注釈: タイムスタンプ付きの新規ファイルとして書き出す (PDF-XChange で古いファイルを開いたまま更新したい時用)"
+                    onclick="annotateCitation('{{ cit.id }}', this, {force:true})">🔄 再注釈</button>
             {% elif cit._has_pdf and not cit._has_response %}
             <button class="btn btn-outline" type="button" style="padding:0.3rem 0.8rem; font-size:0.8rem; opacity:0.8;"
                     title="先に Step 5 で当該文献の対比回答を取り込んでください"

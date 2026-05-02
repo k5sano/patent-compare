@@ -3355,25 +3355,30 @@ function srAnnotateNeedStep5() {
   );
 }
 
-async function annotateCitation(citId, btn) {
+async function annotateCitation(citId, btn, opts) {
+  opts = opts || {};
+  const force = !!opts.force;
   const origText = btn.textContent;
-  btn.textContent = '生成中...';
+  btn.textContent = force ? '再生成中...' : '生成中...';
   btn.disabled = true;
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/annotate/${encodeURIComponent(citId)}`, {
-      method: 'POST'
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force_new_file: force}),
     });
     const data = await resp.json();
 
     if (data.success) {
-      btn.textContent = data.opened ? '開いた' : '生成済';
+      const label = data.opened ? `開いた (${data.filename})` : `生成済 (${data.filename})`;
+      btn.textContent = label;
       btn.classList.remove('btn-outline');
       btn.classList.add('btn-success');
       btn.disabled = false;
-      // 再クリックで同じPDFを再オープン（再生成）
+      // 再クリックで通常再生成 (上書き)
       btn.onclick = () => annotateCitation(citId, btn);
-      setTimeout(() => { btn.textContent = '注釈PDF再表示'; }, 1500);
+      setTimeout(() => { btn.textContent = '注釈PDF再表示'; }, 1800);
     } else {
       btn.textContent = origText;
       btn.disabled = false;
