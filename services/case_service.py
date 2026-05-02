@@ -1181,10 +1181,22 @@ def create_bookmarked_hongan(case_id):
     base_name = f"{case_id}_本願_bookmarked.pdf"
     out_pdf = output_dir / base_name
 
+    # keywords.json があれば本願 PDF にもキーワードハイライトを付与
+    # (引用文献注釈 PDF と同じ配色で塗る)
+    kw_for_hongan = None
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        try:
+            with kw_path.open(encoding="utf-8") as f:
+                kw_for_hongan = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            kw_for_hongan = None
+
     def _save(target):
         doc = fitz.open(str(src_pdf))
         try:
-            n_ann_local = apply_hongan_annotations(doc, claim_items, para_items)
+            n_ann_local = apply_hongan_annotations(
+                doc, claim_items, para_items, keywords=kw_for_hongan)
             n_bm_local = apply_toc(doc, bookmarks)
             doc.save(str(target), garbage=3, deflate=True)
         finally:

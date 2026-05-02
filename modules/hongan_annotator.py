@@ -293,18 +293,31 @@ def _draw_label(page, anchor_rect, label, rgb, *, style="filled",
         )
 
 
-def apply_hongan_annotations(doc, claim_items, para_items):
+def apply_hongan_annotations(doc, claim_items, para_items, keywords=None):
     """本願PDF に分節IDラベルを描画する（in-place）。
 
     Args:
         doc: fitz.Document
         claim_items: [{"seg_id": "1A", "seg_text": "..."}, ...]
         para_items:  [{"seg_id": "1A", "para_id": "0012", "page": 3}, ...]
+        keywords: keywords.json の中身 (optional)。渡されたら引用文献注釈 PDF と
+                  同じ配色 (modules.pdf_annotator._GROUP_COLORS) でキーワードを
+                  半透明ハイライト。
 
     Returns:
-        描画したラベル総数
+        描画したラベル総数 (キーワードハイライト数は含めない)
     """
     n = 0
+
+    # キーワードハイライト (引用文献 PDF と同じ配色で塗る)
+    if keywords:
+        try:
+            from modules.pdf_annotator import paint_keyword_highlights
+            paint_keyword_highlights(doc, keywords)
+        except Exception as e:
+            # ハイライト失敗はラベル描画を止めない (回復不能な型違い等は飲む)
+            import logging
+            logging.getLogger(__name__).warning("本願キーワードハイライト失敗: %s", e)
 
     # 請求項側: 「【特許請求の範囲】」〜「【発明の詳細な説明】」直前 までに範囲を限定
     claim_start_page, claim_end_page = _find_claim_section_range(doc)

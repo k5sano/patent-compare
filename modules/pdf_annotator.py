@@ -216,6 +216,14 @@ def _resolve_paragraph_location(doc, para_id, cited_loc, para_page_map, claims_p
         return _find_rect_in_pdf(doc, fw_id, hint_page)
 
 
+# 公開エイリアス: 本願 PDF (modules.hongan_annotator) からも同じ色で
+# キーワードハイライトをかけられるように共有する。色定義 _GROUP_COLORS と
+# 描画関数を同モジュール経由で再利用すれば、引用文献と本願で同一配色になる。
+def paint_keyword_highlights(doc, keywords):
+    """`_draw_keyword_highlights` の公開ラッパ。"""
+    return _draw_keyword_highlights(doc, keywords)
+
+
 def _draw_keyword_highlights(doc, keywords):
     """キーワードを半透明の蛍光ペン風ハイライト注釈で塗る。
 
@@ -229,16 +237,27 @@ def _draw_keyword_highlights(doc, keywords):
     count = 0
     # page → list[(rect, color)] に先に集約
     per_page = {i: [] for i in range(doc.page_count)}
+    # 重複除外用: (page, x0, y0, x1, y1) の集合 (本願 PDF で 1 語が多数ヒットして
+    # 7000+ annot になる現象を抑える)
+    seen = set()
     for g in keywords:
         gid = g["group_id"]
         color = _GROUP_COLORS[(gid - 1) % len(_GROUP_COLORS)]
         for kw in g.get("keywords", []):
-            term = kw["term"]
-            if len(term) < 2:
+            term = (kw.get("term") or "").strip()
+            # 短すぎる語は誤マッチが多いので除外 (英数字 3 文字 / 日本語 2 文字以上)
+            if not term or len(term) < 2:
+                continue
+            if term.isascii() and len(term) < 3:
                 continue
             for pn in range(doc.page_count):
                 page = doc[pn]
                 for rect in page.search_for(term):
+                    key = (pn, round(rect.x0, 1), round(rect.y0, 1),
+                           round(rect.x1, 1), round(rect.y1, 1))
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     per_page[pn].append((rect, color))
 
     # ページ単位で注釈付与
