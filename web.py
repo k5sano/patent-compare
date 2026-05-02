@@ -1566,6 +1566,54 @@ def search_run_snippets(case_id):
     return jsonify(get_keyword_snippets(case_id))
 
 
+# ===== 壁打ち chat (Step 2 SUB 4 / Step 4.5 末尾) =====
+
+@app.route("/case/<case_id>/chat/threads", methods=["GET"])
+def chat_list_threads(case_id):
+    from services.chat_service import list_threads
+    topic = request.args.get("topic") or None
+    return _svc_response(list_threads(case_id, topic=topic))
+
+
+@app.route("/case/<case_id>/chat/threads", methods=["POST"])
+def chat_create_thread(case_id):
+    from services.chat_service import create_thread
+    data = request.get_json() or {}
+    return _svc_response(create_thread(
+        case_id, topic=data.get("topic", "free"), title=data.get("title", "")
+    ))
+
+
+@app.route("/case/<case_id>/chat/threads/<thread_id>", methods=["GET"])
+def chat_load_thread(case_id, thread_id):
+    from services.chat_service import load_thread
+    return _svc_response(load_thread(case_id, thread_id))
+
+
+@app.route("/case/<case_id>/chat/threads/<thread_id>", methods=["DELETE"])
+def chat_delete_thread(case_id, thread_id):
+    from services.chat_service import delete_thread
+    return _svc_response(delete_thread(case_id, thread_id))
+
+
+@app.route("/case/<case_id>/chat/threads/<thread_id>/message", methods=["POST"])
+def chat_post_message(case_id, thread_id):
+    from services.chat_service import append_message_and_reply
+    data = request.get_json() or {}
+    return _svc_response(
+        append_message_and_reply(case_id, thread_id, data.get("content", ""))
+    )
+
+
+@app.route("/case/<case_id>/chat/threads/<thread_id>/apply", methods=["POST"])
+def chat_apply_suggestion(case_id, thread_id):
+    from services.chat_service import apply_suggestion
+    data = request.get_json() or {}
+    return _svc_response(
+        apply_suggestion(case_id, thread_id, data.get("suggestion_id", ""))
+    )
+
+
 # ===== 本願分析 (Step 2 サブタブ SUB 3) =====
 
 @app.route("/case/<case_id>/hongan-analysis", methods=["GET"])

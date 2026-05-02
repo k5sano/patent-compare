@@ -152,6 +152,9 @@
         <div class="stage-ind" id="step2-sub-ind-3" onclick="showStep2Sub(3)">
           <span class="stage-num">SUB 3</span>本願分析
         </div>
+        <div class="stage-ind" id="step2-sub-ind-4" onclick="showStep2Sub(4)">
+          <span class="stage-num">SUB 4</span>本願 chat
+        </div>
       </div>
 
       <!-- Sub 1: 分節 (既存) -->
@@ -238,6 +241,13 @@
       <!-- Sub 3: 本願分析 -->
       <div class="stage-panel" id="step2-sub-panel-3">
         {% include "partials/hongan_analysis_tab.html" %}
+      </div>
+
+      <!-- Sub 4: 本願 chat (壁打ち) -->
+      <div class="stage-panel" id="step2-sub-panel-4">
+        {% with chat_topic="hongan", chat_panel_id="hongan" %}
+          {% include "partials/chat_panel.html" %}
+        {% endwith %}
       </div>
 
     </div>
@@ -818,6 +828,18 @@
 
         <div id="sr-hits-list" class="sr-hits-list"></div>
       </div>
+
+      <!-- 検索 chat (壁打ち) -->
+      <div style="margin-top:1.4rem; padding-top:1rem; border-top:1px dashed var(--border);">
+        <h3 style="margin:0 0 0.5rem 0; font-size:1rem; color:#cbd5e1;">💬 検索 chat (壁打ち)</h3>
+        <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
+          検索式の方針・キーワード設計・ノイズ除去を Claude と対話で詰めます。
+          スレッドは <code>cases/{{ case_id }}/analysis/chat/</code> に保存。
+        </p>
+        {% with chat_topic="search", chat_panel_id="search" %}
+          {% include "partials/chat_panel.html" %}
+        {% endwith %}
+      </div>
     </div>
   </div>
 
@@ -1080,10 +1102,11 @@ window.CASE_BOOTSTRAP = {
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>
 <script src="{{ url_for('static', filename='js/preliminary_research.js') }}"></script>
 <script src="{{ url_for('static', filename='js/hongan_analysis.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
 <script>
 // Step 2 内サブタブ切替 (showStage との競合回避のため独立関数)
 function showStep2Sub(n) {
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 4; i++) {
     const ind = document.getElementById(`step2-sub-ind-${i}`);
     const panel = document.getElementById(`step2-sub-panel-${i}`);
     if (ind) ind.classList.toggle('active', i === n);
