@@ -1001,12 +1001,16 @@ window._segmentsSaveWarnAcked = window._segmentsSaveWarnAcked || false;
 // 自動再対比を「やる」「やらない」のセッション内記憶
 window._segmentsAutoRecompareAcked = window._segmentsAutoRecompareAcked || null; // null | true | false
 
-async function saveSegmentsFromEditor() {
+async function saveSegmentsFromEditor(opts) {
+  opts = opts || {};
+  const skipAutoRecompare = !!opts.skipAutoRecompare;
   // 対比結果が既にある場合は警告 + 自動再対比の意思確認 (silent stale 防止)
+  // ただし skipAutoRecompare=true (本願 PDF ブックマーク等の chained 呼び出し) なら
+  // 警告だけ出して再対比は実行しない (呼び出し側の処理を中断させない)。
   const fresh = (window.CASE_BOOTSTRAP || {}).freshness || {};
   const targetIds = (fresh.citation_ids_with_responses || []).slice();
   let shouldRecompare = false;
-  if (fresh.has_responses && targetIds.length) {
+  if (fresh.has_responses && targetIds.length && !skipAutoRecompare) {
     if (!window._segmentsSaveWarnAcked) {
       const n = fresh.response_count || 0;
       const ok = confirm(
@@ -1184,8 +1188,20 @@ async function detectRelatedParagraphs() {
 async function bookmarkHongan() {
   if (!confirm('分節の編集内容を保存し、本願PDFにブックマーク付きコピーを作成して PDF-XChange で開きます。よろしいですか？')) return;
   showRelatedMsg('ブックマーク生成中...', 'info');
+  // 分節保存 → 本願 PDF 生成 → 開く の順を確実に走らせる。
+  // 自動再対比は PDF を開いた後で別途プロンプトする (再対比失敗で PDF 開けない
+  // 問題を回避)。
+  let recompareTargetIds = [];
   try {
-    await saveSegmentsFromEditor();
+    const fresh0 = (window.CASE_BOOTSTRAP || {}).freshness || {};
+    if (fresh0.has_responses && (fresh0.citation_ids_with_responses || []).length) {
+      recompareTargetIds = fresh0.citation_ids_with_responses.slice();
+    }
+    const saved = await saveSegmentsFromEditor({skipAutoRecompare: true});
+    if (saved === false) {
+      showRelatedMsg('保存をキャンセルしました', 'info');
+      return;
+    }
     const resp = await fetch(`/case/${CASE_ID}/hongan/bookmark`, { method: 'POST' });
     const data = await resp.json();
     if (!resp.ok || !data.success) throw new Error(data.error || 'ブックマーク作成失敗');
@@ -1199,6 +1215,19 @@ async function bookmarkHongan() {
     } catch(_) {}
   } catch(e) {
     showRelatedMsg('ブックマーク作成に失敗: ' + e.message, 'error');
+  }
+  // PDF を開いた後で「対比結果が古いままです、再対比しますか?」を別途確認
+  if (recompareTargetIds.length && window._segmentsAutoRecompareAcked === null) {
+    setTimeout(async () => {
+      const ok = confirm(
+        `本願 PDF を開きました。\n\n` +
+        `対比結果が ${recompareTargetIds.length} 件あり、分節編集により古い分節 ID が\n` +
+        `残っている可能性があります。Claude で再対比を実行しますか? (5〜10 分)\n\n` +
+        `[OK] = 再対比を実行 / [キャンセル] = あとで Step 5 から実行`
+      );
+      window._segmentsAutoRecompareAcked = ok;
+      if (ok) await _runAutoRecompare(recompareTargetIds);
+    }, 600);
   }
 }
 

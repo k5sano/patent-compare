@@ -65,10 +65,9 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
     # 2. 段落横の分節ラベル
     label_count = _draw_segment_labels(doc, response, para_page_map, claims_page)
 
-    # 3. ブックマーク (set_toc は /XYZ で書くので、後段で /FitH に書き換える)
-    toc = _build_toc(doc, response, para_page_map, claims_page)
+    # 3. ブックマーク (本願 PDF と同じスタイル: simple form + ページ先頭 /XYZ)
+    toc = _build_toc(response, para_page_map, claims_page)
     doc.set_toc(toc)
-    _convert_outlines_to_fith(doc)
 
     doc.save(str(output_path))
     doc.close()
@@ -100,12 +99,50 @@ def _find_claims_page(citation):
 
 
 def _parse_cited_paragraphs(cited_location):
-    """cited_locationから段落番号リストを抽出"""
+    """cited_location から段落番号 (4 桁文字列) と請求項マーカーのリストを抽出。
+
+    対応する記法:
+      - 旧: `【0012】` (4 桁ブラケット)
+      - 新コンパクト記法 (modules.cited_ref_notation): `12;CL1`, `67;CL1:CL3`, `63,67-72;F2` など
+        - kind=para → ゼロパディング 4 桁化して追加
+        - kind=claim → "__claims__" を追加 (請求項ページに飛ばす)
+        - 他の kind (page/column/figure/table/...) は段落ジャンプ対象外なのでスキップ
+    """
+    if not cited_location:
+        return []
     results = []
-    for m in re.finditer(r"[【\[](\d{4})[】\]]", cited_location):
-        results.append(m.group(1))
-    if "請求項" in cited_location:
-        results.append("__claims__")
+    seen = set()
+
+    def _add(item):
+        if item not in seen:
+            seen.add(item)
+            results.append(item)
+
+    # 旧 ブラケット記法
+    for m in re.finditer(r"[【\[](\d{2,5})[】\]]", cited_location):
+        _add(f"{int(m.group(1)):04d}")
+    # 旧キーワード「請求項」 / コンパクト記法の "CL" 接頭辞
+    if "請求項" in cited_location or re.search(r"\bCL\d", cited_location):
+        _add("__claims__")
+
+    # 新コンパクト記法
+    try:
+        from modules.cited_ref_notation import parse as _parse_notation
+        notation = _parse_notation(cited_location)
+        for ref in notation.refs:
+            if ref.kind == "para":
+                for v in (ref.values or []):
+                    try:
+                        _add(f"{int(v):04d}")
+                    except (TypeError, ValueError):
+                        pass
+            elif ref.kind == "claim":
+                _add("__claims__")
+            # page/column/figure/table/chem/formula/eq は段落の直接ジャンプ対象外
+    except Exception:
+        # parser 失敗時は旧来のブラケット結果のみで継続
+        pass
+
     return results
 
 
@@ -274,47 +311,37 @@ def _draw_keyword_highlights(doc, keywords):
     return count
 
 
-def _build_toc(doc, response, para_page_map, claims_page):
+def _build_toc(response, para_page_map, claims_page):
     """ブックマーク（目次）を構築。
 
-    引用段落ごとに個別エントリを作り、**段落の実位置** (PDF 上で 【NNNN】 が
-    実際に出現する rect) にジャンプさせる。テキスト検索で見つからない場合だけ
-    ページ先頭にフォールバック。
+    本願 PDF 側 (services.case_service.create_bookmarked_hongan + apply_toc) と
+    同じスタイルで simple form `[level, title, page]` を使う。set_toc が
+    生成する /XYZ (page top) のままで OK — 本願はこれで動作している。
+    精密 y 計算 / /FitH 変換 はやらない (両者を試したが PDF-XChange 等で挙動が
+    不安定だった)。
 
-    Dest 形式: 4 要素 TOC `[level, title, page_1based, {kind, to, zoom}]`。
-    set_toc は to.y をそのまま PDF-y として /XYZ に書き出すので、
-    呼び側で `pdf_y = page_height - rect.y0` を計算してから渡す。
-    後段の _convert_outlines_to_fith が /XYZ を /FitH に変換する。
+    タイトル形式: `<requirement_id> <judgment> 【<para>】 (p.<page>)` または
+                  `<requirement_id> <judgment> 請求項`
     """
     doc_id = response.get("document_id", "引用文献")
     toc = [[1, f"対比結果: {doc_id}", 1]]
-
-    def _make_dest(pn, rect):
-        page_height = doc[pn].mediabox.height
-        # rect.y0 は screen-coords (top-down) の上端 → PDF-coords (bottom-up) に変換
-        # 少し上にマージンを取って、段落の冒頭が画面上部に来るように +20
-        pdf_y = page_height - max(0.0, rect.y0 - 20)
-        return {"kind": 1, "to": fitz.Point(0, pdf_y), "zoom": 0}
 
     def _emit(label_prefix, judgment, cited_loc):
         paras = _parse_cited_paragraphs(cited_loc)
         emitted = False
         for para_id in paras:
-            label_loc = "請求項" if para_id == "__claims__" else f"【{para_id}】"
-            label = f"{label_prefix} {judgment} {label_loc}"
-            # 段落の実位置を PDF 内テキスト検索で解決
-            pn, rect = _resolve_paragraph_location(
-                doc, para_id, cited_loc, para_page_map, claims_page)
-            if pn is not None and rect is not None:
-                toc.append([2, label, pn + 1, _make_dest(pn, rect)])
+            if para_id == "__claims__":
+                page = claims_page
+                title = f"{label_prefix} {judgment} 請求項 (p.{page})"
             else:
-                # 検索失敗: 段落 ID から推定したページの先頭にフォールバック
-                fallback_page = (claims_page if para_id == "__claims__"
-                                 else para_page_map.get(para_id, 1))
-                toc.append([2, label, fallback_page])
+                page = para_page_map.get(para_id, 1)
+                title = f"{label_prefix} {judgment} 【{para_id}】 (p.{page})"
+            toc.append([2, title, page])
             emitted = True
         if not emitted:
-            toc.append([2, f"{label_prefix} {judgment} {cited_loc or '(不明)'}", 1])
+            # cited_location があれば生のままタイトルに残し、ページは 1 にフォールバック
+            label = cited_loc.strip() if cited_loc else "(不明)"
+            toc.append([2, f"{label_prefix} {judgment} {label}", 1])
 
     for comp in response.get("comparisons", []):
         _emit(comp["requirement_id"], comp["judgment"], comp.get("cited_location", ""))
@@ -325,84 +352,6 @@ def _build_toc(doc, response, para_page_map, claims_page):
     return toc
 
 
-def _convert_outlines_to_fith(doc, top_offset_from_top=36):
-    """set_toc で生成された /XYZ ベースのブックマーク dest を /FitH 形式に書き換える。
-
-    PDF-XChange Editor 等で /XYZ x y 0 (zoom=0) のブックマークを押してもページ移動が
-    起きない報告があり、原 PDF が使っている /FitH 形式に揃えると動作する。
-
-    /XYZ に既に y が指定されている場合 (TOC を 4 要素形式で精密位置指定した場合)
-    はその y をそのまま /FitH に流用。デフォルト top の場合 (3 要素形式) のみ
-    `top_offset_from_top` を使ってフォールバック。
-    """
-    # outline ツリーをトラバースして /A /GoTo /D を /FitH に書き換える
-    catalog_outlines_xref = None
-    try:
-        ol = doc.xref_get_key(doc.pdf_catalog(), "Outlines")
-        if ol and ol[0] == "xref":
-            catalog_outlines_xref = int(ol[1].split()[0])
-    except Exception:
-        return 0
-    if not catalog_outlines_xref:
-        return 0
-
-    pages_height_cache = {}
-    def _page_height_for_xref(page_xref):
-        if page_xref in pages_height_cache:
-            return pages_height_cache[page_xref]
-        for i in range(doc.page_count):
-            if doc[i].xref == page_xref:
-                h = doc[i].mediabox.height
-                pages_height_cache[page_xref] = h
-                return h
-        pages_height_cache[page_xref] = None
-        return None
-
-    converted = 0
-    visited = set()
-    stack = [catalog_outlines_xref]
-    while stack:
-        xref = stack.pop()
-        if xref in visited:
-            continue
-        visited.add(xref)
-        try:
-            obj = doc.xref_object(xref)
-        except Exception:
-            continue
-        # 子要素を辿る
-        for key in ("First", "Last", "Next", "Prev"):
-            try:
-                v = doc.xref_get_key(xref, key)
-                if v and v[0] == "xref":
-                    stack.append(int(v[1].split()[0]))
-            except Exception:
-                pass
-        # /A /D を解析して /FitH に書き換え
-        m = re.search(
-            r'/A\s*<<\s*/S\s*/GoTo\s*/D\s*\[\s*(\d+)\s+0\s+R\s*/XYZ\s+([\d.\-]+)\s+([\d.\-]+)\s+([\d.\-]+)\s*\]\s*>>',
-            obj,
-        )
-        if not m:
-            continue
-        page_xref = int(m.group(1))
-        ph = _page_height_for_xref(page_xref)
-        if ph is None:
-            continue
-        existing_y = float(m.group(3))
-        # 既に y が page_height - 36 ぐらい (set_toc が simple form で生成したデフォルト)
-        # と異なる場合はそれを精密位置とみなして流用。それ以外は top_offset を適用。
-        default_y = ph - float(top_offset_from_top)
-        if abs(existing_y - default_y) > 1.0:
-            # 4 要素形式で精密位置を渡されている → そのまま /FitH に転記
-            fith_y = existing_y
-        else:
-            # 3 要素形式 (デフォルト top of page) → 同じ位置を /FitH で
-            fith_y = default_y
-        new_a = f"<</S/GoTo/D[{page_xref} 0 R/FitH {fith_y:.4f}]>>"
-        try:
-            doc.xref_set_key(xref, "A", new_a)
-            converted += 1
-        except Exception:
-            pass
-    return converted
+# 過去に /XYZ → /FitH 変換 (_convert_outlines_to_fith) と精密 y 計算を試したが、
+# 本願 PDF と同じく simple form の /XYZ (page top) で安定動作するため撤去。
+# 履歴: ce474a3 (精密 y), 34bd00e (/FitH 変換) → 7e306d3, 7908576 経て本パッチで撤回。
