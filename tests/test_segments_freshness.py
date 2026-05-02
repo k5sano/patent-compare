@@ -144,9 +144,86 @@ class TestOrphans:
         assert out["orphans_in_responses"]["DOC2"] == ["1Y"]
 
 
+class TestSubClaims:
+    """response の sub_claims (請求項 2 以降の判定) も seen_in_responses に
+    含めることで「請求項 2-5 が判定なし」と誤検出される現象を防ぐ。"""
+
+    def test_sub_claims_cover_other_claims(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "cases").mkdir()
+        case_id = "2030-subclaim"
+        case_service.create_minimal_case(case_id, title="x", field="cosmetics")
+        case_dir = tmp_path / "cases" / case_id
+
+        # 請求項 1 (1A-1C) と 請求項 2 (2A) と 請求項 3 (3A)
+        segs = [
+            {"claim_number": 1, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "1A", "text": "x"}, {"id": "1B", "text": "x"},
+                          {"id": "1C", "text": "x"}]},
+            {"claim_number": 2, "is_independent": False, "dependencies": [1],
+             "segments": [{"id": "2A", "text": "x"}]},
+            {"claim_number": 3, "is_independent": False, "dependencies": [1],
+             "segments": [{"id": "3A", "text": "x"}]},
+        ]
+        with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False)
+
+        # response: comparisons は 1A/1B/1C のみ、sub_claims で 2/3 をカバー
+        rdir = case_dir / "responses"
+        rdir.mkdir(parents=True, exist_ok=True)
+        with open(rdir / "DOC1.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": "DOC1",
+                "comparisons": [
+                    {"requirement_id": "1A", "judgment": "○"},
+                    {"requirement_id": "1B", "judgment": "△"},
+                    {"requirement_id": "1C", "judgment": "×"},
+                ],
+                "sub_claims": [
+                    {"claim_number": 2, "judgment": "○"},
+                    {"claim_number": 3, "judgment": "×"},
+                ],
+            }, f, ensure_ascii=False)
+
+        out, _ = check_segments_freshness(case_id)
+        # 2A, 3A が sub_claims でカバーされているので missing 0
+        assert out["missing_in_responses"] == []
+        assert out["needs_recompare"] is False
+
+    def test_sub_claims_only_partial_coverage(self, tmp_path, monkeypatch):
+        """sub_claims に無いクレームは missing として残る"""
+        monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "cases").mkdir()
+        case_id = "2030-partial"
+        case_service.create_minimal_case(case_id, title="x", field="cosmetics")
+        case_dir = tmp_path / "cases" / case_id
+        segs = [
+            {"claim_number": 1, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "1A", "text": "x"}]},
+            {"claim_number": 4, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "4A", "text": "x"}]},
+        ]
+        with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False)
+
+        rdir = case_dir / "responses"
+        rdir.mkdir(parents=True, exist_ok=True)
+        with open(rdir / "DOC1.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": "DOC1",
+                "comparisons": [{"requirement_id": "1A", "judgment": "○"}],
+                # sub_claims に 4 が無い
+                "sub_claims": [],
+            }, f, ensure_ascii=False)
+        out, _ = check_segments_freshness(case_id)
+        assert out["missing_in_responses"] == ["4A"]
+        assert out["needs_recompare"] is True
+
+
 class TestStaleByMtime:
     def test_segments_newer_than_response(self, case_with_segments):
-        """segments.json の mtime > response mtime なら stale"""
+        """segments.json の mtime > response mtime なら stale_by_mtime は True だが、
+        ID 整合がとれていれば needs_recompare は False (実害なし)。"""
         case_id, case_dir = case_with_segments
         _make_response(case_dir, "DOC1", ["1A", "1B", "1C"])
         # response の mtime を過去に巻き戻す
@@ -155,10 +232,11 @@ class TestStaleByMtime:
         # segments.json は今 (現在時刻のまま)
         out, _ = check_segments_freshness(case_id)
         assert out["stale_by_mtime"] is True
-        # ただし ID 集合は一致しているので missing/orphan は無し
+        # ID 集合は一致しているので missing/orphan は無し
         assert out["missing_in_responses"] == []
         assert out["orphans_in_responses"] == {}
-        assert out["needs_recompare"] is True  # mtime 不一致だけでも要再対比
+        # mtime 単独では再対比不要 (古い judgment でも ID 一致なら Excel に反映される)
+        assert out["needs_recompare"] is False
 
 
 class TestCaseNotFound:

@@ -196,12 +196,20 @@ def check_segments_freshness(case_id):
     }
 
     current_ids = []
+    # claim_number → そのクレーム配下の segment_id 集合 (sub_claims 判定の解決に使う)
+    segs_by_claim: dict[int, list[str]] = {}
     if seg_path.exists():
         out["segments_mtime"] = seg_path.stat().st_mtime
         try:
             with open(seg_path, "r", encoding="utf-8") as f:
                 segs = json.load(f)
             current_ids = _get_all_segment_ids(segs)
+            for claim in segs or []:
+                cn = claim.get("claim_number")
+                if isinstance(cn, int):
+                    segs_by_claim[cn] = [
+                        s.get("id") for s in (claim.get("segments") or []) if s.get("id")
+                    ]
         except (OSError, json.JSONDecodeError):
             current_ids = []
     out["current_segment_count"] = len(current_ids)
@@ -235,6 +243,14 @@ def check_segments_freshness(case_id):
             continue
         comps = rdata.get("comparisons") or []
         ids = [(c.get("requirement_id") or "").strip() for c in comps if c.get("requirement_id")]
+        # sub_claims (請求項 2 以降) は claim_number ベースで判定が入る。
+        # 該当 claim_number の全 segment_id を「seen 済」として扱う (= 個別分節の判定が
+        # 無くてもクレーム単位で覆われていれば missing 扱いしない)。
+        sub_claims = rdata.get("sub_claims") or []
+        for sc in sub_claims:
+            cn = sc.get("claim_number")
+            if isinstance(cn, int) and cn in segs_by_claim:
+                ids.extend(segs_by_claim[cn])
         seen_in_responses.update(ids)
         # この文献の orphan = 現分節に無い response 側 ID
         orphans = sorted(set(i for i in ids if i and i not in current_set))
@@ -244,9 +260,11 @@ def check_segments_freshness(case_id):
     if current_set:
         out["missing_in_responses"] = sorted(s for s in current_set if s not in seen_in_responses)
     out["orphans_in_responses"] = orphans_per_doc
-    out["needs_recompare"] = (
-        bool(out["missing_in_responses"]) or bool(orphans_per_doc) or out["stale_by_mtime"]
-    )
+    # needs_recompare は実害がある場合のみ True にする。mtime 単独は除外:
+    # 分節 ID が一致していれば古い judgment でも Excel に正しく反映されるため、
+    # 「分節編集が対比より新しい」だけで警告を出すと「再対比したのに警告が消えない」
+    # という UX 不具合になる (ID 整合がとれてれば実害無し)。
+    out["needs_recompare"] = bool(out["missing_in_responses"]) or bool(orphans_per_doc)
     return out, 200
 
 
