@@ -66,7 +66,7 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
     label_count = _draw_segment_labels(doc, response, para_page_map, claims_page)
 
     # 3. ブックマーク (set_toc は /XYZ で書くので、後段で /FitH に書き換える)
-    toc = _build_toc(response, para_page_map, claims_page)
+    toc = _build_toc(doc, response, para_page_map, claims_page)
     doc.set_toc(toc)
     _convert_outlines_to_fith(doc)
 
@@ -255,27 +255,44 @@ def _draw_keyword_highlights(doc, keywords):
     return count
 
 
-def _build_toc(response, para_page_map, claims_page):
+def _build_toc(doc, response, para_page_map, claims_page):
     """ブックマーク（目次）を構築。
 
-    引用段落ごとに個別エントリを作り、該当ページに直接ジャンプ。
-    例: 1A が 【0012】【0015】を引用 → 2つのブックマーク
-        「1A ○ 【0012】」「1A ○ 【0015】」をそれぞれのページに。
+    引用段落ごとに個別エントリを作り、**段落の実位置** (PDF 上で 【NNNN】 が
+    実際に出現する rect) にジャンプさせる。テキスト検索で見つからない場合だけ
+    ページ先頭にフォールバック。
+
+    Dest 形式: 4 要素 TOC `[level, title, page_1based, {kind, to, zoom}]`。
+    set_toc は to.y をそのまま PDF-y として /XYZ に書き出すので、
+    呼び側で `pdf_y = page_height - rect.y0` を計算してから渡す。
+    後段の _convert_outlines_to_fith が /XYZ を /FitH に変換する。
     """
     doc_id = response.get("document_id", "引用文献")
     toc = [[1, f"対比結果: {doc_id}", 1]]
+
+    def _make_dest(pn, rect):
+        page_height = doc[pn].mediabox.height
+        # rect.y0 は screen-coords (top-down) の上端 → PDF-coords (bottom-up) に変換
+        # 少し上にマージンを取って、段落の冒頭が画面上部に来るように +20
+        pdf_y = page_height - max(0.0, rect.y0 - 20)
+        return {"kind": 1, "to": fitz.Point(0, pdf_y), "zoom": 0}
 
     def _emit(label_prefix, judgment, cited_loc):
         paras = _parse_cited_paragraphs(cited_loc)
         emitted = False
         for para_id in paras:
-            if para_id == "__claims__":
-                label = f"{label_prefix} {judgment} 請求項"
-                toc.append([2, label, claims_page])
+            label_loc = "請求項" if para_id == "__claims__" else f"【{para_id}】"
+            label = f"{label_prefix} {judgment} {label_loc}"
+            # 段落の実位置を PDF 内テキスト検索で解決
+            pn, rect = _resolve_paragraph_location(
+                doc, para_id, cited_loc, para_page_map, claims_page)
+            if pn is not None and rect is not None:
+                toc.append([2, label, pn + 1, _make_dest(pn, rect)])
             else:
-                page = para_page_map.get(para_id, 1)
-                label = f"{label_prefix} {judgment} 【{para_id}】"
-                toc.append([2, label, page])
+                # 検索失敗: 段落 ID から推定したページの先頭にフォールバック
+                fallback_page = (claims_page if para_id == "__claims__"
+                                 else para_page_map.get(para_id, 1))
+                toc.append([2, label, fallback_page])
             emitted = True
         if not emitted:
             toc.append([2, f"{label_prefix} {judgment} {cited_loc or '(不明)'}", 1])
@@ -294,7 +311,10 @@ def _convert_outlines_to_fith(doc, top_offset_from_top=36):
 
     PDF-XChange Editor 等で /XYZ x y 0 (zoom=0) のブックマークを押してもページ移動が
     起きない報告があり、原 PDF が使っている /FitH 形式に揃えると動作する。
-    `top_offset_from_top` は画面座標 (top-down) でのオフセット (デフォルト 36)。
+
+    /XYZ に既に y が指定されている場合 (TOC を 4 要素形式で精密位置指定した場合)
+    はその y をそのまま /FitH に流用。デフォルト top の場合 (3 要素形式) のみ
+    `top_offset_from_top` を使ってフォールバック。
     """
     # outline ツリーをトラバースして /A /GoTo /D を /FitH に書き換える
     catalog_outlines_xref = None
@@ -350,8 +370,16 @@ def _convert_outlines_to_fith(doc, top_offset_from_top=36):
         ph = _page_height_for_xref(page_xref)
         if ph is None:
             continue
-        # /FitH の y は元の画面座標 36 を維持 (= PDF 座標で page_height - 36)
-        fith_y = ph - float(top_offset_from_top)
+        existing_y = float(m.group(3))
+        # 既に y が page_height - 36 ぐらい (set_toc が simple form で生成したデフォルト)
+        # と異なる場合はそれを精密位置とみなして流用。それ以外は top_offset を適用。
+        default_y = ph - float(top_offset_from_top)
+        if abs(existing_y - default_y) > 1.0:
+            # 4 要素形式で精密位置を渡されている → そのまま /FitH に転記
+            fith_y = existing_y
+        else:
+            # 3 要素形式 (デフォルト top of page) → 同じ位置を /FitH で
+            fith_y = default_y
         new_a = f"<</S/GoTo/D[{page_xref} 0 R/FitH {fith_y:.4f}]>>"
         try:
             doc.xref_set_key(xref, "A", new_a)
