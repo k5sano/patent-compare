@@ -24,7 +24,7 @@ from services.case_service import get_case_dir, load_case_meta
 
 logger = logging.getLogger(__name__)
 
-_CLAUDE_MODEL = "claude-opus-4-6"
+_CLAUDE_MODEL = "claude-sonnet-4-6"  # chat は応答速度優先で Sonnet
 _VALID_TOPICS = ("hongan", "search", "free")
 
 
@@ -211,7 +211,7 @@ def _read_text(case_id: str, *parts) -> str:
         return ""
 
 
-def _hongan_excerpt(hongan: dict | None, budget: int = 30000) -> str:
+def _hongan_excerpt(hongan: dict | None, budget: int = 15000) -> str:
     if not hongan:
         return "(本願データなし)"
     lines = [
@@ -268,24 +268,27 @@ def _analysis_excerpt(analysis: dict | None) -> str:
     return "\n".join(lines)
 
 
-_SYSTEM_TEMPLATE = """あなたは特許サーチャーの「壁打ち相手」です。{topic_role}
+_SYSTEM_TEMPLATE = """あなたは熟練した特許サーチャーの相棒です。{topic_role}
 
-== 応答スタイル ==
-- 簡潔・具体・建設的に。1 メッセージあたり 200〜600 字目安。
-- 技術用語の定義は本願明細書を根拠に。憶測はしない。
-- 必要なら問い返しで深掘り (「ここの数値範囲の狙いは何ですか?」等)。
+== 応答スタイル (重要) ==
+- **直接的・断定的に答える**。本願コンテキストに書いてある事実は確認なしで使う。
+- **聞き返さずに、まず自分で答える**。本当に曖昧で答えられない時だけ、回答の最後に
+  1 行で問い直す (「念のため: Aですか?Bですか?」)。
+- ユーザーが何かを依頼したら **「やりますか?」と聞かない**。やる前提で、必要な前提を
+  自分で埋めて結論を出す。確認が必要なのは破壊的操作だけ。
+- 簡潔に。1 メッセージあたり 200〜500 字目安。但し論理展開が必要な時は伸ばしてよい。
+- 文献名・段落番号・数値範囲は本願コンテキストに書いてあるならそのまま引用。
+- 提案・推論を出すときは「〜と思われる」より「〜です」を優先 (誤りはユーザーが訂正する)。
+- 「確認させてください」「念のため」「もしよろしければ」は避ける。テンポを上げる。
 
-== データ修正の提案 ==
-ユーザーが Step 2 SUB 3「本願分析」項目や予備調査メモを書き換えると有用な場合は、
-自然文での説明に加えて行末に下記マーカーを入れてください:
+== データ修正の提案 (任意機能) ==
+本願分析項目や予備調査メモを書き換えると有用な時のみ、回答末尾に下記マーカーを入れる:
 
   [[suggest kind=update_analysis_item target=<項目ID> value="<新しい値>"]]
   [[suggest kind=append_understanding_note target=<セクション名> value="<追記内容>"]]
 
-target は本願分析の項目 ID (例: 1.1, 5.4) または 予備調査メモの見出し名。
-value は引用符で囲む (内部のダブルクォートは \\\" でエスケープ)。
-1 メッセージあたり最大 3 件、必要なときだけ。マーカーは UI で「適用」ボタンになり、
-ユーザーが押すまでデータは書き換わりません。
+ユーザーが UI で「適用」ボタンを押すまでデータは書き換わらない。
+1 メッセージあたり最大 3 件。提案不要なら入れなくてよい (むしろ入れない方が良い)。
 
 == 案件コンテキスト ==
 {hongan_block}
