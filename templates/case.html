@@ -559,6 +559,19 @@
         <p>複数ファイル対応</p>
         <input type="file" accept=".pdf" multiple onchange="uploadCitations(this.files)">
       </div>
+
+      <!-- 本願明細書中の【特許文献N】を抽出 → 自動 DL → 登録 -->
+      <div style="margin-top:0.6rem; padding:0.6rem 0.8rem; background:#0f172a; border:1px solid var(--border); border-radius:8px;">
+        <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+          <strong style="color:#cbd5e1; font-size:0.9rem;">📚 本願明細書から引例を抽出</strong>
+          <button class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                  onclick="extractHonganRefs()" title="本願PDFの【特許文献N】を一覧表示">📋 抽出</button>
+          <button class="btn btn-primary" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                  onclick="downloadHonganRefs()" title="抽出した【特許文献N】を Google Patents から DL し『本願引用N』として一括登録">⬇ DL+登録 (全件)</button>
+          <span id="hongan-refs-status" style="font-size:0.78rem; color:var(--text2);"></span>
+        </div>
+        <div id="hongan-refs-list" style="margin-top:0.4rem;"></div>
+      </div>
       <div class="loading-msg" id="loading-citation">
         <div class="spinner"></div>
         <span>PDF解析中...</span>

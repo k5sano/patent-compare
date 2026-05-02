@@ -621,6 +621,22 @@ def compute_related_paragraphs_route(case_id):
     return _svc_response(compute_related_paragraphs(case_id))
 
 
+@app.route("/case/<case_id>/hongan/refs/extract", methods=["GET"])
+def extract_hongan_refs(case_id):
+    """本願明細書から 【特許文献N】 を抽出して一覧を返す"""
+    from services.case_service import extract_hongan_citations
+    return _svc_response(extract_hongan_citations(case_id))
+
+
+@app.route("/case/<case_id>/hongan/refs/download", methods=["POST"])
+def download_hongan_refs(case_id):
+    """抽出した本願引用を Google Patents から DL → citation 登録"""
+    from services.case_service import download_and_register_hongan_refs
+    data = request.get_json(silent=True) or {}
+    ref_nos = data.get("ref_nos")  # null = 全件
+    return _svc_response(download_and_register_hongan_refs(case_id, ref_nos=ref_nos))
+
+
 @app.route("/case/<case_id>/hongan/bookmark", methods=["POST"])
 def bookmark_hongan(case_id):
     """本願PDFにブックマークを付与した新PDFを作成し、PDF-XChangeで開く"""

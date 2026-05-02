@@ -440,6 +440,155 @@ def upload_hongan(case_id, save_path):
     }, 200
 
 
+_HONGAN_REF_HEADER_RE = re.compile(r"【\s*特許文献\s*([0-9０-９]+)\s*】")
+_FW2HW_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+# マーカー直後から探す patent number 形式 (優先順)
+_PATENT_ID_PATTERNS = [
+    re.compile(r"特開[平昭令大明]?\s*\d{1,4}\s*[-－ー−]?\s*\d{1,7}\s*号?"),
+    re.compile(r"特表[平昭令大明]?\s*\d{1,4}\s*[-－ー−]?\s*\d{1,7}\s*号?"),
+    re.compile(r"特許\s*第?\s*\d{4,8}\s*号?"),
+    re.compile(r"再(?:公)?表\s*\d{4}\s*[-－ー−/／]\s*\d{1,7}"),
+    re.compile(r"特願\s*\d{4}\s*[-－ー−]\s*\d{1,7}"),
+    re.compile(r"(?:実登|登録実用新案|実用新案登録)\s*第?\s*\d{4,8}\s*号?"),
+    re.compile(r"WO\s*\d{4}\s*[/／]?\s*\d{4,7}(?:\s*[A-Z]\d?)?"),
+    re.compile(r"(?:JP|US|EP|CN|KR)\s*\d{4,12}\s*[A-Z]?\d?"),
+]
+
+
+def _normalize_patent_id(raw: str) -> str:
+    """全角数字を半角化、不要スペースを除去 (検出後の整形用)"""
+    s = (raw or "").strip().translate(_FW2HW_DIGITS)
+    # 連続スペース・全角スペースを除去
+    s = re.sub(r"[\s　]+", "", s)
+    return s
+
+
+def _extract_patent_id_from_tail(text: str) -> str:
+    """`【特許文献N】` 直後のテキスト断片から特許番号 1 個を抽出。"""
+    if not text:
+        return ""
+    # 全角→半角 (検出だけのため作業コピー)
+    work = text.translate(_FW2HW_DIGITS)
+    # 全角ハイフン揺れ (− ー －) を - に統一
+    work = work.replace("−", "-").replace("ー", "-").replace("－", "-")
+    # 全角スペースを半角に
+    work = work.replace("　", " ")
+    for pat in _PATENT_ID_PATTERNS:
+        m = pat.search(work)
+        if m:
+            return _normalize_patent_id(m.group(0))
+    return ""
+
+
+def extract_hongan_citations(case_id):
+    """本願明細書 (hongan.json の paragraphs) を走査して 【特許文献N】 を抽出する。
+
+    Returns: ({"refs": [{ref_no, patent_id, raw_text, para_id, label}, ...]}, 200)
+    """
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+    case_dir = get_case_dir(case_id)
+    hongan_path = case_dir / "hongan.json"
+    if not hongan_path.exists():
+        return {"error": "本願データがありません"}, 404
+    try:
+        with hongan_path.open(encoding="utf-8") as f:
+            hongan = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return {"error": f"hongan.json 読込失敗: {e}"}, 500
+
+    refs = []
+    seen_pids = set()
+    for para in hongan.get("paragraphs") or []:
+        text = para.get("text", "")
+        for m in _HONGAN_REF_HEADER_RE.finditer(text):
+            ref_no_raw = m.group(1).translate(_FW2HW_DIGITS)
+            try:
+                ref_no = int(ref_no_raw)
+            except ValueError:
+                continue
+            tail = text[m.end():m.end() + 200]
+            cut = tail.find("【")
+            if cut > 0:
+                tail = tail[:cut]
+            patent_id = _extract_patent_id_from_tail(tail)
+            if patent_id and patent_id in seen_pids:
+                continue
+            if patent_id:
+                seen_pids.add(patent_id)
+            refs.append({
+                "ref_no": ref_no,
+                "patent_id": patent_id,
+                "raw_text": tail.strip()[:120],
+                "para_id": para.get("id"),
+                "label": f"本願引用{ref_no}",
+            })
+    refs.sort(key=lambda r: r["ref_no"])
+    return {"refs": refs}, 200
+
+
+def download_and_register_hongan_refs(case_id, ref_nos=None):
+    """extract_hongan_citations で抽出した特許文献を Google Patents から DL し
+    citation として登録する。
+
+    ref_nos=None なら全件、指定があればその ref_no のみ対象。
+
+    Returns: ({"results": [{ref_no, patent_id, success, doc_id?, error?}, ...]}, 200)
+    """
+    extr, code = extract_hongan_citations(case_id)
+    if code != 200:
+        return extr, code
+    refs = extr["refs"]
+    if ref_nos is not None:
+        ref_nos_set = set(int(n) for n in ref_nos)
+        refs = [r for r in refs if r["ref_no"] in ref_nos_set]
+
+    case_dir = get_case_dir(case_id)
+    input_dir = case_dir / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    from modules.patent_downloader import download_patent_pdf
+
+    results = []
+    for r in refs:
+        if not r.get("patent_id"):
+            results.append({
+                "ref_no": r["ref_no"], "patent_id": "",
+                "success": False, "error": "特許番号が抽出できなかった",
+                "raw_text": r.get("raw_text", ""),
+            })
+            continue
+        dl = download_patent_pdf(r["patent_id"], save_dir=input_dir)
+        if not dl.get("success"):
+            results.append({
+                "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+                "success": False,
+                "error": dl.get("error", "DL 失敗"),
+                "google_patents_url": dl.get("google_patents_url", ""),
+            })
+            continue
+        # citation として登録 (role=「本願引用N」、label は doc_id を採用)
+        try:
+            up_res, up_code = upload_citation(
+                case_id, dl["path"], role=r["label"], label="",
+            )
+        except Exception as e:
+            results.append({
+                "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+                "success": False, "error": f"登録失敗: {e}",
+            })
+            continue
+        results.append({
+            "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+            "success": (up_code == 200),
+            "doc_id": up_res.get("doc_id"),
+            "warning": up_res.get("warning"),
+            "error": up_res.get("error") if up_code != 200 else None,
+        })
+    success_count = sum(1 for x in results if x["success"])
+    return {"results": results, "success_count": success_count,
+            "total": len(results)}, 200
+
+
 def upload_citation(case_id, save_path, role="主引例", label=""):
     """引用文献PDFをテキスト抽出して登録"""
     from modules.pdf_extractor import extract_patent_pdf

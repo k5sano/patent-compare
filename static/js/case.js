@@ -318,6 +318,104 @@ async function uploadHongan(file) {
 }
 
 // ===== 引用文献アップロード =====
+// ----------------------------------------------------------------
+// 本願明細書の【特許文献N】を抽出 → DL → 「本願引用N」として登録
+// ----------------------------------------------------------------
+function _hrefStatus(text, type) {
+  const el = document.getElementById('hongan-refs-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = type === 'error' ? '#fca5a5' :
+                   type === 'success' ? '#86efac' : 'var(--text2)';
+}
+
+function _hrefEsc(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function extractHonganRefs() {
+  _hrefStatus('抽出中...');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/refs/extract`);
+    const d = await resp.json();
+    if (!resp.ok || d.error) { _hrefStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    const refs = d.refs || [];
+    const wrap = document.getElementById('hongan-refs-list');
+    if (!refs.length) {
+      wrap.innerHTML = '<p style="color:var(--text2); font-size:0.82rem; margin:0.4rem 0;">【特許文献N】の記載が本願に見当たりません</p>';
+      _hrefStatus('0 件', 'info');
+      return;
+    }
+    const rows = refs.map(r => {
+      const pid = r.patent_id || '<span style="color:#fca5a5;">未抽出</span>';
+      const raw = (r.raw_text || '').slice(0, 60);
+      return `<tr>
+        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">本願引用${r.ref_no}</td>
+        <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${pid}</td>
+        <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(raw)}</td>
+        <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(r.para_id || '')}</td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `
+      <table style="width:100%; font-size:0.82rem; margin-top:0.3rem; border-collapse:collapse;">
+        <thead><tr style="color:#94a3b8;">
+          <th style="text-align:left; padding:0.2rem 0.5rem;">ラベル</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">特許番号</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">前後文</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">段落</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    _hrefStatus(`${refs.length} 件 抽出`, 'success');
+  } catch (e) {
+    _hrefStatus('エラー: ' + e.message, 'error');
+  }
+}
+
+async function downloadHonganRefs() {
+  if (!confirm('本願明細書から抽出した【特許文献N】を Google Patents から DL して「本願引用N」として一括登録します。\n\n10 件で 1〜2 分。続行しますか?')) return;
+  _hrefStatus('⏳ DL 中... (件数により 1〜数分)');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/hongan/refs/download`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({}),  // 全件
+    });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { _hrefStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    const results = d.results || [];
+    const ok = d.success_count || 0;
+    const wrap = document.getElementById('hongan-refs-list');
+    const rows = results.map(r => {
+      const status = r.success
+        ? `<span style="color:#86efac;">✅ 登録 (${r.doc_id || ''})</span>`
+        : `<span style="color:#fca5a5;">❌ ${_hrefEsc(r.error || '失敗')}</span>`;
+      return `<tr>
+        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">本願引用${r.ref_no}</td>
+        <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${_hrefEsc(r.patent_id || '')}</td>
+        <td style="padding:0.2rem 0.5rem;">${status}</td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `
+      <table style="width:100%; font-size:0.82rem; margin-top:0.3rem; border-collapse:collapse;">
+        <thead><tr style="color:#94a3b8;">
+          <th style="text-align:left; padding:0.2rem 0.5rem;">ラベル</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">特許番号</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">結果</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    _hrefStatus(`${ok}/${results.length} 件 成功 (再読み込みでカード反映)`, 'success');
+    // 引文カード一覧の再描画はリロードが手早い
+    setTimeout(() => location.reload(), 1500);
+  } catch (e) {
+    _hrefStatus('エラー: ' + e.message, 'error');
+  }
+}
+
 async function uploadCitations(files) {
   const loading = document.getElementById('loading-citation');
   loading.classList.add('show');
