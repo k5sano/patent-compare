@@ -2606,6 +2606,79 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ===== 対比（複数文献対応） =====
+// 「回答済」バッジが無い文献だけにチェックを付ける (引例追加直後の運用支援)
+function selectUnanswered() {
+  const rows = document.querySelectorAll('.step5-cit-row');
+  let n = 0;
+  rows.forEach(row => {
+    const cb = row.querySelector('.cit-checkbox');
+    if (!cb) return;
+    const hasResponse = !!row.querySelector('.badge.badge-green');
+    cb.checked = !hasResponse;
+    if (cb.checked) n++;
+  });
+  if (typeof updateSelectedCount === 'function') updateSelectedCount();
+  return n;
+}
+
+// 未対比文献だけ自動選択 → 直接実行 → 完了後リロード を一発で
+async function executeCompareUnanswered() {
+  const rows = document.querySelectorAll('.step5-cit-row');
+  const targetIds = [];
+  rows.forEach(row => {
+    const cb = row.querySelector('.cit-checkbox');
+    if (!cb) return;
+    const hasResponse = !!row.querySelector('.badge.badge-green');
+    cb.checked = !hasResponse;
+    if (!hasResponse) targetIds.push(cb.value);
+  });
+  if (typeof updateSelectedCount === 'function') updateSelectedCount();
+  if (targetIds.length === 0) {
+    alert('未対比の文献がありません (全件回答済)');
+    return;
+  }
+  if (!confirm(
+    `未対比の ${targetIds.length} 件で対比を直接実行します。\n\n` +
+    `対象: ${targetIds.join(', ')}\n\n` +
+    `Claude 5〜10 分かかります (件数次第)。続行しますか?\n` +
+    `完了後、結果反映のためページを自動リロードします。`
+  )) return;
+
+  const overlay = document.getElementById('exec-compare-progress');
+  const status = document.getElementById('exec-compare-status');
+  if (overlay) overlay.classList.add('show');
+  if (status) status.textContent = `Claude CLIで未対比 ${targetIds.length} 件を対比分析中...`;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ citation_ids: targetIds })
+    });
+    const data = await resp.json();
+    if (overlay) overlay.classList.remove('show');
+    if (data.error) {
+      alert('対比エラー: ' + data.error);
+      return;
+    }
+    if (data.success) {
+      const docs = (data.saved_docs || []).join(', ');
+      const errMsg = (data.errors && data.errors.length)
+        ? `\n\n警告:\n${data.errors.join('\n')}` : '';
+      alert(
+        `✅ 対比完了 (${data.num_docs || 0} 件)\n` +
+        `保存先: ${docs}${errMsg}\n\n` +
+        `ページをリロードして反映を確認します。`
+      );
+      location.reload();
+    } else {
+      alert('対比に失敗 (パース失敗等):\n' + JSON.stringify(data, null, 2).slice(0, 500));
+    }
+  } catch (e) {
+    if (overlay) overlay.classList.remove('show');
+    alert('通信エラー: ' + e.message);
+  }
+}
+
 function getSelectedCitationIds() {
   return Array.from(document.querySelectorAll('.cit-checkbox:checked')).map(cb => cb.value);
 }

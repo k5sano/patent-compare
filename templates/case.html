@@ -905,6 +905,8 @@
           <span class="step5-toggle-count" id="step5-selected-count"></span>
           <button type="button" class="btn btn-outline btn-sm-tight" onclick="toggleAllCitations(true)">全選択</button>
           <button type="button" class="btn btn-outline btn-sm-tight" onclick="toggleAllCitations(false)">全解除</button>
+          <button type="button" class="btn btn-outline btn-sm-tight" onclick="selectUnanswered()" title="「回答済」バッジが無い文献だけにチェック">未回答のみ選択</button>
+          <button type="button" class="btn btn-execute btn-sm-tight" onclick="executeCompareUnanswered()" title="未対比文献だけ自動選択して直接実行 → 完了後ページリロード">🚀 未対比のみ一括実行</button>
         </div>
         {% endif %}
         <p style="margin-top:0.6rem; font-size:0.82rem; color:var(--text2); line-height:1.5;">
