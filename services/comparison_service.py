@@ -800,22 +800,33 @@ def compare_execute(case_id, citation_ids):
 
     result, errors = parse_response(raw_response, all_segment_ids)
 
+    # case.yaml の citations から既知 ID を取得し、LLM 応答の document_id を
+    # _resolve_doc_id で吸着 (例: 'JP5214138B2' → 'JP5214138')。
+    # これをやらないと 'JP5214138B2.json' で保存されて Step 6 が拾えなくなる
+    # (silent stale と同種の片手落ち)。save_response_multi 側と同じロジック。
+    known_cit_ids = [c.get("id") for c in (meta or {}).get("citations", []) if c.get("id")]
+
     saved_docs = []
+    resolved_log = []  # 解決マッピングのデバッグ情報
     if result:
         per_doc = split_multi_response(result)
         responses_dir = case_dir / "responses"
         responses_dir.mkdir(parents=True, exist_ok=True)
         for doc_id, doc_result in per_doc.items():
-            resp_path = responses_dir / f"{doc_id}.json"
+            resolved = _resolve_doc_id(doc_id, known_cit_ids)
+            if resolved != doc_id:
+                resolved_log.append(f"{doc_id} → {resolved}")
+            resp_path = responses_dir / f"{resolved}.json"
             with open(resp_path, "w", encoding="utf-8") as f:
                 json.dump(doc_result, f, ensure_ascii=False, indent=2)
-            saved_docs.append(doc_id)
+            saved_docs.append(resolved)
 
     return {
         "success": result is not None,
         "errors": errors,
         "saved_docs": saved_docs,
         "num_docs": len(saved_docs),
+        "resolved": resolved_log,  # ID 吸着の履歴 (デバッグ用)
         "char_count": len(prompt_text),
         "response_length": len(raw_response),
     }, 200
