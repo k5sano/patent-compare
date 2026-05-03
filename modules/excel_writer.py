@@ -794,32 +794,37 @@ def _populate_hongan_analysis_sheet(wb, case_meta, hongan_analysis, drop_default
 def _format_analysis_value(value):
     """本願分析の value (string / list / dict / None) を Excel 表示用に変換。
 
-    マーカー <<HL>>...<</HL>> / <<UL>>...<</UL>> は素テキストにして残す
-    (Excel ではフォント色付けが手間なのでそのままラベル代わり)。
+    空値処理:
+      - None / "" / [] / {} → "(未取得)"
+      - dict 内の空値は当該キーをスキップ (キーだけ残らないように)
+      - "_" 始まりの内部キー (_note 等) はスキップ
     """
     if value is None or value == "":
         return "(未取得)"
     if isinstance(value, str):
-        return value
+        return value or "(未取得)"
     if isinstance(value, list):
         if not value:
-            return "(空)"
+            return "(未取得)"
         if all(isinstance(x, str) for x in value):
-            return "、".join(value)
-        # オブジェクトリスト (例: 1.3 IPC/FI の {code, label} 形式)
+            joined = "、".join(x for x in value if x)
+            return joined or "(未取得)"
         lines = []
         for x in value:
             if isinstance(x, dict):
-                code = x.get("code", "")
-                lab = x.get("label", "")
+                code = (x.get("code") or "").strip()
+                lab = (x.get("label") or "").strip()
+                if not code and not lab:
+                    continue
                 lines.append(f"{code}（{lab}）" if lab else code)
-            else:
+            elif x not in (None, ""):
                 lines.append(str(x))
-        return "\n".join(lines)
+        return "\n".join(lines) if lines else "(未取得)"
     if isinstance(value, dict):
-        # 1.3 のような構造化分類
         parts = []
         for k, v in value.items():
+            if isinstance(k, str) and k.startswith("_"):
+                continue  # _note 等の内部メタはスキップ
             if isinstance(v, dict) and "items" in v:
                 # F-term grouped: {theme: {theme_label, items: [{code, label}, ...]}}
                 items = v.get("items") or []
@@ -827,22 +832,34 @@ def _format_analysis_value(value):
                     f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
                     else x.get("code", "")
                     for x in items
+                    if x.get("code") or x.get("label")
                 )
-                tlab = v.get("theme_label", "")
+                if not joined:
+                    continue
+                tlab = (v.get("theme_label") or "").strip()
                 parts.append(f"{k}（{tlab}）: {joined}" if tlab else f"{k}: {joined}")
             elif isinstance(v, list):
+                if not v:
+                    continue
                 if all(isinstance(x, dict) for x in v):
                     formatted = "、".join(
                         f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
                         else x.get("code", "")
                         for x in v
+                        if x.get("code") or x.get("label")
                     )
                 else:
-                    formatted = "、".join(str(x) for x in v)
-                parts.append(f"{k}: {formatted}")
-            else:
+                    formatted = "、".join(str(x) for x in v if x not in (None, ""))
+                if formatted:
+                    parts.append(f"{k}: {formatted}")
+            elif isinstance(v, dict):
+                # ネスト dict は再帰的に整形
+                formatted = _format_analysis_value(v)
+                if formatted and formatted != "(未取得)":
+                    parts.append(f"{k}: {formatted}")
+            elif v not in (None, ""):
                 parts.append(f"{k}: {v}")
-        return "\n".join(parts)
+        return "\n".join(parts) if parts else "(未取得)"
     return str(value)
 
 
