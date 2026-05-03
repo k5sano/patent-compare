@@ -592,6 +592,50 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
             "total": len(results)}, 200
 
 
+def register_citation_by_patent_id(case_id, patent_id, role="主引例"):
+    """公報番号 1 件を Google Patents から DL → 引用文献として登録。
+
+    chat の suggestion (add_citation) からの呼び出しを想定。
+    DL に失敗したら J-PlatPat 固定 URL を返して手動 DL を促す。
+
+    Args:
+        case_id: 案件 ID
+        patent_id: 公報番号 (例: "WO2022/044362", "特開2020-132594", "JP6960743B2")
+        role: 引用文献の役割 (主引例 / 副引例 / 参考 など。任意ラベル)
+
+    Returns:
+        ({success/error/doc_id/...}, status_code)
+    """
+    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
+
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+    pid = (patent_id or "").strip()
+    if not pid:
+        return {"error": "patent_id が空です"}, 400
+
+    case_dir = get_case_dir(case_id)
+    input_dir = case_dir / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+
+    dl = download_patent_pdf(pid, save_dir=input_dir)
+    if not dl.get("success"):
+        return {
+            "error": dl.get("error", "PDF ダウンロードに失敗しました"),
+            "patent_id": pid,
+            "google_patents_url": dl.get("google_patents_url", ""),
+            "jplatpat_url": build_jplatpat_url(pid),
+            "hint": "Google Patents で見つからない場合は J-PlatPat の URL から手動 DL し "
+                    "Step 4 「引用文献を追加」から PDF をアップロードしてください。",
+        }, 502
+
+    up_res, up_code = upload_citation(case_id, dl["path"], role=role, label="")
+    if up_code != 200:
+        return up_res, up_code
+    up_res["patent_id"] = pid
+    return up_res, 200
+
+
 def upload_citation(case_id, save_path, role="主引例", label=""):
     """引用文献PDFをテキスト抽出して登録"""
     from modules.pdf_extractor import extract_patent_pdf

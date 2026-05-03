@@ -217,6 +217,7 @@ function _chatRenderOneMessage(panelId, m) {
 function _chatRenderSuggestion(panelId, s) {
   const kindLabel = s.kind === 'update_analysis_item' ? '本願分析項目を更新'
                   : s.kind === 'append_understanding_note' ? '予備調査メモに追記'
+                  : s.kind === 'add_citation' ? '引用文献に追加'
                   : s.kind;
   const applied = s.applied;
   const valuePreview = (s.value || '').replace(/\n/g, ' ').slice(0, 140);
@@ -294,6 +295,15 @@ async function chatApplySuggestion(panelId, suggestionId) {
     const d = await resp.json();
     if (!resp.ok || d.error) {
       _chatStatus(panelId, d.error || 'HTTP ' + resp.status, 'error');
+      // 引用文献 DL 失敗時の手動 DL 案内
+      if (d.suggestion && d.suggestion.dl_hint) {
+        const h = d.suggestion.dl_hint;
+        const lines = [d.error || '引用文献の自動 DL に失敗しました'];
+        if (h.jplatpat_url) lines.push('J-PlatPat: ' + h.jplatpat_url);
+        if (h.google_patents_url) lines.push('Google Patents: ' + h.google_patents_url);
+        if (h.hint) lines.push(h.hint);
+        alert(lines.join('\n\n'));
+      }
       return;
     }
     if (d.thread) _chatRenderMessages(panelId, d.thread.messages || []);
