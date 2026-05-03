@@ -526,7 +526,9 @@ def get_citation_paragraph(case_id, citation_id, para_id):
 def export_full_report(case_id):
     """完成版対比表 (本願解析 + 対比表 + 進歩性判断 の 3 タブ統合 Excel)"""
     from services.comparison_service import export_full_report
-    return _svc_response(export_full_report(case_id))
+    body = request.get_json(silent=True) or {}
+    selected = body.get("citation_ids")
+    return _svc_response(export_full_report(case_id, selected_citation_ids=selected))
 
 
 @app.route("/case/<case_id>/export/excel", methods=["POST"])

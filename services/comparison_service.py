@@ -554,8 +554,12 @@ def get_response(case_id, citation_id):
     return _decorate_comparison_with_notation(data), 200
 
 
-def export_full_report(case_id):
-    """完成版対比表 (本願解析 / 対比表 / 進歩性判断 の 3 タブ統合) を生成。"""
+def export_full_report(case_id, selected_citation_ids=None):
+    """完成版対比表 (本願解析 / 対比表 / 進歩性判断 の 3 タブ統合) を生成。
+
+    selected_citation_ids: None または空ならすべての回答済文献を対象、
+        指定があればその ID のみ (export_excel と同じ挙動)。
+    """
     from modules.excel_writer import write_full_report
 
     case_dir = get_case_dir(case_id)
@@ -570,7 +574,7 @@ def export_full_report(case_id):
         segs = json.load(f)
 
     # 全 response (回答済) を集める
-    responses = {}
+    all_responses = {}
     resp_dir = case_dir / "responses"
     if resp_dir.exists():
         for p in resp_dir.glob("*.json"):
@@ -578,11 +582,24 @@ def export_full_report(case_id):
                 continue
             try:
                 with p.open(encoding="utf-8") as f:
-                    responses[p.stem] = json.load(f)
+                    all_responses[p.stem] = json.load(f)
             except (OSError, json.JSONDecodeError):
                 continue
-    if not responses:
+    if not all_responses:
         return {"error": "対比結果がありません。Step 5 で対比を実行してください"}, 400
+
+    # 選択フィルタ適用 (export_excel と同じロジック)
+    if selected_citation_ids:
+        sel_set = set(selected_citation_ids)
+        responses = {k: v for k, v in all_responses.items() if k in sel_set}
+        if not responses:
+            return {
+                "error": "選択された文献に回答データがありません。",
+            }, 400
+        meta = dict(meta)
+        meta["citations"] = [c for c in meta.get("citations", []) if c.get("id") in sel_set]
+    else:
+        responses = all_responses
 
     citations_meta = {}
     for cit in meta.get("citations", []):
@@ -614,7 +631,13 @@ def export_full_report(case_id):
         except (OSError, json.JSONDecodeError):
             inventive_step = None
 
-    output_path = case_dir / "output" / f"{meta['case_id']}_完成版対比表.xlsx"
+    # 選択時はファイル名にサフィックス
+    if selected_citation_ids and len(responses) < len(all_responses):
+        fname = f"{meta['case_id']}_完成版対比表_{len(responses)}件.xlsx"
+    else:
+        fname = f"{meta['case_id']}_完成版対比表.xlsx"
+    output_path = case_dir / "output" / fname
+
     write_full_report(
         output_path=str(output_path),
         case_meta=meta,
@@ -628,6 +651,7 @@ def export_full_report(case_id):
         "success": True,
         "filename": output_path.name,
         "path": str(output_path),
+        "num_citations": len(responses),
         "tabs": {
             "本願解析結果": hongan_analysis is not None,
             "対比表": True,

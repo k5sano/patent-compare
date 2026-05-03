@@ -3531,7 +3531,20 @@ async function exportFullReport() {
   };
   setStatus('⏳ 生成中...');
   try {
-    const resp = await fetch(`/case/${CASE_ID}/export/full-report`, { method: 'POST' });
+    // Step 6 の「表示する列」チェックを参照して選択中文献に絞る
+    // (チェックがない or 全件チェックのときは null = 全件)
+    const selected = (typeof _getSelectedCitIdsForExport === 'function')
+      ? _getSelectedCitIdsForExport() : null;
+    if (selected !== null && selected.length === 0) {
+      setStatus('対比表に出力する文献が選択されていません (Step 6 の「表示する列」)', 'error');
+      return;
+    }
+    const body = (selected !== null) ? JSON.stringify({citation_ids: selected}) : JSON.stringify({});
+    const resp = await fetch(`/case/${CASE_ID}/export/full-report`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body,
+    });
     const data = await resp.json();
     if (!resp.ok || data.error) { setStatus(data.error || `HTTP ${resp.status}`, 'error'); return; }
     // ブラウザでダウンロード (output 配下の xlsx を /case/<id>/output/<fname> で取れる経路があるはず)

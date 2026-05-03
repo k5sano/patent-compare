@@ -443,7 +443,6 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
               alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
 
     for i, cit_id in enumerate(citation_order):
-        cit_meta = citations_meta.get(cit_id, {})
         cit_info = None
         for c in case_meta.get("citations", []):
             if c["id"] == cit_id:
@@ -451,7 +450,14 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
                 break
         label = cit_info["label"] if cit_info else cit_id
         role = cit_info.get("role", "") if cit_info else ""
-        header_text = f"{label}\n({cit_id})\n{role}"
+        # response から category_suggestion を読んで X/Y/A バッジを文献名行に付与
+        category = ""
+        resp = responses.get(cit_id, {}) or {}
+        cat_raw = (resp.get("category_suggestion") or "").strip().upper()
+        if cat_raw and cat_raw[:1] in ("X", "Y", "A"):
+            category = cat_raw[:1]
+        prefix = f"[{category}] " if category else ""
+        header_text = f"{prefix}{label}\n({cit_id})\n{role}"
         _set_cell(ws, row, 3 + i, header_text,
                   font=FONT_WHITE, fill=FILL_HEADER,
                   alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
@@ -841,7 +847,16 @@ def _format_analysis_value(value):
 
 
 def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
-    """進歩性判断 (inventive_step.json) をシートに展開。"""
+    """進歩性判断 (inventive_step.json) をシートに展開。
+
+    実構造 (modules.inventive_step_analyzer 由来):
+      - primary_reference: {document_id, selection_reason}
+      - common_features: [{description, segment_ids}]
+      - differences: [{segment_id, description, technical_significance, resolution: {...}}]
+      - advantageous_effects: {claimed_effects, assessment, ...}
+      - overall_assessment: {inventive_step, reasoning, rejection_logic,
+                             vulnerable_points, strengthening_suggestions}
+    """
     ws = _ensure_sheet(wb, "進歩性判断")
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 100
@@ -856,45 +871,97 @@ def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
               font=FONT_TITLE, alignment=ALIGNMENT_LEFT_CENTER)
     row += 2
 
-    if not inventive_step:
+    if not inventive_step or not isinstance(inventive_step, dict):
         _set_cell(ws, row, 1, "(進歩性判断が未実行です。Step 6 で実行してください)",
                   font=FONT_SMALL, alignment=ALIGNMENT_LEFT)
         return
 
-    # 主要キー (順序を固定): main_reference / sub_references / motivation /
-    # blocking_reasons / unexpected_effect / conclusion / 他
-    key_labels = [
-        ("main_reference", "主引例"),
-        ("sub_references", "副引例"),
-        ("common_features", "本願との一致点"),
-        ("differences", "相違点"),
-        ("motivation", "組合せの動機付け"),
-        ("blocking_reasons", "阻害要因"),
-        ("unexpected_effect", "顕著な効果"),
-        ("design_choice", "設計事項該当性"),
-        ("conclusion", "結論 (進歩性の有無)"),
-        ("rationale", "論理付け"),
-        ("notes", "備考"),
-        ("citations", "引用文献"),
-    ]
-    seen_keys = set()
-    for key, label in key_labels:
-        if key not in inventive_step:
-            continue
-        seen_keys.add(key)
-        _write_invstep_row(ws, row, label, inventive_step[key])
+    def _section(label):
+        nonlocal row
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+        _set_cell(ws, row, 1, label, font=FONT_HEADER,
+                  fill=FILL_HEADER_LIGHT, alignment=ALIGNMENT_LEFT_CENTER)
         row += 1
 
-    # 残りのキー (上記以外も雑に出す)
-    for k, v in inventive_step.items():
-        if k in seen_keys:
-            continue
-        _write_invstep_row(ws, row, k, v)
+    def _kv(label, value):
+        nonlocal row
+        if value is None or value == "":
+            return
+        _set_cell(ws, row, 1, label, font=FONT_HEADER,
+                  alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
+        _set_cell(ws, row, 2, str(value), font=FONT_NORMAL,
+                  alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
         row += 1
 
+    # ===== 総合評価 (最重要) =====
+    oa = inventive_step.get("overall_assessment") or {}
+    if oa:
+        _section("【総合評価】")
+        _kv("進歩性", oa.get("inventive_step"))
+        _kv("評価理由", oa.get("reasoning"))
+        _kv("拒絶理由の論理構成", oa.get("rejection_logic"))
+        _kv("反論されやすいポイント", oa.get("vulnerable_points"))
+        _kv("論理強化の提案", oa.get("strengthening_suggestions"))
+        row += 1
 
-def _write_invstep_row(ws, row, label, value):
-    _set_cell(ws, row, 1, label, font=FONT_HEADER,
-              fill=FILL_HEADER_LIGHT, alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
-    _set_cell(ws, row, 2, _format_analysis_value(value), font=FONT_NORMAL,
-              alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+    # ===== 主引用発明 =====
+    pr = inventive_step.get("primary_reference") or {}
+    if pr:
+        _section("【主引用発明】")
+        _kv("文献ID", pr.get("document_id"))
+        _kv("選定理由", pr.get("selection_reason"))
+        row += 1
+
+    # ===== 一致点 =====
+    cf = inventive_step.get("common_features") or []
+    if cf:
+        _section(f"【一致点 ({len(cf)} 件)】")
+        for i, item in enumerate(cf, 1):
+            seg_ids = "、".join(item.get("segment_ids") or []) or "-"
+            _set_cell(ws, row, 1, f"#{i} 構成要件 {seg_ids}", font=FONT_HEADER,
+                      alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
+            _set_cell(ws, row, 2, item.get("description", ""), font=FONT_NORMAL,
+                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+            row += 1
+        row += 1
+
+    # ===== 相違点 =====
+    diffs = inventive_step.get("differences") or []
+    if diffs:
+        _section(f"【相違点 ({len(diffs)} 件)】")
+        for i, d in enumerate(diffs, 1):
+            seg = d.get("segment_id", "")
+            _kv(f"#{i} {seg} 相違点", d.get("description"))
+            _kv(f"#{i} {seg} 技術的意義", d.get("technical_significance"))
+            res = d.get("resolution") or {}
+            if res:
+                _kv(f"#{i} {seg} 解決方法", res.get("method"))
+                _kv(f"#{i} {seg} 副引例", res.get("secondary_reference"))
+                _kv(f"#{i} {seg} 設計変更類型", res.get("design_change_type"))
+                _kv(f"#{i} {seg} 結論", res.get("conclusion"))
+                mot = res.get("motivation") or {}
+                if mot:
+                    _kv(f"#{i} {seg} 動機: 技術分野", mot.get("technical_field"))
+                    _kv(f"#{i} {seg} 動機: 課題の共通性", mot.get("common_problem"))
+                    _kv(f"#{i} {seg} 動機: 機能の共通性", mot.get("common_function"))
+                    _kv(f"#{i} {seg} 動機: 示唆", mot.get("suggestion"))
+                inhibit = res.get("inhibiting_factors") or []
+                if inhibit:
+                    joined = "\n".join(f"・{x}" for x in inhibit)
+                    _kv(f"#{i} {seg} 阻害要因", joined)
+            row += 1
+
+    # ===== 有利な効果 =====
+    ae = inventive_step.get("advantageous_effects") or {}
+    if ae:
+        _section("【有利な効果】")
+        _kv("主張する効果", ae.get("claimed_effects"))
+        _kv("効果の評価", ae.get("assessment"))
+        # bool フラグ群
+        for k, label in [
+            ("is_heterogeneous", "異質効果"),
+            ("is_predictable", "予測可能性"),
+            ("is_remarkably_superior", "顕著な効果"),
+        ]:
+            if k in ae:
+                _kv(label, "あり" if ae[k] else "なし")
