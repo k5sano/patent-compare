@@ -1623,8 +1623,8 @@ function renderGroup(g) {
     </div>
   </div>
 
-  ${segPreviews ? `<div style="margin-bottom:6px; padding:6px 10px; background:var(--bg); border-radius:6px;
-    font-size:0.8rem; color:var(--text2); line-height:1.6;">${segPreviews}</div>` : ''}
+  <div class="kw-seg-preview" style="margin-bottom:6px; padding:6px 10px; background:var(--bg); border-radius:6px;
+    font-size:0.8rem; color:var(--text2); line-height:1.6; ${segPreviews ? '' : 'display:none;'}">${segPreviews}</div>
 
   <div class="kw-seg-picker" data-group="${g.group_id}"
        style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:6px;">
@@ -2035,7 +2035,7 @@ async function toggleSegment(gid, segId, btn) {
   else { g.segment_ids.push(segId); btn.classList.add('selected'); }
   const groupEl = document.getElementById('kw-group-' + gid);
   if (groupEl) {
-    const prev = groupEl.querySelector('[style*="line-height:1.6"]');
+    const prev = groupEl.querySelector('.kw-seg-preview');
     if (prev) {
       const newPrev = g.segment_ids.map(sid => {
         const s = SEG_DATA[sid];
@@ -2044,6 +2044,7 @@ async function toggleSegment(gid, segId, btn) {
           : sid;
       }).join('<br>');
       prev.innerHTML = newPrev;
+      prev.style.display = newPrev ? '' : 'none';
     }
   }
   try {
