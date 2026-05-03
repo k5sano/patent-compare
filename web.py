@@ -170,6 +170,7 @@ def case_detail(case_id):
     hongan = load_json_file(case_id, "hongan.json")
     segments = load_json_file(case_id, "segments.json")
     keywords = load_json_file(case_id, "keywords.json")
+    inventive_step = load_json_file(case_id, "inventive_step.json")  # 進歩性判断結果 (リロード時に復元)
     if keywords:
         # F-term の desc が空なら辞書から補完して表示する (in-place)
         from services.keyword_service import enrich_fterm_groups
@@ -228,7 +229,8 @@ def case_detail(case_id):
                            excel_files=excel_files, case_id=case_id,
                            prelim_fields=prelim_fields,
                            prelim_default_field=prelim_default_field,
-                           freshness=freshness)
+                           freshness=freshness,
+                           inventive_step=inventive_step)
 
 
 def _load_prelim_default():

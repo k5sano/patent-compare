@@ -6583,3 +6583,18 @@ function srRenderKwSnippets() {
     `
     : '';
 }
+
+// 進歩性判断結果を bootstrap (window.CASE_BOOTSTRAP.inventive_step) から復元する。
+// inventive_step.json はサーバー側で永続化されているので、リロード後も表示が消えない。
+document.addEventListener('DOMContentLoaded', () => {
+  const data = (window.CASE_BOOTSTRAP || {}).inventive_step;
+  if (!data) return;
+  const result = document.getElementById('inv-result');
+  if (!result) return;
+  if (typeof renderInventiveStepResult !== 'function') return;
+  // 「保存済」のヘッダ + 結果本体
+  result.innerHTML =
+    '<div style="margin-bottom:0.6rem; padding:0.4rem 0.7rem; background:#0f172a; border:1px solid var(--border); border-radius:6px; font-size:0.82rem; color:#94a3b8;">' +
+    '✅ 保存済の進歩性判断結果を表示中。再実行すると最新で上書きされます。' +
+    '</div>' + renderInventiveStepResult(data);
+});

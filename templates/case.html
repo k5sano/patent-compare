@@ -1129,7 +1129,8 @@ window.CASE_BOOTSTRAP = {
       "category": {{ (cit._category or "") | tojson }} }{% if not loop.last %},{% endif %}
     {% endfor %}
   ],
-  freshness: {{ freshness | tojson if freshness else '{}' }}
+  freshness: {{ freshness | tojson if freshness else '{}' }},
+  inventive_step: {{ inventive_step | tojson if inventive_step else 'null' }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>
