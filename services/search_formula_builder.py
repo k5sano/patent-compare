@@ -7,7 +7,7 @@ LLM 不要なので 1 秒で式が出る。
     AND: ` * `
     OR : `+`
     NOT: `-` (※ キーワード文字列内では半角 - を全角ーに変換)
-    フィールド指定: `語/TX` `コード/FI` `コード/FT` `出願人/PA`
+    フィールド指定: `語/TX` `コード/FI` `コード/FT` `出願人/AP`
 
 戦略レベル:
     L0: 出願人 × FI (× メイン F-term)  — 出願人ポートフォリオ確認 (X 文献はここで出る事も)
@@ -253,7 +253,7 @@ def build_l0(case_id: str, include_main_fterm: bool = False) -> tuple[dict, int]
         }, 400
 
     parts = [
-        field(to_jplatpat_term(applicant), "PA"),
+        field(to_jplatpat_term(applicant), "AP"),
         fi_part,
     ]
     warnings = []
