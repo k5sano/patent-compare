@@ -776,10 +776,15 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
         pages = extract_text_from_pdf(str(pdf_path), ocr_lang='eng')
         full_text = "\n".join(p["text"] for p in pages)
 
-    # 特許番号検出
+    # 特許番号検出 (本筋は書誌事項からテキスト抽出。失敗時のみファイル名 stem へ
+    # フォールバックするが、その場合 _patent_number_source="filename" で印を残し
+    # 下流で「信頼できない」ことを判別可能にする)
     patent_number = detect_patent_number(pages)
-    if patent_number is None:
+    if patent_number:
+        patent_number_source = "bibliographic"
+    else:
         patent_number = pdf_path.stem
+        patent_number_source = "filename"
 
     # 発明の名称検出（テキストで見つからなければOCRにフォールバック）
     patent_title = detect_patent_title(pages, pdf_path=pdf_path, fmt=fmt)
@@ -799,6 +804,7 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
         "file_name": pdf_path.stem,
         "file_type": doc_type,
         "patent_number": patent_number,
+        "_patent_number_source": patent_number_source,
         "patent_title": patent_title,
         "format": fmt,
         "total_pages": len(pages),

@@ -109,6 +109,61 @@ def case_with_data(tmp_path, monkeypatch):
     return case_id, case_dir
 
 
+class TestPubYearExtraction:
+    """書誌事項由来 patent_number から公開年を抽出する。case.yaml.year は使わない。"""
+
+    def _make_case(self, tmp_path, monkeypatch, patent_number, source="bibliographic",
+                   yaml_year="2099"):
+        monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "cases").mkdir()
+        case_id = "2030-yeartest"
+        case_service.create_minimal_case(case_id, title="x", field="cosmetics")
+        case_dir = tmp_path / "cases" / case_id
+        with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "patent_number": patent_number,
+                "_patent_number_source": source,
+                "patent_title": "T", "total_pages": 1,
+                "claims": [], "paragraphs": [], "tables": [],
+            }, f, ensure_ascii=False)
+        # case.yaml に故意に誤った year を入れる (使われないことを確認)
+        meta = case_service.load_case_meta(case_id)
+        meta["year"] = yaml_year
+        case_service.save_case_meta(case_id, meta)
+        # 最低限の templates yaml
+        tdir = tmp_path / "templates"
+        tdir.mkdir(exist_ok=True)
+        (tdir / "hongan_analysis_v0.1.yaml").write_text(
+            "template_id: x\nversion: '0.1'\nsections:\n"
+            "  - id: 2\n    title: 書誌\n    items:\n"
+            "      - id: '2.1'\n        label: 出願番号等\n        type: auto\n        source: meta\n",
+            encoding="utf-8",
+        )
+        return case_id
+
+    def test_year_from_patent_number_not_yaml(self, tmp_path, monkeypatch):
+        case_id = self._make_case(tmp_path, monkeypatch, "特開2024-037328", yaml_year="2027")
+        result, _ = has.run_analysis(case_id, skip_llm=True)
+        item = result["data"]["sections"][0]["items"][0]
+        assert item["value"]["公開年"] == "2024", "case.yaml.year ではなく patent_number から抽出"
+        assert item["value"]["公開番号"] == "特開2024-037328"
+        assert "⚠ 出典" not in item["value"]
+
+    def test_filename_source_adds_warning(self, tmp_path, monkeypatch):
+        """書誌事項抽出失敗 (ファイル名フォールバック) なら警告を出す"""
+        case_id = self._make_case(tmp_path, monkeypatch, "download", source="filename")
+        result, _ = has.run_analysis(case_id, skip_llm=True)
+        item = result["data"]["sections"][0]["items"][0]
+        assert "⚠ 出典" in item["value"]
+        assert item["value"]["公開年"] == ""
+
+    def test_wo_format_year(self, tmp_path, monkeypatch):
+        case_id = self._make_case(tmp_path, monkeypatch, "WO2019/180364A1")
+        result, _ = has.run_analysis(case_id, skip_llm=True)
+        item = result["data"]["sections"][0]["items"][0]
+        assert item["value"]["公開年"] == "2019"
+
+
 class TestLoadTemplate:
     def test_loads_v0_1(self, case_with_data):
         t = has.load_template("v0.1")

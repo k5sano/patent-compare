@@ -224,21 +224,33 @@ def _resolve_auto_item(item: dict, ctx: dict) -> Any:
     segments = ctx.get("segments") or []
 
     if src == "meta":
-        # 2.1 出願番号・出願日・公開番号・公開日 / 2.2 出願人 / 2.3 発明者
+        # 書誌事項由来の patent_number から年を抽出する。
+        # patent_number 自体は modules.pdf_extractor.extract_patent_pdf が PDF
+        # 先頭 3 ページから検出した値で、検出失敗時のみファイル名 stem に
+        # フォールバック (_patent_number_source="filename" で印が残る)。
+        # case.yaml.year は手入力で誤りが多いので不採用。
         if iid == "2.1":
-            return {
-                "公開番号": hongan.get("patent_number") or meta.get("patent_number") or "",
-                "公開年": meta.get("year") or "",
-                "公開月": meta.get("month") or "",
+            pn = (hongan.get("patent_number") or meta.get("patent_number") or "").strip()
+            pn_src = (hongan.get("_patent_number_source") or "").strip()
+            import re as _re
+            y_match = _re.search(r"(\d{4})", pn)
+            pub_year = y_match.group(1) if y_match else ""
+            result = {
+                "公開番号": pn,
+                "公開年": pub_year,
                 "出願番号": meta.get("application_number") or "",
                 "出願日": meta.get("application_date") or "",
                 "公開日": meta.get("publication_date") or "",
-                "_note": "公開番号は PDF 抽出から、その他は J-PlatPat 取得が必要 (未対応分は空欄)",
             }
+            if pn_src == "filename":
+                # 書誌事項抽出失敗 → ファイル名から拾った値を使用中
+                # 信頼性に欠けるので警告を併記 (Excel 出力でも見える)
+                result["⚠ 出典"] = "書誌事項からの自動抽出に失敗。ファイル名から推定"
+            return result
         if iid == "2.2":
-            return {"出願人": meta.get("applicant", "")} or "未取得"
+            return {"出願人": meta.get("applicant", "")}
         if iid == "2.3":
-            return {"発明者": meta.get("inventors", [])} or "未取得"
+            return {"発明者": meta.get("inventors", [])}
         return ""
 
     if src == "jplatpat_classification":
