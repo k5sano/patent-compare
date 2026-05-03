@@ -50,6 +50,46 @@ def _no_cache_for_html(resp):
     return resp
 
 
+# ===== LAN アクセス向け Basic 認証 =====
+# loopback (127.0.0.1 / ::1) からは無認証、それ以外 (LAN/外部) は
+# PATENT_COMPARE_LAN_PASSWORD が設定されていれば Basic Auth 必須。
+# 本体起動は Windows 側 (loopback) で素通し、Mac 等から LAN 越しに開く時だけ
+# パスワードを要求する運用。
+
+import hmac as _hmac
+from base64 import b64decode as _b64decode
+
+_LOOPBACK_IPS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_loopback(remote: str) -> bool:
+    if not remote:
+        return False
+    return remote in _LOOPBACK_IPS or remote.startswith("127.")
+
+
+@app.before_request
+def _require_lan_basic_auth():
+    if not _app_cfg.lan_password:
+        return None  # パスワード未設定 → 認証なしで運用 (従来動作)
+    remote = (request.remote_addr or "").strip()
+    if _is_loopback(remote):
+        return None  # 同一機からは認証不要
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        try:
+            decoded = _b64decode(auth_header[6:]).decode("utf-8", errors="replace")
+            user, _, pw = decoded.partition(":")
+        except Exception:
+            user, pw = "", ""
+        if (_hmac.compare_digest(user, _app_cfg.lan_username)
+                and _hmac.compare_digest(pw, _app_cfg.lan_password)):
+            return None
+    # 401 + WWW-Authenticate でブラウザにパスワードプロンプトを出させる
+    return ("認証が必要です", 401,
+            {"WWW-Authenticate": 'Basic realm="patent-compare"'})
+
+
 # ===== ヘルパー =====
 
 def _svc_response(result, status_code=None):
@@ -1764,7 +1804,14 @@ if __name__ == "__main__":
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
     print("PatentCompare Web GUI")
     print(f"http://{_app_cfg.host}:{_app_cfg.port}  (debug={_app_cfg.debug})")
+    if _app_cfg.host == "0.0.0.0":
+        print(f"   LAN access: 他端末からは http://<このPCのLAN IP>:{_app_cfg.port}")
+        if _app_cfg.lan_password:
+            print(f"   Basic Auth: user='{_app_cfg.lan_username}' / "
+                  f"password set ({len(_app_cfg.lan_password)} chars)")
+        else:
+            print("   !!! WARNING: PATENT_COMPARE_LAN_PASSWORD 未設定 - LAN から無認証アクセス可能")
     if _app_cfg.debug and _app_cfg.host == "0.0.0.0":
-        print("!!! WARNING: debug=True + host=0.0.0.0 はLANからコード実行可能です。")
-        print("!!!          PATENT_COMPARE_HOST=127.0.0.1 もしくは PATENT_COMPARE_DEBUG=0 推奨。")
+        print("!!! CRITICAL: debug=True + host=0.0.0.0 は LAN からコード実行可能。")
+        print("!!!           PATENT_COMPARE_DEBUG=0 にしてください。")
     app.run(debug=_app_cfg.debug, host=_app_cfg.host, port=_app_cfg.port)

@@ -94,16 +94,21 @@ class AppConfig:
     port: int
     debug: bool
     secret_key: str
+    lan_password: str  # LAN アクセス時の Basic Auth パスワード ("" なら認証なし)
+    lan_username: str  # 同上 ユーザー名 (既定: "patent")
 
 
 def get_app_config() -> AppConfig:
     """環境変数から Flask 起動設定を組み立てる。
 
     対応する環境変数:
-        PATENT_COMPARE_HOST       既定: 127.0.0.1
-        PATENT_COMPARE_PORT       既定: 5000
-        PATENT_COMPARE_DEBUG      既定: 0 (false)
-        PATENT_COMPARE_SECRET_KEY 既定: .secret_key ファイル or 自動生成
+        PATENT_COMPARE_HOST          既定: 127.0.0.1
+        PATENT_COMPARE_PORT          既定: 5000
+        PATENT_COMPARE_DEBUG         既定: 0 (false)
+        PATENT_COMPARE_SECRET_KEY    既定: .secret_key ファイル or 自動生成
+        PATENT_COMPARE_LAN_PASSWORD  LAN (loopback 以外) からの Basic Auth パスワード。
+                                     空なら全アクセス無認証 (host=127.0.0.1 ならこれが既定)
+        PATENT_COMPARE_LAN_USERNAME  Basic Auth ユーザー名 (既定: "patent")
     """
     host = os.environ.get("PATENT_COMPARE_HOST", "127.0.0.1").strip() or "127.0.0.1"
     try:
@@ -117,4 +122,8 @@ def get_app_config() -> AppConfig:
     if not secret_key:
         secret_key = _load_or_create_secret_key()
 
-    return AppConfig(host=host, port=port, debug=debug, secret_key=secret_key)
+    lan_password = os.environ.get("PATENT_COMPARE_LAN_PASSWORD", "").strip()
+    lan_username = os.environ.get("PATENT_COMPARE_LAN_USERNAME", "patent").strip() or "patent"
+
+    return AppConfig(host=host, port=port, debug=debug, secret_key=secret_key,
+                     lan_password=lan_password, lan_username=lan_username)
