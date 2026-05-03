@@ -1766,8 +1766,9 @@ function _taCandsRender() {
   const html = groups.map((g, gi) => {
     const segIds = (g.segment_ids || []).join(', ');
     const matched = g.matched_existing_group_id;
+    const matchedLabel = g.matched_existing_group_label || '';
     const targetMsg = matched
-      ? `→ 既存グループ #${matched} に追加`
+      ? `→ 既存グループ #${matched}${matchedLabel ? ` (${_taCandsEsc(matchedLabel)})` : ''} に追加`
       : '→ 新規グループとして作成';
     const cands = (g.candidates || []).map((c, ci) => {
       const id = `ta-cb-${gi}-${ci}`;
@@ -1845,6 +1846,33 @@ async function taCandsApply() {
     alert(`✅ ${d.added} 件のキーワードを追加しました。`);
     document.getElementById('ta-cands-modal').style.display = 'none';
     // キーワードリスト再描画
+    if (typeof kwGroups !== 'undefined' && d.groups) {
+      kwGroups = d.groups;
+      if (typeof renderGroups === 'function') renderGroups();
+    } else {
+      location.reload();
+    }
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
+async function reassignKeywordsToTechAnalysis() {
+  const ok = confirm(
+    'Step 4 element の語彙と既存キーワードを照合し、一致する element のグループへ移動します。\n' +
+    '\n' +
+    '・キーワードは消えません (所属グループだけが整理されます)\n' +
+    '・どの element にも該当しない語は元のグループに残ります\n' +
+    '・F-term (search_codes) は移動しません\n' +
+    '\n' +
+    '実行しますか?'
+  );
+  if (!ok) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/reassign-to-tech-analysis`, { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { alert(d.error || `HTTP ${resp.status}`); return; }
+    alert(`✅ 再配置完了: ${d.moved} 件移動 / ${d.kept_unmatched} 件は該当 element なしで元グループに残しました。`);
     if (typeof kwGroups !== 'undefined' && d.groups) {
       kwGroups = d.groups;
       if (typeof renderGroups === 'function') renderGroups();

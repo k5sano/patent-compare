@@ -422,6 +422,13 @@ def add_from_tech_analysis_route(case_id):
     return _svc_response(add_tech_analysis_keywords(case_id, body.get("selections")))
 
 
+@app.route("/case/<case_id>/keywords/reassign-to-tech-analysis", methods=["POST"])
+def reassign_keywords_to_tech_analysis_route(case_id):
+    """既存キーワードを各 element の terms と一致するグループへ移動 (混入の救済)。"""
+    from services.keyword_service import reassign_keywords_to_tech_analysis
+    return _svc_response(reassign_keywords_to_tech_analysis(case_id))
+
+
 @app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates

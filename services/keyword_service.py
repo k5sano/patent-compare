@@ -203,34 +203,44 @@ def get_tech_analysis_candidates(case_id):
         for g in existing
     }
 
-    def _best_match_group_id(seg_ids):
-        if not seg_ids or not existing:
-            return None
-        s = set(seg_ids)
-        best, best_overlap = None, 0
-        for g in existing:
-            overlap = len(set(g.get("segment_ids") or []) & s)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best = g.get("group_id")
-        return best
+    existing_by_id = {g.get("group_id"): g for g in existing}
+
+    def _match_existing(elem_label, seg_ids):
+        """label 完全一致 → segment_ids 完全一致 → None。
+        segment_ids overlap での部分マッチはしない (複数 element が同じ
+        segment_ids を共有する場合に誤集約するため)。"""
+        label_n = (elem_label or "").strip()
+        if label_n:
+            for g in existing:
+                if (g.get("label") or "").strip() == label_n:
+                    return g
+        s = set(seg_ids or [])
+        if s:
+            for g in existing:
+                if set(g.get("segment_ids") or []) == s:
+                    return g
+        return None
 
     groups = []
     for key, elem in elements.items():
         seg_ids = list(elem.get("segment_ids") or [])
+        elem_label = (elem.get("label") or key).strip()
         cands = _collect_terms_from_element(elem)
-        matched_gid = _best_match_group_id(seg_ids)
+        matched = _match_existing(elem_label, seg_ids)
+        matched_gid = matched.get("group_id") if matched else None
+        matched_label = (matched.get("label") if matched else "") or ""
         # 既存に同名語が既に入っていれば already_added=True にして UI で目印
         existing_terms = existing_terms_per_group.get(matched_gid, set())
         for c in cands:
             c["already_added"] = c["term"] in existing_terms
         groups.append({
             "key": key,
-            "label": (elem.get("label") or key).strip(),
+            "label": elem_label,
             "description": elem.get("description", "").strip(),
             "segment_ids": seg_ids,
             "candidates": cands,
             "matched_existing_group_id": matched_gid,
+            "matched_existing_group_label": matched_label,
         })
     return {"groups": groups}, 200
 
@@ -262,17 +272,21 @@ def add_tech_analysis_keywords(case_id, selections):
     if kw_path is None:
         kw_path = case_dir / "keywords.json"
 
-    def _best_existing(seg_ids):
-        if not seg_ids:
-            return None
-        s = set(seg_ids)
-        best, best_overlap = None, 0
-        for g in existing:
-            overlap = len(set(g.get("segment_ids") or []) & s)
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best = g
-        return best
+    def _best_existing(elem_label, seg_ids):
+        """label 完全一致 → segment_ids 完全一致 → None (新規作成)。
+        部分 overlap マッチは複数 element が segment_ids を共有する場合に
+        誤集約 (B/C/D の語が A のグループへ流入) を起こすため避ける。"""
+        label_n = (elem_label or "").strip()
+        if label_n:
+            for g in existing:
+                if (g.get("label") or "").strip() == label_n:
+                    return g
+        s = set(seg_ids or [])
+        if s:
+            for g in existing:
+                if set(g.get("segment_ids") or []) == s:
+                    return g
+        return None
 
     next_id = max((g.get("group_id", 0) for g in existing), default=0) + 1
     added_count = 0
@@ -283,6 +297,7 @@ def add_tech_analysis_keywords(case_id, selections):
             continue
         elem = elements.get(key) or {}
         seg_ids = list(elem.get("segment_ids") or [])
+        elem_label = (elem.get("label") or key).strip() or f"要素{next_id}"
         # 候補語のメタ (type/source) を再算出して追加用 dict にする
         all_cands = {c["term"]: c for c in _collect_terms_from_element(elem)}
         new_kws = []
@@ -298,12 +313,12 @@ def add_tech_analysis_keywords(case_id, selections):
                 # ユーザーが手動で書き加えた語など
                 new_kws.append({"term": t, "type": "tech_analysis", "source": "tech_analysis"})
 
-        target = _best_existing(seg_ids)
+        target = _best_existing(elem_label, seg_ids)
         if target is None:
             # 新規グループとして追加
             target = {
                 "group_id": next_id,
-                "label": (elem.get("label") or key).strip() or f"要素{next_id}",
+                "label": elem_label,
                 "segment_ids": seg_ids,
                 "keywords": [],
                 "search_codes": {},
@@ -324,6 +339,107 @@ def add_tech_analysis_keywords(case_id, selections):
     return {
         "success": True,
         "added": added_count,
+        "groups": existing,
+    }, 200
+
+
+def reassign_keywords_to_tech_analysis(case_id):
+    """既存の keywords.json を Step 4 element の terms と照合し、
+    各キーワードを **語彙が一致する element のグループ** へ移動する。
+
+    - element ごとに label 一致グループを確保 (なければ新規作成)
+    - 全グループの keywords を集めて、term が含まれる element のグループへ移動
+    - どの element にも含まれない term は元のグループに残す
+    - search_codes (F-term) は移動しない (グループの位置情報なのでそのまま)
+    - 結果としてキーワードは消えず、所属だけが整理される
+    """
+    from services.case_service import get_case_dir as _gcd
+    case_dir = _gcd(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    ta_path = case_dir / "search" / "tech_analysis.json"
+    if not ta_path.exists():
+        return {"error": "Step 4 Stage 1 の技術構造化が未実行です。"}, 400
+    try:
+        with open(ta_path, "r", encoding="utf-8") as f:
+            ta = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"error": f"tech_analysis.json 読み込みエラー: {e}"}, 500
+    elements = ta.get("elements") or {}
+    if not elements:
+        return {"error": "tech_analysis.json に elements がありません"}, 400
+
+    existing, kw_path = _load_keywords(case_id)
+    existing = list(existing or [])
+    if kw_path is None:
+        kw_path = case_dir / "keywords.json"
+
+    # element ラベル -> 候補語の正規化集合 (大文字小文字無視)
+    def _norm(s):
+        return (s or "").strip().lower()
+
+    elem_term_index = []  # [(elem_label, seg_ids, normalized_term_set)]
+    for key, elem in elements.items():
+        elem_label = (elem.get("label") or key).strip() or key
+        seg_ids = list(elem.get("segment_ids") or [])
+        term_set = {_norm(c["term"]) for c in _collect_terms_from_element(elem)}
+        elem_term_index.append((elem_label, seg_ids, term_set))
+
+    # element ごとに「ラベル一致グループ」を確保 (なければ末尾に新規追加)
+    next_id = max((g.get("group_id", 0) for g in existing), default=0) + 1
+    elem_target = {}  # elem_label -> group dict
+    for elem_label, seg_ids, _ in elem_term_index:
+        target = None
+        for g in existing:
+            if (g.get("label") or "").strip() == elem_label:
+                target = g
+                break
+        if target is None:
+            target = {
+                "group_id": next_id,
+                "label": elem_label,
+                "segment_ids": seg_ids,
+                "keywords": [],
+                "search_codes": {},
+            }
+            existing.append(target)
+            next_id += 1
+        elem_target[elem_label] = target
+
+    # 全 keywords を走査し、term が含まれる element の target へ移動
+    moved = 0
+    kept = 0
+    for src in existing:
+        kept_kws = []
+        for kw in list(src.get("keywords") or []):
+            term_n = _norm(kw.get("term"))
+            if not term_n:
+                continue
+            # 一致 element 検索 (最初に見つかったものを採用)
+            dest = None
+            for elem_label, _, term_set in elem_term_index:
+                if term_n in term_set:
+                    dest = elem_target[elem_label]
+                    break
+            if dest is None or dest is src:
+                kept_kws.append(kw)
+                if dest is None:
+                    kept += 1
+            else:
+                # 移動 (重複チェック)
+                dest_terms = {_norm(k.get("term"))
+                              for k in (dest.get("keywords") or [])}
+                if term_n not in dest_terms:
+                    dest.setdefault("keywords", []).append(kw)
+                    moved += 1
+        src["keywords"] = kept_kws
+
+    _save_keywords(kw_path, existing)
+    return {
+        "success": True,
+        "moved": moved,
+        "kept_unmatched": kept,
         "groups": existing,
     }, 200
 

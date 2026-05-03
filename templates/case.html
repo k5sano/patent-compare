@@ -267,6 +267,10 @@
                 title="Step 4 Stage 1 の技術構造化から候補語を一覧表示し、選んだものだけ既存グループに追加します (全消ししない)">
           📋 Step 4 候補から追加
         </button>
+        <button class="btn btn-outline" onclick="reassignKeywordsToTechAnalysis()"
+                title="既存キーワードを Step 4 element の語彙と照合し、一致する element のグループへ移動 (混入を整理)">
+          🔁 Step 4 構造に再配置
+        </button>
         <button class="btn btn-outline" onclick="addNewGroup(event)">+ グループ追加</button>
         <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
         <div class="loading-msg" id="loading-suggest" style="margin:0;">
