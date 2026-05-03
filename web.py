@@ -443,6 +443,22 @@ def search_hints_apply_route(case_id):
     return _svc_response(apply_search_hints_to_keywords(case_id))
 
 
+@app.route("/case/<case_id>/search-formula/build", methods=["GET"])
+def search_formula_build_route(case_id):
+    """検索式自動生成 (Phase C)。
+
+    Query params:
+        level: 'l0' (default)
+        include_main_fterm: '1' なら L0 にメイン F-term も AND 結合
+    """
+    from services.search_formula_builder import build_l0
+    level = (request.args.get("level") or "l0").lower()
+    include_ft = request.args.get("include_main_fterm") in ("1", "true", "yes")
+    if level == "l0":
+        return _svc_response(build_l0(case_id, include_main_fterm=include_ft))
+    return _svc_response(({"error": f"未対応の level: {level}"}, 400))
+
+
 @app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates

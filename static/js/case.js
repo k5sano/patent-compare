@@ -6584,6 +6584,33 @@ function _kwSanitizeTerm(term) {
 //   - 全グループは `*` (AND) で結合
 //   - FI/Fterm コードもハイライト中のものだけを末尾に AND
 //   - キーワード内の '-' は J-PlatPat の NOT と解釈されるため全角 '－' に置換
+async function srBuildL0(includeMainFterm) {
+  const url = `/case/${CASE_ID}/search-formula/build?level=l0&include_main_fterm=${includeMainFterm ? '1' : '0'}`;
+  try {
+    const resp = await fetch(url);
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      alert(d.error || `HTTP ${resp.status}`);
+      return;
+    }
+    const ta = document.getElementById('sr-formula');
+    if (!ta) return;
+    if (ta.value && ta.value.trim() && !confirm('現在の検索式を上書きします。よろしいですか?')) return;
+    ta.value = d.formula || '';
+    if (typeof srOnFormulaChange === 'function') srOnFormulaChange();
+    let msg = `✅ ${d.name} を生成しました\n\n出願人: ${d.components.applicant}\nFI: ${d.components.fi_codes.length} 件`;
+    if (includeMainFterm) {
+      msg += `\nメイン F-term: ${d.components.main_fterm_codes.length} 件`;
+    }
+    if (d.warnings && d.warnings.length) {
+      msg += `\n\n⚠ ${d.warnings.join('\n⚠ ')}`;
+    }
+    alert(msg);
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 async function srBuildFormulaFromKeywords() {
   const groups = kwGroups || [];
   if (groups.length === 0) {

@@ -690,6 +690,9 @@
           <button class="sr-tool-btn" onclick="srAutoFixFormula()" title="NOT演算子の / → -、キーワード括弧に /TX を付与、全角記号→半角 など">🔧 式を自動修正</button>
           <button class="sr-tool-btn" onclick="srToggleKwHelper()" title="キーワード辞書から挿入">＋ 語を挿入</button>
           <button class="sr-tool-btn sr-tool-build" onclick="srBuildFormulaFromKeywords()" title="Step 3 のキーワードグループから検索式を自動組立 (各グループ AND, グループ内 OR, 末尾に FI/Fターム)">🛠 KW から式を組立</button>
+          <span class="sr-tool-sep"></span>
+          <button class="sr-tool-btn sr-tool-build" onclick="srBuildL0(false)" title="L0: 出願人 × FI。出願人ポートフォリオから X 文献を狙う最初の式 (狭い)">🏢 L0 出願人×FI</button>
+          <button class="sr-tool-btn sr-tool-build" onclick="srBuildL0(true)" title="L0: 出願人 × FI × 第一請求項メイン構成の F-term。さらに絞り込んだ式">🏢 L0 +メインF</button>
           <span id="sr-formula-valid" class="sr-formula-valid"></span>
         </div>
 
