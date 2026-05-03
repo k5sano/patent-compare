@@ -520,6 +520,13 @@ def get_citation_paragraph(case_id, citation_id, para_id):
     return jsonify({"error": f"段落【{para_id}】は {citation_id} に存在しません"}), 404
 
 
+@app.route("/case/<case_id>/export/full-report", methods=["POST"])
+def export_full_report(case_id):
+    """完成版対比表 (本願解析 + 対比表 + 進歩性判断 の 3 タブ統合 Excel)"""
+    from services.comparison_service import export_full_report
+    return _svc_response(export_full_report(case_id))
+
+
 @app.route("/case/<case_id>/export/excel", methods=["POST"])
 def export_excel(case_id):
     from services.comparison_service import export_excel

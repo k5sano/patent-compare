@@ -1074,6 +1074,20 @@
 
       <!-- 結果表示 -->
       <div id="inv-result" style="margin-top:1rem;"></div>
+
+      <!-- 完成版対比表 (3 タブ統合) -->
+      <div style="margin-top:1.2rem; padding-top:1rem; border-top:1px dashed var(--border);">
+        <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.4rem;">
+          <strong>📊 完成版対比表ダウンロード</strong>: 本願解析結果 + 対比表 + 進歩性判断 を 1 つの Excel (3 タブ) にまとめてダウンロードします。
+          いずれも未実行の項目は空欄/省略されます。
+        </p>
+        <div class="btn-row">
+          <button class="btn btn-execute" onclick="exportFullReport()" title="本願解析結果 + 対比表 + 進歩性判断 を 3 タブ Excel で出力">
+            📊 完成版対比表をダウンロード
+          </button>
+          <span id="full-report-status" style="color:var(--text2); font-size:0.82rem;"></span>
+        </div>
+      </div>
     </div>
 
     <!-- 案件削除 -->

@@ -3520,6 +3520,38 @@ function _getSelectedCitIdsForExport() {
   return ids;
 }
 
+// 完成版対比表 (本願解析結果 + 対比表 + 進歩性判断 の 3 タブ統合 Excel) を生成 + DL
+async function exportFullReport() {
+  const status = document.getElementById('full-report-status');
+  const setStatus = (text, type) => {
+    if (!status) return;
+    status.textContent = text || '';
+    status.style.color = type === 'error' ? '#fca5a5'
+                       : type === 'success' ? '#86efac' : 'var(--text2)';
+  };
+  setStatus('⏳ 生成中...');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/export/full-report`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || data.error) { setStatus(data.error || `HTTP ${resp.status}`, 'error'); return; }
+    // ブラウザでダウンロード (output 配下の xlsx を /case/<id>/output/<fname> で取れる経路があるはず)
+    // 既存の excel_files リスト (Step 6) と同じ場所に出るので、直接 a タグでアクセス。
+    const url = `/case/${CASE_ID}/download/${encodeURIComponent(data.filename)}`;
+    const tabs = data.tabs || {};
+    const note = `タブ: 本願解析${tabs['本願解析結果'] ? '✓' : '×(未実行)'} / 対比表✓ / 進歩性判断${tabs['進歩性判断'] ? '✓' : '×(未実行)'}`;
+    setStatus(`✅ 生成完了 (${data.filename}) — ${note}`, 'success');
+    // 自動 DL
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = data.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) {
+    setStatus('通信エラー: ' + e.message, 'error');
+  }
+}
+
 async function exportExcel() {
   const loading = document.getElementById('loading-export');
   loading.classList.add('show');

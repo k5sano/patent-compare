@@ -80,7 +80,7 @@ def _set_cell(ws, row, col, value, font=None, fill=None, alignment=None, border=
 
 
 def write_comparison_table(output_path, case_meta, segments, responses, citations_meta=None):
-    """対比表Excelを生成
+    """対比表Excelを生成 (1 シートのみ)
 
     Parameters:
         output_path: 出力ファイルパス
@@ -90,8 +90,24 @@ def write_comparison_table(output_path, case_meta, segments, responses, citation
         citations_meta: {citation_id: citation_json} のdict（任意）
     """
     wb = Workbook()
-    ws = wb.active
-    ws.title = "対比表"
+    _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta,
+                                 main_sheet_title="対比表", drop_default=True)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+
+def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta=None,
+                                 main_sheet_title="対比表", drop_default=False):
+    """対比表 + ペースト用シートを wb に追加する (内部用)。
+
+    drop_default=True なら wb.active が空のデフォルト Sheet (新規 Workbook 直後)
+    の場合これを使い回す。False なら create_sheet で新シートを追加する。
+    """
+    if drop_default and len(wb.sheetnames) == 1 and wb.active.max_row == 1 and wb.active.max_column == 1:
+        ws = wb.active
+        ws.title = main_sheet_title
+    else:
+        ws = wb.create_sheet(main_sheet_title)
 
     citations_meta = citations_meta or {}
     case_id = case_meta.get("case_id", "")
@@ -203,12 +219,6 @@ def write_comparison_table(output_path, case_meta, segments, responses, citation
 
     # ===== シート2: ペースト用（既存対比表への貼付用、コンパクト記法） =====
     _write_paste_sheet(wb, segments, citation_order, responses, citations_meta, case_meta)
-
-    # 出力ディレクトリを作成
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
-    # 保存
-    wb.save(output_path)
 
 
 def _strip_comment_memo_from_loc(raw):
@@ -696,3 +706,195 @@ def _find_sub_claim(resp, claim_number):
         if sc.get("claim_number") == claim_number:
             return sc
     return None
+
+
+# ============================================================
+# 完成版対比表 (3 タブ統合) writer
+# ============================================================
+
+def write_full_report(output_path, case_meta, segments, responses,
+                      citations_meta=None, hongan_analysis=None, inventive_step=None):
+    """3 タブ統合 Excel を生成。
+
+    タブ構成:
+        - 本願解析結果   (hongan_analysis_v0.1.yaml の構造化結果)
+        - 対比表         (write_comparison_table と同じ + ペースト用シート)
+        - 進歩性判断     (inventive_step.json のパース結果)
+    """
+    wb = Workbook()
+    # デフォルト Sheet を本願解析結果に転用 (空なら使い回し)
+    _populate_hongan_analysis_sheet(wb, case_meta, hongan_analysis, drop_default=True)
+    _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta,
+                                 main_sheet_title="対比表", drop_default=False)
+    _populate_inventive_step_sheet(wb, case_meta, inventive_step)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+
+def _ensure_sheet(wb, title, drop_default=False):
+    """新規シート作成 (drop_default なら 空のデフォルト Sheet を使い回す)。"""
+    if drop_default and len(wb.sheetnames) == 1 and wb.active.max_row == 1 and wb.active.max_column == 1:
+        ws = wb.active
+        ws.title = title
+        return ws
+    return wb.create_sheet(title)
+
+
+def _populate_hongan_analysis_sheet(wb, case_meta, hongan_analysis, drop_default=False):
+    """本願解析結果 (analysis/hongan_analysis.json) をシートに展開。"""
+    ws = _ensure_sheet(wb, "本願解析結果", drop_default=drop_default)
+    ws.column_dimensions["A"].width = 6
+    ws.column_dimensions["B"].width = 32
+    ws.column_dimensions["C"].width = 90
+
+    case_id = case_meta.get("case_id", "")
+    title = case_meta.get("patent_title") or case_meta.get("title", "")
+    pn = case_meta.get("patent_number", case_id)
+
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+    _set_cell(ws, row, 1, f"{pn}　{title}　本願解析結果",
+              font=FONT_TITLE, alignment=ALIGNMENT_LEFT_CENTER)
+    row += 1
+
+    if not hongan_analysis or not hongan_analysis.get("sections"):
+        _set_cell(ws, row, 1, "(本願分析が未実行です。Step 2 SUB 3 で実行してください)",
+                  font=FONT_SMALL, alignment=ALIGNMENT_LEFT)
+        return
+
+    for sec in hongan_analysis.get("sections") or []:
+        # セクション見出し
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        _set_cell(ws, row, 1, f"{sec.get('id')} {sec.get('title', '')}",
+                  font=FONT_HEADER, fill=FILL_HEADER_LIGHT, alignment=ALIGNMENT_LEFT_CENTER)
+        row += 1
+
+        for it in sec.get("items") or []:
+            iid = it.get("id", "")
+            label = it.get("label", "")
+            value = it.get("value")
+            value_text = _format_analysis_value(value)
+            _set_cell(ws, row, 1, iid, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+            _set_cell(ws, row, 2, label, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+            _set_cell(ws, row, 3, value_text, font=FONT_NORMAL,
+                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+            row += 1
+        row += 1
+
+
+def _format_analysis_value(value):
+    """本願分析の value (string / list / dict / None) を Excel 表示用に変換。
+
+    マーカー <<HL>>...<</HL>> / <<UL>>...<</UL>> は素テキストにして残す
+    (Excel ではフォント色付けが手間なのでそのままラベル代わり)。
+    """
+    if value is None or value == "":
+        return "(未取得)"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if not value:
+            return "(空)"
+        if all(isinstance(x, str) for x in value):
+            return "、".join(value)
+        # オブジェクトリスト (例: 1.3 IPC/FI の {code, label} 形式)
+        lines = []
+        for x in value:
+            if isinstance(x, dict):
+                code = x.get("code", "")
+                lab = x.get("label", "")
+                lines.append(f"{code}（{lab}）" if lab else code)
+            else:
+                lines.append(str(x))
+        return "\n".join(lines)
+    if isinstance(value, dict):
+        # 1.3 のような構造化分類
+        parts = []
+        for k, v in value.items():
+            if isinstance(v, dict) and "items" in v:
+                # F-term grouped: {theme: {theme_label, items: [{code, label}, ...]}}
+                items = v.get("items") or []
+                joined = "、".join(
+                    f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
+                    else x.get("code", "")
+                    for x in items
+                )
+                tlab = v.get("theme_label", "")
+                parts.append(f"{k}（{tlab}）: {joined}" if tlab else f"{k}: {joined}")
+            elif isinstance(v, list):
+                if all(isinstance(x, dict) for x in v):
+                    formatted = "、".join(
+                        f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
+                        else x.get("code", "")
+                        for x in v
+                    )
+                else:
+                    formatted = "、".join(str(x) for x in v)
+                parts.append(f"{k}: {formatted}")
+            else:
+                parts.append(f"{k}: {v}")
+        return "\n".join(parts)
+    return str(value)
+
+
+def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
+    """進歩性判断 (inventive_step.json) をシートに展開。"""
+    ws = _ensure_sheet(wb, "進歩性判断")
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 100
+
+    case_id = case_meta.get("case_id", "")
+    title = case_meta.get("patent_title") or case_meta.get("title", "")
+    pn = case_meta.get("patent_number", case_id)
+
+    row = 1
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2)
+    _set_cell(ws, row, 1, f"{pn}　{title}　進歩性判断 (JPO 審査基準ベース)",
+              font=FONT_TITLE, alignment=ALIGNMENT_LEFT_CENTER)
+    row += 2
+
+    if not inventive_step:
+        _set_cell(ws, row, 1, "(進歩性判断が未実行です。Step 6 で実行してください)",
+                  font=FONT_SMALL, alignment=ALIGNMENT_LEFT)
+        return
+
+    # 主要キー (順序を固定): main_reference / sub_references / motivation /
+    # blocking_reasons / unexpected_effect / conclusion / 他
+    key_labels = [
+        ("main_reference", "主引例"),
+        ("sub_references", "副引例"),
+        ("common_features", "本願との一致点"),
+        ("differences", "相違点"),
+        ("motivation", "組合せの動機付け"),
+        ("blocking_reasons", "阻害要因"),
+        ("unexpected_effect", "顕著な効果"),
+        ("design_choice", "設計事項該当性"),
+        ("conclusion", "結論 (進歩性の有無)"),
+        ("rationale", "論理付け"),
+        ("notes", "備考"),
+        ("citations", "引用文献"),
+    ]
+    seen_keys = set()
+    for key, label in key_labels:
+        if key not in inventive_step:
+            continue
+        seen_keys.add(key)
+        _write_invstep_row(ws, row, label, inventive_step[key])
+        row += 1
+
+    # 残りのキー (上記以外も雑に出す)
+    for k, v in inventive_step.items():
+        if k in seen_keys:
+            continue
+        _write_invstep_row(ws, row, k, v)
+        row += 1
+
+
+def _write_invstep_row(ws, row, label, value):
+    _set_cell(ws, row, 1, label, font=FONT_HEADER,
+              fill=FILL_HEADER_LIGHT, alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
+    _set_cell(ws, row, 2, _format_analysis_value(value), font=FONT_NORMAL,
+              alignment=ALIGNMENT_LEFT, border=THIN_BORDER)

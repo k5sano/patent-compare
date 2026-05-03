@@ -554,6 +554,88 @@ def get_response(case_id, citation_id):
     return _decorate_comparison_with_notation(data), 200
 
 
+def export_full_report(case_id):
+    """完成版対比表 (本願解析 / 対比表 / 進歩性判断 の 3 タブ統合) を生成。"""
+    from modules.excel_writer import write_full_report
+
+    case_dir = get_case_dir(case_id)
+    meta = load_case_meta(case_id)
+    if not meta:
+        return {"error": "案件が見つかりません"}, 404
+
+    segs_path = case_dir / "segments.json"
+    if not segs_path.exists():
+        return {"error": "分節データがありません"}, 400
+    with open(segs_path, "r", encoding="utf-8") as f:
+        segs = json.load(f)
+
+    # 全 response (回答済) を集める
+    responses = {}
+    resp_dir = case_dir / "responses"
+    if resp_dir.exists():
+        for p in resp_dir.glob("*.json"):
+            if p.name.startswith("_"):
+                continue
+            try:
+                with p.open(encoding="utf-8") as f:
+                    responses[p.stem] = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+    if not responses:
+        return {"error": "対比結果がありません。Step 5 で対比を実行してください"}, 400
+
+    citations_meta = {}
+    for cit in meta.get("citations", []):
+        cit_path = case_dir / "citations" / f"{cit['id']}.json"
+        if cit_path.exists():
+            try:
+                with cit_path.open(encoding="utf-8") as f:
+                    citations_meta[cit["id"]] = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    # 本願分析結果 (任意 — なくても出力)
+    hongan_analysis = None
+    han_path = case_dir / "analysis" / "hongan_analysis.json"
+    if han_path.exists():
+        try:
+            with han_path.open(encoding="utf-8") as f:
+                hongan_analysis = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            hongan_analysis = None
+
+    # 進歩性判断結果 (任意)
+    inventive_step = None
+    inv_path = case_dir / "inventive_step.json"
+    if inv_path.exists():
+        try:
+            with inv_path.open(encoding="utf-8") as f:
+                inventive_step = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            inventive_step = None
+
+    output_path = case_dir / "output" / f"{meta['case_id']}_完成版対比表.xlsx"
+    write_full_report(
+        output_path=str(output_path),
+        case_meta=meta,
+        segments=segs,
+        responses=responses,
+        citations_meta=citations_meta,
+        hongan_analysis=hongan_analysis,
+        inventive_step=inventive_step,
+    )
+    return {
+        "success": True,
+        "filename": output_path.name,
+        "path": str(output_path),
+        "tabs": {
+            "本願解析結果": hongan_analysis is not None,
+            "対比表": True,
+            "進歩性判断": inventive_step is not None,
+        },
+    }, 200
+
+
 def export_excel(case_id, selected_citation_ids=None):
     """Excel 対比表を出力。
 
