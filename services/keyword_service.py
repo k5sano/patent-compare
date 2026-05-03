@@ -106,6 +106,228 @@ def edit_keyword(case_id, group_id, old_term, new_term):
     return {"success": True}, 200
 
 
+def _collect_terms_from_element(elem: dict) -> list[dict]:
+    """tech_analysis.json の要素から「候補語」リストを取り出す。
+
+    実フォーマット (Step 4 Stage 1 出力) は terms_ja / terms_en が主体。
+    旧フォーマット互換 (claim_terms / definition_terms / example_terms /
+    synonyms.ja / synonyms.en) も併せて拾う。
+    """
+    out = []
+    seen = set()
+
+    def _add(term, type_, source):
+        t = (term or "").strip()
+        if not t or t in seen:
+            return
+        seen.add(t)
+        out.append({"term": t, "type": type_, "source": source})
+
+    # 新フォーマット
+    for t in (elem.get("terms_ja") or []):
+        _add(t if isinstance(t, str) else (t.get("term") if isinstance(t, dict) else ""),
+             "和語", "tech_analysis")
+    for t in (elem.get("terms_en") or []):
+        _add(t if isinstance(t, str) else (t.get("term") if isinstance(t, dict) else ""),
+             "英語", "tech_analysis")
+    # 旧フォーマット互換
+    for t in (elem.get("claim_terms") or []):
+        _add(t, "請求項由来", "claim")
+    for d in (elem.get("definition_terms") or []):
+        if isinstance(d, dict):
+            _add(d.get("term", ""), d.get("type") or "定義",
+                 f"定義 段落{d.get('para', '')}")
+        elif isinstance(d, str):
+            _add(d, "定義", "定義")
+    for d in (elem.get("example_terms") or []):
+        if isinstance(d, dict):
+            _add(d.get("term", ""), "実施例由来",
+                 f"実施例 段落{d.get('para', '')}")
+        elif isinstance(d, str):
+            _add(d, "実施例由来", "実施例")
+    syn = elem.get("synonyms") or {}
+    for t in (syn.get("ja") or []):
+        _add(t, "同義語(和)", "synonym_ja")
+    for t in (syn.get("en") or []):
+        _add(t, "同義語(英)", "synonym_en")
+
+    return out
+
+
+def get_tech_analysis_candidates(case_id):
+    """Step 4 Stage 1 の tech_analysis.json から、element ごとの候補語一覧を返す。
+
+    Returns:
+        {"groups": [
+            {
+              "key": "A_product_form",        # element のキー (内部)
+              "label": "製品形態・用途",
+              "description": "...",
+              "segment_ids": ["1A","1K"],
+              "candidates": [{"term", "type", "source"}, ...],
+              "matched_existing_group_id": 3   # 既存 keywords.json で
+                                               # segment_ids 重なり最大のグループ
+                                               # (None なら新規追加対象)
+            },
+            ...
+        ]}
+    """
+    from services.case_service import get_case_dir as _gcd
+    case_dir = _gcd(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    ta_path = case_dir / "search" / "tech_analysis.json"
+    if not ta_path.exists():
+        return {
+            "error": "Step 4 Stage 1 の技術構造化が未実行です。"
+                     "先に Step 4 → Stage 1 を完了してください。",
+        }, 400
+    try:
+        with open(ta_path, "r", encoding="utf-8") as f:
+            ta = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"error": f"tech_analysis.json 読み込みエラー: {e}"}, 500
+
+    elements = ta.get("elements") or {}
+    if not elements:
+        return {"error": "tech_analysis.json に elements がありません"}, 400
+
+    existing, _ = _load_keywords(case_id)
+    existing = existing or []
+    existing_terms_per_group = {
+        g.get("group_id"): {
+            (kw.get("term") or "").strip()
+            for kw in (g.get("keywords") or [])
+        }
+        for g in existing
+    }
+
+    def _best_match_group_id(seg_ids):
+        if not seg_ids or not existing:
+            return None
+        s = set(seg_ids)
+        best, best_overlap = None, 0
+        for g in existing:
+            overlap = len(set(g.get("segment_ids") or []) & s)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = g.get("group_id")
+        return best
+
+    groups = []
+    for key, elem in elements.items():
+        seg_ids = list(elem.get("segment_ids") or [])
+        cands = _collect_terms_from_element(elem)
+        matched_gid = _best_match_group_id(seg_ids)
+        # 既存に同名語が既に入っていれば already_added=True にして UI で目印
+        existing_terms = existing_terms_per_group.get(matched_gid, set())
+        for c in cands:
+            c["already_added"] = c["term"] in existing_terms
+        groups.append({
+            "key": key,
+            "label": (elem.get("label") or key).strip(),
+            "description": elem.get("description", "").strip(),
+            "segment_ids": seg_ids,
+            "candidates": cands,
+            "matched_existing_group_id": matched_gid,
+        })
+    return {"groups": groups}, 200
+
+
+def add_tech_analysis_keywords(case_id, selections):
+    """get_tech_analysis_candidates の結果からユーザーが選んだ語を追加する。
+
+    selections: [{"key": "A_product_form", "terms": ["term1", "term2"]}, ...]
+    各要素は対応する既存グループ (segment_ids 重なり最大) に追記。
+    既存グループが無ければ新規グループを作成。
+    """
+    if not selections:
+        return {"error": "選択が空です"}, 400
+
+    from services.case_service import get_case_dir as _gcd
+    case_dir = _gcd(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    ta_path = case_dir / "search" / "tech_analysis.json"
+    if not ta_path.exists():
+        return {"error": "tech_analysis.json がありません"}, 400
+    with open(ta_path, "r", encoding="utf-8") as f:
+        ta = json.load(f)
+    elements = ta.get("elements") or {}
+
+    existing, kw_path = _load_keywords(case_id)
+    existing = existing or []
+    if kw_path is None:
+        kw_path = case_dir / "keywords.json"
+
+    def _best_existing(seg_ids):
+        if not seg_ids:
+            return None
+        s = set(seg_ids)
+        best, best_overlap = None, 0
+        for g in existing:
+            overlap = len(set(g.get("segment_ids") or []) & s)
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = g
+        return best
+
+    next_id = max((g.get("group_id", 0) for g in existing), default=0) + 1
+    added_count = 0
+    for sel in selections:
+        key = sel.get("key")
+        terms = sel.get("terms") or []
+        if not key or not terms:
+            continue
+        elem = elements.get(key) or {}
+        seg_ids = list(elem.get("segment_ids") or [])
+        # 候補語のメタ (type/source) を再算出して追加用 dict にする
+        all_cands = {c["term"]: c for c in _collect_terms_from_element(elem)}
+        new_kws = []
+        for t in terms:
+            c = all_cands.get(t)
+            if c:
+                new_kws.append({
+                    "term": c["term"],
+                    "type": c["type"],
+                    "source": c["source"],
+                })
+            else:
+                # ユーザーが手動で書き加えた語など
+                new_kws.append({"term": t, "type": "tech_analysis", "source": "tech_analysis"})
+
+        target = _best_existing(seg_ids)
+        if target is None:
+            # 新規グループとして追加
+            target = {
+                "group_id": next_id,
+                "label": (elem.get("label") or key).strip() or f"要素{next_id}",
+                "segment_ids": seg_ids,
+                "keywords": [],
+                "search_codes": {},
+            }
+            existing.append(target)
+            next_id += 1
+        # 既存と重複しないように追加
+        existing_terms = {(kw.get("term") or "").strip()
+                          for kw in (target.get("keywords") or [])}
+        for kw in new_kws:
+            if kw["term"] in existing_terms:
+                continue
+            target["keywords"].append(kw)
+            existing_terms.add(kw["term"])
+            added_count += 1
+
+    _save_keywords(kw_path, existing)
+    return {
+        "success": True,
+        "added": added_count,
+        "groups": existing,
+    }, 200
+
+
 def rebuild_keywords_from_tech_analysis(case_id):
     """Step 4 Stage 1 の `tech_analysis.json` を真実の源として、
     Step 3 のキーワードグループを **要素単位 (E1/E2/...)** に再構築する。
@@ -159,52 +381,18 @@ def rebuild_keywords_from_tech_analysis(case_id):
             if src == "手動" or typ == "手動追加":
                 extra_kws.append({"kw": kw, "segs": og_segs})
 
-    # 2) 新グループを elements から生成
+    # 2) 新グループを elements から生成 (terms_ja/terms_en + 旧形式互換)
     new_groups = []
     for idx, (key, elem) in enumerate(element_items, start=1):
         label = (elem.get("label") or key or f"要素{idx}").strip() or f"要素{idx}"
         seg_ids = list(elem.get("segment_ids") or [])
-
-        keywords = []
-        seen_terms = set()
-
-        def _add_term(term, type_, source):
-            t = (term or "").strip()
-            if not t or t in seen_terms:
-                return
-            seen_terms.add(t)
-            keywords.append({"term": t, "type": type_, "source": source})
-
-        # claim_terms (str list)
-        for t in (elem.get("claim_terms") or []):
-            _add_term(t, "請求項由来", "claim")
-
-        # definition_terms (dict list)
-        for d in (elem.get("definition_terms") or []):
-            if isinstance(d, dict):
-                _add_term(d.get("term", ""), d.get("type") or "定義", f"定義 段落{d.get('para', '')}")
-            elif isinstance(d, str):
-                _add_term(d, "定義", "定義")
-
-        # example_terms (dict list)
-        for d in (elem.get("example_terms") or []):
-            if isinstance(d, dict):
-                _add_term(d.get("term", ""), "実施例由来", f"実施例 段落{d.get('para', '')}")
-            elif isinstance(d, str):
-                _add_term(d, "実施例由来", "実施例")
-
-        # synonyms
-        syn = elem.get("synonyms") or {}
-        for t in (syn.get("ja") or []):
-            _add_term(t, "同義語(和)", "synonym_ja")
-        for t in (syn.get("en") or []):
-            _add_term(t, "同義語(英)", "synonym_en")
-
+        cands = _collect_terms_from_element(elem)
+        seen_terms = {c["term"] for c in cands}
         new_groups.append({
             "group_id": idx,
             "label": label,
             "segment_ids": seg_ids,
-            "keywords": keywords,
+            "keywords": list(cands),
             "search_codes": {},
             "_seen_terms": seen_terms,  # マージ重複判定用 (最後に削除)
         })

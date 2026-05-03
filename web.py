@@ -406,6 +406,22 @@ def rebuild_keywords_from_tech_analysis_route(case_id):
     return _svc_response(rebuild_keywords_from_tech_analysis(case_id))
 
 
+@app.route("/case/<case_id>/keywords/tech-analysis-candidates", methods=["GET"])
+def tech_analysis_candidates_route(case_id):
+    """Step 4 Stage 1 の各 element からキーワード候補を element 単位で返す。
+    UI で表示してユーザーがチェックボックスで選別する。"""
+    from services.keyword_service import get_tech_analysis_candidates
+    return _svc_response(get_tech_analysis_candidates(case_id))
+
+
+@app.route("/case/<case_id>/keywords/add-from-tech-analysis", methods=["POST"])
+def add_from_tech_analysis_route(case_id):
+    """ユーザーが選択した tech_analysis 候補を既存グループに追記。"""
+    from services.keyword_service import add_tech_analysis_keywords
+    body = request.get_json(silent=True) or {}
+    return _svc_response(add_tech_analysis_keywords(case_id, body.get("selections")))
+
+
 @app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates

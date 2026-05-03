@@ -1724,6 +1724,138 @@ async function suggestKeywords() {
 // Step 4 Stage 1 の tech_analysis.json を真実の源として、Step 3 のキーワードグループを
 // 技術概念単位 (E1/E2/...) に作り直す。
 // 既存の手動 KW / Fターム は segment_ids の重なりで新グループへ自動移行する。
+// ----------------------------------------------------------------
+// Step 4 Stage 1 (tech_analysis) からのキーワード候補モーダル
+// 全消ししない安全な追加 UI: ユーザーがチェックボックスで選んだ語だけ追加
+// ----------------------------------------------------------------
+window._taCandsData = null;
+
+async function showTechAnalysisCandidates() {
+  const modal = document.getElementById('ta-cands-modal');
+  if (!modal) return;
+  modal.style.display = 'block';
+  document.getElementById('ta-cands-body').innerHTML = '読み込み中...';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/tech-analysis-candidates`);
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      document.getElementById('ta-cands-body').innerHTML =
+        `<p style="color:#fca5a5;">${d.error || 'HTTP ' + resp.status}</p>`;
+      return;
+    }
+    window._taCandsData = d.groups || [];
+    _taCandsRender();
+  } catch (e) {
+    document.getElementById('ta-cands-body').innerHTML =
+      `<p style="color:#fca5a5;">エラー: ${e.message}</p>`;
+  }
+}
+
+function _taCandsEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function _taCandsRender() {
+  const body = document.getElementById('ta-cands-body');
+  const groups = window._taCandsData || [];
+  if (!groups.length) {
+    body.innerHTML = '<p style="color:var(--text2);">候補なし</p>';
+    return;
+  }
+  const html = groups.map((g, gi) => {
+    const segIds = (g.segment_ids || []).join(', ');
+    const matched = g.matched_existing_group_id;
+    const targetMsg = matched
+      ? `→ 既存グループ #${matched} に追加`
+      : '→ 新規グループとして作成';
+    const cands = (g.candidates || []).map((c, ci) => {
+      const id = `ta-cb-${gi}-${ci}`;
+      const checked = c.already_added ? '' : 'checked';
+      const muted = c.already_added ? 'opacity:0.5; text-decoration:line-through;' : '';
+      const badge = c.already_added
+        ? '<span style="font-size:0.68rem; color:#86efac; margin-left:0.3rem;">追加済</span>'
+        : '';
+      return `<label style="display:inline-flex; align-items:center; gap:0.25rem; padding:0.2rem 0.45rem; margin:0.1rem 0.2rem 0.1rem 0; background:#1e293b; border:1px solid var(--border); border-radius:5px; font-size:0.82rem; cursor:pointer; ${muted}">
+        <input type="checkbox" id="${id}" data-gi="${gi}" data-term="${_taCandsEsc(c.term)}" ${checked} ${c.already_added ? 'data-already="1"' : ''}>
+        ${_taCandsEsc(c.term)}
+        <span style="font-size:0.7rem; color:#64748b;">[${_taCandsEsc(c.type)}]</span>
+        ${badge}
+      </label>`;
+    }).join('');
+    return `<details open style="margin-bottom:0.6rem; border:1px solid var(--border); border-radius:6px; padding:0.5rem 0.7rem; background:#1e293b;">
+      <summary style="cursor:pointer; font-weight:600; color:#cbd5e1;">
+        ${_taCandsEsc(g.label)}
+        <span style="font-weight:normal; color:#94a3b8; font-size:0.78rem; margin-left:0.4rem;">[${_taCandsEsc(segIds)}] ${targetMsg} (${g.candidates.length} 候補)</span>
+      </summary>
+      ${g.description ? `<div style="font-size:0.78rem; color:#94a3b8; margin:0.2rem 0 0.4rem 0;">${_taCandsEsc(g.description)}</div>` : ''}
+      <div style="margin-top:0.3rem;">${cands || '<span style="color:#64748b; font-size:0.8rem;">候補なし</span>'}</div>
+    </details>`;
+  }).join('');
+  body.innerHTML = html;
+  _taCandsUpdateStatus();
+  body.querySelectorAll('input[type=checkbox]').forEach(cb =>
+    cb.addEventListener('change', _taCandsUpdateStatus));
+}
+
+function _taCandsUpdateStatus() {
+  const checked = document.querySelectorAll('#ta-cands-body input[type=checkbox]:checked').length;
+  const total = document.querySelectorAll('#ta-cands-body input[type=checkbox]').length;
+  const el = document.getElementById('ta-cands-status');
+  if (el) el.textContent = `${checked} / ${total} 件選択中`;
+}
+
+function taCandsToggleAll(checked) {
+  document.querySelectorAll('#ta-cands-body input[type=checkbox]').forEach(cb => cb.checked = checked);
+  _taCandsUpdateStatus();
+}
+
+function taCandsSelectNew() {
+  document.querySelectorAll('#ta-cands-body input[type=checkbox]').forEach(cb => {
+    cb.checked = !cb.dataset.already;
+  });
+  _taCandsUpdateStatus();
+}
+
+async function taCandsApply() {
+  const groups = window._taCandsData || [];
+  const selections = [];
+  groups.forEach((g, gi) => {
+    const terms = [];
+    document.querySelectorAll(`#ta-cands-body input[data-gi="${gi}"]:checked`).forEach(cb => {
+      terms.push(cb.dataset.term);
+    });
+    if (terms.length) {
+      selections.push({key: g.key, terms});
+    }
+  });
+  if (!selections.length) {
+    alert('追加する候補が選択されていません');
+    return;
+  }
+  if (!confirm(`選択された ${selections.reduce((n, s) => n + s.terms.length, 0)} 件のキーワードを既存グループに追加します。よろしいですか?`)) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/add-from-tech-analysis`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({selections}),
+    });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { alert(d.error || `HTTP ${resp.status}`); return; }
+    alert(`✅ ${d.added} 件のキーワードを追加しました。`);
+    document.getElementById('ta-cands-modal').style.display = 'none';
+    // キーワードリスト再描画
+    if (typeof kwGroups !== 'undefined' && d.groups) {
+      kwGroups = d.groups;
+      if (typeof renderGroups === 'function') renderGroups();
+    } else {
+      location.reload();
+    }
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 async function rebuildGroupsFromTechAnalysis() {
   const ok = confirm(
     'Step 4 Stage 1 の技術構造化 (要素 E1/E2/...) に合わせて Step 3 のグループを作り直します。\n' +
