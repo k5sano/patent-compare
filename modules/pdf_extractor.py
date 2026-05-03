@@ -256,6 +256,75 @@ def detect_patent_number(pages_text):
     return None
 
 
+def detect_bibliographic_info(pages_text, pdf_path=None):
+    """PDF 先頭ページの書誌事項 (出願日・公開日・出願人・発明者・出願番号) を抽出。
+
+    日本特許公報の標準フォーマット:
+        (21)出願番号　特願2022-141234
+        (22)出願日　令和4年9月5日(2022.9.5)
+        (43)公開日　令和6年3月19日(2024.3.19)
+        (71)出願人　株式会社○○
+        (72)発明者　山田　太郎
+
+    1st-pass: 先頭 2 ページのテキスト抽出
+    2nd-pass (フォールバック): _ocr_first_pages でスキャン PDF も対応
+    """
+    info = {}
+
+    def _try_extract(text):
+        out = {}
+        # (21)出願番号 と 値 の間に改行/全角空白が入ることがあるので [\s\S]{0,40} で吸収
+        m = re.search(r"\(21\)[\s\S]{0,40}?出願番号[\s\S]{0,40}?(特願\d{4}\s*[-－ー−]?\s*\d+)", text)
+        if m:
+            out["application_number"] = re.sub(r"\s+", "", m.group(1))
+        # 西暦形式 "(2024.9.5)" を優先抽出 (令和/平成等の和暦読み取りより機械可読)
+        m = re.search(r"\(22\)[\s\S]{0,80}?出願日[\s\S]{0,80}?\((\d{4}\.\d{1,2}\.\d{1,2})\)", text)
+        if m:
+            out["application_date"] = m.group(1).replace(".", "-")
+        else:
+            m = re.search(r"\(22\)[\s\S]{0,80}?出願日[\s\S]{0,40}?(令和|平成|昭和|大正|明治)?(\d{1,4})年(\d{1,2})月(\d{1,2})日", text)
+            if m:
+                era, y, mo, d = m.group(1) or "", m.group(2), m.group(3), m.group(4)
+                out["application_date"] = f"{era}{y}年{mo}月{d}日"
+        m = re.search(r"\(43\)[\s\S]{0,80}?(?:公開日|公表日)[\s\S]{0,80}?\((\d{4}\.\d{1,2}\.\d{1,2})\)", text)
+        if m:
+            out["publication_date"] = m.group(1).replace(".", "-")
+        # 出願人 (71) — 識別番号の次行 or 直後の名称行
+        m = re.search(r"\(71\)\s*出願人[\s\S]{0,200}?\n\s*(?:\d{9})?\s*\n?\s*([^\n（(]{3,80}(?:株式会社|有限会社|合同会社|大学|研究所|機構|法人|組合|協会|財団|社団|GmbH|Inc\.?|Corp\.?|Ltd\.?|LLC)[^\n（(]{0,30})", text)
+        if m:
+            out["applicant"] = m.group(1).strip()
+        else:
+            # 個人名 / 海外の社名など (会社接尾辞無し) — 識別番号の直後 1-2 行を取る
+            m = re.search(r"\(71\)\s*出願人[\s\S]{0,80}?\n\s*\d{9}\s*\n\s*([^\n]{2,80})", text)
+            if m:
+                out["applicant"] = m.group(1).strip()
+        # 発明者 (72) — 「(72)発明者」 直後の氏名 (改行を挟む場合あり)。複数あり得る
+        names = []
+        for inv_match in re.finditer(r"\(72\)\s*発明者\s*\n?\s*([^\n（(]{2,40})", text):
+            name = inv_match.group(1).strip()
+            # 住所行 (郵便番号始まり) や記号だけ等を除外
+            if name and not re.match(r"^[\d〒]", name) and len(name) >= 2:
+                if name not in names:
+                    names.append(name)
+        if names:
+            out["inventors"] = names
+        return out
+
+    # 1st-pass: 既存テキスト抽出結果から
+    full_text = "\n".join(p.get("text", "") for p in (pages_text or [])[:2])
+    if full_text.strip():
+        info = _try_extract(full_text)
+    # 2nd-pass: 1st-pass で何も取れない (スキャン PDF 等) → OCR フォールバック
+    if not info and pdf_path is not None:
+        try:
+            ocr_text = _ocr_first_pages(pdf_path, max_pages=1)
+            if ocr_text:
+                info = _try_extract(ocr_text)
+        except Exception:
+            pass
+    return info
+
+
 def detect_patent_title(pages_text, pdf_path=None, fmt="JP"):
     """発明の名称を検出（テキスト抽出 → OCRフォールバック）"""
     full_text = "\n".join(p["text"] for p in pages_text[:5])
@@ -789,6 +858,9 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
     # 発明の名称検出（テキストで見つからなければOCRにフォールバック）
     patent_title = detect_patent_title(pages, pdf_path=pdf_path, fmt=fmt)
 
+    # 書誌事項検出 (出願日・公開日・出願人・発明者・出願番号)
+    bib = detect_bibliographic_info(pages, pdf_path=pdf_path)
+
     # 請求項・段落抽出（フォーマット別分岐）
     if fmt == "JP":
         claims = parse_claims_jp(full_text)
@@ -811,6 +883,12 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
         "claims": claims,
         "paragraphs": paragraphs,
         "tables": tables,
+        # 書誌事項 (PDF 先頭ページからテキスト/OCR抽出)
+        "application_number": bib.get("application_number", ""),
+        "application_date": bib.get("application_date", ""),
+        "publication_date": bib.get("publication_date", ""),
+        "applicant": bib.get("applicant", ""),
+        "inventors": bib.get("inventors", []),
     }
 
     return result

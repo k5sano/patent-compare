@@ -48,6 +48,46 @@ def load_template(version: str = "v0.1") -> dict:
         return yaml.safe_load(f) or {}
 
 
+def _ensure_hongan_bibliographic(case_id: str, hongan: dict) -> dict:
+    """hongan.json に書誌事項 (application_date 等) が無ければ PDF から
+    on-demand で抽出して書き戻す。再アップロードせずに既存案件を補完できる。
+    """
+    if not hongan:
+        return hongan
+    # 1 つでも入っていればスキップ (キャッシュ済みとみなす)
+    if any(hongan.get(k) for k in
+           ("application_number", "application_date", "publication_date",
+            "applicant", "inventors")):
+        return hongan
+    case_dir = get_case_dir(case_id)
+    src_name = hongan.get("source_pdf")
+    src = case_dir / "input" / src_name if src_name else None
+    if not src or not src.exists():
+        return hongan
+    try:
+        import fitz
+        from modules.pdf_extractor import detect_bibliographic_info
+        doc = fitz.open(str(src))
+        pages = [{"page": i + 1, "text": doc[i].get_text()}
+                 for i in range(min(2, doc.page_count))]
+        doc.close()
+        bib = detect_bibliographic_info(pages, pdf_path=str(src))
+    except Exception as e:
+        logger.warning("書誌事項 on-demand 抽出失敗 (%s): %s", case_id, e)
+        return hongan
+    if not bib:
+        return hongan
+    # hongan に追記して書き戻す
+    for k, v in bib.items():
+        hongan[k] = v
+    try:
+        with (case_dir / "hongan.json").open("w", encoding="utf-8") as f:
+            json.dump(hongan, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+    return hongan
+
+
 def _load_case_data(case_id: str) -> dict:
     """分析に使う入力データを集める。"""
     case_dir = get_case_dir(case_id)
@@ -57,6 +97,8 @@ def _load_case_data(case_id: str) -> dict:
     if hongan_path.exists():
         with hongan_path.open(encoding="utf-8") as f:
             data["hongan"] = json.load(f)
+        # 書誌事項が未抽出なら on-demand で補完 (再アップロード不要)
+        data["hongan"] = _ensure_hongan_bibliographic(case_id, data["hongan"])
 
     seg_path = case_dir / "segments.json"
     if seg_path.exists():
@@ -235,22 +277,22 @@ def _resolve_auto_item(item: dict, ctx: dict) -> Any:
             import re as _re
             y_match = _re.search(r"(\d{4})", pn)
             pub_year = y_match.group(1) if y_match else ""
+            # 書誌事項由来 (modules.pdf_extractor.detect_bibliographic_info で抽出)
+            # hongan.json 優先、無ければ meta フォールバック
             result = {
                 "公開番号": pn,
                 "公開年": pub_year,
-                "出願番号": meta.get("application_number") or "",
-                "出願日": meta.get("application_date") or "",
-                "公開日": meta.get("publication_date") or "",
+                "出願番号": hongan.get("application_number") or meta.get("application_number") or "",
+                "出願日": hongan.get("application_date") or meta.get("application_date") or "",
+                "公開日": hongan.get("publication_date") or meta.get("publication_date") or "",
             }
             if pn_src == "filename":
-                # 書誌事項抽出失敗 → ファイル名から拾った値を使用中
-                # 信頼性に欠けるので警告を併記 (Excel 出力でも見える)
                 result["⚠ 出典"] = "書誌事項からの自動抽出に失敗。ファイル名から推定"
             return result
         if iid == "2.2":
-            return {"出願人": meta.get("applicant", "")}
+            return {"出願人": hongan.get("applicant") or meta.get("applicant", "")}
         if iid == "2.3":
-            return {"発明者": meta.get("inventors", [])}
+            return {"発明者": hongan.get("inventors") or meta.get("inventors", [])}
         return ""
 
     if src == "jplatpat_classification":
