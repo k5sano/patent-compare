@@ -1857,6 +1857,128 @@ async function taCandsApply() {
   }
 }
 
+// ----------------------------------------------------------------
+// 予備検索ヒント (hongan_analysis 7.2/7.3) 取り込み
+// ----------------------------------------------------------------
+function _shEsc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function showSearchHintsPreview() {
+  const modal = document.getElementById('sh-modal');
+  if (!modal) return;
+  modal.style.display = 'block';
+  const body = document.getElementById('sh-modal-body');
+  body.innerHTML = '読み込み中...';
+  document.getElementById('sh-modal-status').textContent = '';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/search-hints/preview`);
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      body.innerHTML = `<p style="color:#fca5a5;">${_shEsc(d.error || ('HTTP ' + resp.status))}</p>`;
+      return;
+    }
+    body.innerHTML = _shRenderPreview(d);
+  } catch (e) {
+    body.innerHTML = `<p style="color:#fca5a5;">エラー: ${_shEsc(e.message)}</p>`;
+  }
+}
+
+function _shRenderPreview(d) {
+  const syns = d.synonyms || [];
+  const cls = d.classifications || {};
+  const noise = d.noise || [];
+  const synHtml = syns.length ? syns.map(s => {
+    const parts = [];
+    if (s.synonyms.length) parts.push(`<span style="color:#86efac;">≒</span> ${s.synonyms.map(_shEsc).join(' / ')}`);
+    if (s.broader.length) parts.push(`<span style="color:#fbbf24;">上位</span>: ${s.broader.map(_shEsc).join(', ')}`);
+    if (s.narrower.length) parts.push(`<span style="color:#60a5fa;">下位</span>: ${s.narrower.map(_shEsc).join(', ')}`);
+    return `<div style="padding:0.3rem 0.5rem; margin:0.15rem 0; background:#1e293b; border-radius:4px; font-size:0.82rem;">
+      <strong style="color:#cbd5e1;">${_shEsc(s.main)}</strong>
+      <div style="color:#94a3b8; font-size:0.78rem; margin-top:0.1rem;">${parts.join(' &nbsp;|&nbsp; ') || '<em>関連語なし</em>'}</div>
+    </div>`;
+  }).join('') : '<p style="color:#64748b; font-size:0.85rem;">7.2 同義語データなし</p>';
+
+  const codeBuckets = ['fi','cpc','ipc','fterm'].map(kind => {
+    const list = (cls[kind] || []);
+    if (!list.length) return '';
+    const items = list.map(e => {
+      const desc = e.desc ? ` <span style="color:#94a3b8; font-size:0.75rem;">(${_shEsc(e.desc)})</span>` : '';
+      return `<span style="display:inline-block; padding:0.15rem 0.4rem; margin:0.1rem 0.15rem; background:#1e293b; border:1px solid var(--border); border-radius:4px; font-size:0.78rem; color:#e2e8f0;">${_shEsc(e.code)}${desc}</span>`;
+    }).join('');
+    return `<div style="margin-bottom:0.3rem;">
+      <span style="font-size:0.78rem; color:#cbd5e1; font-weight:600; margin-right:0.4rem;">${kind.toUpperCase()}</span>
+      ${items}
+    </div>`;
+  }).join('');
+
+  const noiseHtml = noise.length ? `<ul style="margin:0.3rem 0 0 1.2rem; color:#94a3b8; font-size:0.78rem;">
+    ${noise.map(n => `<li>${_shEsc(n)}</li>`).join('')}
+  </ul>` : '<p style="color:#64748b; font-size:0.85rem;">7.4 ノイズデータなし</p>';
+
+  return `
+    <h4 style="color:#cbd5e1; margin:0 0 0.4rem 0;">7.2 同義語・上位/下位概念 (${syns.length})</h4>
+    ${synHtml}
+    <h4 style="color:#cbd5e1; margin:1rem 0 0.4rem 0;">7.3 優先度の高い分類コード</h4>
+    ${codeBuckets || '<p style="color:#64748b; font-size:0.85rem;">7.3 分類コードデータなし</p>'}
+    <h4 style="color:#cbd5e1; margin:1rem 0 0.4rem 0;">7.4 除外すべきノイズ表現 (参考表示のみ・反映なし)</h4>
+    ${noiseHtml}
+  `;
+}
+
+async function applySearchHints() {
+  const status = document.getElementById('sh-modal-status');
+  status.textContent = '反映中...';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/search-hints/apply`, { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      alert(d.error || `HTTP ${resp.status}`);
+      status.textContent = '';
+      return;
+    }
+    // 取り込んだ語/コードを localStorage の kw-marked に反映 → 再描画後に赤字化
+    _shMarkApplied(d);
+    alert(`✅ 同義語 ${d.synonyms_added} 件 / 分類コード ${d.codes_added} 件 を反映しました。\n` +
+          `(振り分けできなかった分類コード ${d.codes_unmatched_to_unsorted} 件は「予備検索ヒント (未分類)」グループへ集約)`);
+    document.getElementById('sh-modal').style.display = 'none';
+    if (typeof kwGroups !== 'undefined' && d.groups) {
+      kwGroups = d.groups;
+      if (typeof renderGroups === 'function') renderGroups();
+    } else {
+      location.reload();
+    }
+  } catch (e) {
+    alert('エラー: ' + e.message);
+    status.textContent = '';
+  }
+}
+
+function _shMarkApplied(d) {
+  // localStorage の kw-marked に追加して、描画後に kw-marked が復元されるようにする
+  try {
+    const raw = localStorage.getItem(_KW_MARK_STORAGE_KEY);
+    const marks = raw ? JSON.parse(raw) : { kw: [], ft: [] };
+    marks.kw = marks.kw || [];
+    marks.ft = marks.ft || [];
+    const kwSet = new Set(marks.kw);
+    const ftSet = new Set(marks.ft);
+    Object.entries(d.added_terms_by_group || {}).forEach(([gid, items]) => {
+      items.forEach(it => kwSet.add(`${gid}|${it.term}`));
+    });
+    Object.entries(d.added_codes_by_group || {}).forEach(([gid, items]) => {
+      items.forEach(it => {
+        // F-term のみ既存の fterm-tag ハイライト構造に対応 (FI/IPC/CPC は別表示なのでスキップ)
+        if (it.kind === 'fterm') ftSet.add(`${gid}|${it.code}`);
+      });
+    });
+    marks.kw = Array.from(kwSet);
+    marks.ft = Array.from(ftSet);
+    localStorage.setItem(_KW_MARK_STORAGE_KEY, JSON.stringify(marks));
+  } catch (e) { /* 不可なら諦める */ }
+}
+
 async function reassignKeywordsToTechAnalysis() {
   const ok = confirm(
     'Step 4 element の語彙と既存キーワードを照合し、一致する element のグループへ移動します。\n' +

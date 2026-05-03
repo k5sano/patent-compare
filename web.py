@@ -429,6 +429,20 @@ def reassign_keywords_to_tech_analysis_route(case_id):
     return _svc_response(reassign_keywords_to_tech_analysis(case_id))
 
 
+@app.route("/case/<case_id>/keywords/search-hints/preview", methods=["GET"])
+def search_hints_preview_route(case_id):
+    """予備検索ヒント (hongan_analysis 7.2/7.3/7.4) の構造化結果を返す (適用前確認用)。"""
+    from services.search_hints_service import parse_search_hints
+    return _svc_response(parse_search_hints(case_id))
+
+
+@app.route("/case/<case_id>/keywords/search-hints/apply", methods=["POST"])
+def search_hints_apply_route(case_id):
+    """予備検索ヒントを Step 3 のキーワードグループに反映 (同義語追加 + 分類コード振り分け)。"""
+    from services.search_hints_service import apply_search_hints_to_keywords
+    return _svc_response(apply_search_hints_to_keywords(case_id))
+
+
 @app.route("/case/<case_id>/keywords/fterm/candidates", methods=["GET"])
 def fterm_candidates(case_id):
     from services.keyword_service import fterm_candidates

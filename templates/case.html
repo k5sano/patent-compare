@@ -271,6 +271,10 @@
                 title="既存キーワードを Step 4 element の語彙と照合し、一致する element のグループへ移動 (混入を整理)">
           🔁 Step 4 構造に再配置
         </button>
+        <button class="btn btn-outline" onclick="showSearchHintsPreview()"
+                title="本願分析 (Step 2 SUB 3) の 7.2 同義語 / 7.3 分類コードを Step 3 グループに取り込み、自動でハイライト ON します">
+          📥 予備検索ヒントを取り込む
+        </button>
         <button class="btn btn-outline" onclick="addNewGroup(event)">+ グループ追加</button>
         <button class="btn btn-outline" onclick="showPanel(3)">次へ &rarr;</button>
         <div class="loading-msg" id="loading-suggest" style="margin:0;">
@@ -1124,6 +1128,27 @@
       <span style="flex:1;"></span>
       <span id="ta-cands-status" style="font-size:0.78rem; color:var(--text2);"></span>
       <button class="btn btn-success" onclick="taCandsApply()">選択分を追加</button>
+    </div>
+  </div>
+</div>
+
+<!-- 予備検索ヒント取り込み プレビューモーダル -->
+<div id="sh-modal" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.6);">
+  <div style="position:absolute; top:5%; left:50%; transform:translateX(-50%); width:min(900px,92vw); max-height:88vh; background:#0f172a; border:1px solid var(--border); border-radius:10px; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:0.7rem 1rem; border-bottom:1px solid var(--border);">
+      <strong style="color:#cbd5e1;">📥 予備検索ヒントを取り込む</strong>
+      <button onclick="document.getElementById('sh-modal').style.display='none'"
+              style="background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer; line-height:1;">×</button>
+    </div>
+    <div style="padding:0.5rem 1rem; font-size:0.78rem; color:var(--text2); border-bottom:1px solid var(--border);">
+      本願分析 (Step 2 SUB 3) の 7.2 同義語/上位下位 と 7.3 分類コード を Step 3 グループに自動振り分けします。<br>
+      適用後、追加されたキーワード/分類コードは <span style="color:#fca5a5; font-weight:600;">自動的に赤字ハイライト</span> され、検索式生成や絞り込みで優先採用されます。
+    </div>
+    <div id="sh-modal-body" style="overflow:auto; padding:0.7rem 1rem; flex:1;">読み込み中...</div>
+    <div style="padding:0.6rem 1rem; border-top:1px solid var(--border); display:flex; gap:0.5rem; align-items:center;">
+      <span style="flex:1;"></span>
+      <span id="sh-modal-status" style="font-size:0.78rem; color:var(--text2);"></span>
+      <button class="btn btn-success" onclick="applySearchHints()">グループに反映する</button>
     </div>
   </div>
 </div>
