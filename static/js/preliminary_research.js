@@ -59,16 +59,37 @@ async function prelimExpandSynonyms() {
     _prelimMsg('prelim-expand-msg', '成分名/用語を入力してください', 'error');
     return;
   }
-  _prelimMsg('prelim-expand-msg', '⏳ LLM で表記揺れを列挙中... (10〜30秒)', 'info');
+  _prelimMsg('prelim-expand-msg', '⏳ LLM で表記揺れ + 本願での扱いを取得中... (10〜30秒)', 'info');
+  // 概況パネルを「読み込み中」状態で先に出す
+  _prelimRenderOverview({loading: true, term});
   try {
-    const resp = await fetch('/api/preliminary_research/expand_synonyms', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({term, field: _prelimField()}),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      _prelimMsg('prelim-expand-msg', data.error || `エラー (HTTP ${resp.status})`, 'error');
+    // 表記揺れ + 本願概況 を並列取得
+    const [synResp, ovResp] = await Promise.all([
+      fetch('/api/preliminary_research/expand_synonyms', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({term, field: _prelimField()}),
+      }),
+      fetch('/api/preliminary_research/term_overview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({term, case_id: (typeof CASE_ID !== 'undefined' ? CASE_ID : '')}),
+      }),
+    ]);
+    const data = await synResp.json();
+    let ovData = null;
+    try { ovData = await ovResp.json(); } catch (_) {}
+    // 概況: エラーでも非致命 (表記揺れの結果は出す)
+    if (ovData && !ovData.error) {
+      _prelimRenderOverview(ovData);
+    } else if (ovData && ovData.error) {
+      _prelimRenderOverview({error: ovData.error, term});
+    } else {
+      _prelimRenderOverview({error: `HTTP ${ovResp.status}`, term});
+    }
+
+    if (!synResp.ok) {
+      _prelimMsg('prelim-expand-msg', data.error || `エラー (HTTP ${synResp.status})`, 'error');
       return;
     }
     const syns = (data.synonyms || []).filter(Boolean);
@@ -85,6 +106,34 @@ async function prelimExpandSynonyms() {
   } catch (e) {
     _prelimMsg('prelim-expand-msg', 'エラー: ' + e.message, 'error');
   }
+}
+
+// 本願での扱い概況パネルの描画
+function _prelimRenderOverview(d) {
+  const block = document.getElementById('prelim-overview-block');
+  const body = document.getElementById('prelim-overview-body');
+  const meta = document.getElementById('prelim-overview-meta');
+  if (!block || !body) return;
+  block.style.display = 'block';
+  if (d && d.loading) {
+    meta.textContent = (d.term ? `(${d.term}) ` : '') + '⏳ 抽出中...';
+    body.textContent = '本願明細書から該当箇所を抽出して LLM 要約中...';
+    return;
+  }
+  if (d && d.error) {
+    meta.textContent = (d.term ? `(${d.term}) ` : '') + 'エラー';
+    body.innerHTML = '<span style="color:#fca5a5;">' + _prelimEsc(String(d.error)) + '</span>';
+    return;
+  }
+  if (!d || !d.found) {
+    meta.textContent = (d && d.term ? `(${d.term}) ` : '') + '本願に記載なし';
+    body.innerHTML = '<span style="color:var(--text2); font-style:italic;">'
+      + _prelimEsc((d && d.overview_md) || '本願明細書に該当記載なし')
+      + '</span>';
+    return;
+  }
+  meta.textContent = `(${d.term}) ${d.matches} 箇所 ヒット`;
+  body.textContent = d.overview_md || '';
 }
 
 function _prelimRenderCandidates() {

@@ -1821,6 +1821,34 @@ def prelim_expand_synonyms():
     return jsonify({"synonyms": synonyms})
 
 
+@app.route("/api/preliminary_research/term_overview", methods=["POST"])
+def prelim_term_overview():
+    """本願明細書での term の扱い (定義/例示/実施例/効果/臨界的効果) を LLM で要約。"""
+    from modules.term_overview import summarize_term_in_hongan
+    from services.case_service import get_case_dir
+    import json as _json
+
+    data = request.get_json() or {}
+    term = (data.get("term") or "").strip()
+    case_id = (data.get("case_id") or "").strip()
+    if not term:
+        return jsonify({"error": "term は必須です"}), 400
+    if not case_id:
+        return jsonify({"error": "case_id は必須です"}), 400
+
+    case_dir = get_case_dir(case_id)
+    p = case_dir / "hongan.json"
+    if not p.exists():
+        return jsonify({"error": "本願データ (hongan.json) がありません"}), 404
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            hongan = _json.load(f)
+    except (OSError, _json.JSONDecodeError) as e:
+        return jsonify({"error": f"hongan.json 読み込み失敗: {e}"}), 500
+
+    return jsonify(summarize_term_in_hongan(term, hongan))
+
+
 @app.route("/api/preliminary_research/generate_urls", methods=["POST"])
 def prelim_generate_urls():
     """採用クエリと分野から検索 URL を生成"""
