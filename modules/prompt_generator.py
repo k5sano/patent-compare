@@ -40,19 +40,13 @@ SECTION_PRIORITY = _prompt_cfg.get("section_priority",
     ["実施例", "比較例", "請求項", "手段", "効果", "実施形態", "課題", "背景技術", "技術分野"])
 
 
-def _build_task_definition(num_citations):
-    """タスク定義セクション"""
-    if num_citations == 1:
-        return """## タスク
+def _build_task_definition():
+    """タスク定義セクション (件数依存を排除して静的化 → prompt cache の対象)。"""
+    return """## タスク
 あなたは日本の特許審査における拒絶理由構成を支援する先行技術調査の専門家です。
 以下の本願（出願中の特許）の請求項の構成要件と、引用文献（先行技術）を対比し、
-各構成要件が引用文献に開示されているかを判定してください。"""
-    else:
-        return f"""## タスク
-あなたは日本の特許審査における拒絶理由構成を支援する先行技術調査の専門家です。
-以下の本願（出願中の特許）の請求項の構成要件と、{num_citations}件の引用文献（先行技術）をそれぞれ対比し、
-各構成要件が各引用文献に開示されているかを判定してください。
-文献ごとに独立して判定を行い、文献ごとにJSON結果を出力してください。"""
+各構成要件が引用文献に開示されているかを判定してください。
+複数件の場合は文献ごとに独立して判定を行い、文献ごとにJSON結果を出力してください。"""
 
 
 def _build_citation_priority_rules():
@@ -586,12 +580,18 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
     if citations and hasattr(citations[0], 'get'):
         field = citations[0].get("field", field)
 
+    # 静的部分 (案件・実行ごとに変わらない) を先頭、動的部分 (案件固有) を末尾に
+    # → Anthropic の prompt cache が先頭から最大 cache 境界までヒット
+    # → 同一 field の連続対比で 2 回目以降のレイテンシ・トークンコスト削減
     sections = [
-        _build_task_definition(num),
+        # === 静的部分 (cache 対象) ===
+        _build_task_definition(),
         _build_citation_priority_rules(),
         _build_cited_location_notation_rules(),
         _build_judgment_criteria(),
         _build_field_notes(field),
+
+        # === 動的部分 (案件固有、毎回変わる) ===
         _build_segments_section(segments),
         _build_hongan_body_section(hongan),
         _build_keywords_section(keywords),
