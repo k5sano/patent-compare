@@ -96,6 +96,7 @@ def generate_prompt_multi(case_id, citation_ids):
     if kw_path.exists():
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
+    keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
     field = meta.get("field", "cosmetics")
     prompt_text = _gen(segs, citations, keywords, field)
@@ -141,6 +142,7 @@ def generate_prompt_single(case_id, citation_id):
     if kw_path.exists():
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
+    keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
     prompt_text = _gen(segs, citation, keywords)
 
@@ -275,6 +277,29 @@ def _get_all_segment_ids(segs):
         for seg in claim["segments"]:
             ids.append(seg["id"])
     return ids
+
+
+def _filter_keywords_by_valid_segments(keywords, segs):
+    """keywords.json の各グループの segment_ids から、segments.json に
+    存在しない ID (補正で消えた古い 1F/1G 等) を除外した clone を返す。
+
+    永続化はしない (UI 側の表示は維持しつつ、prompt にだけクリーン版を渡す)。
+    実体側の掃除は services.keyword_service.prune_keyword_segment_ids。
+    """
+    if not keywords:
+        return keywords
+    valid = set(_get_all_segment_ids(segs))
+    cleaned = []
+    for g in keywords:
+        seg_ids = g.get("segment_ids") or []
+        new_seg_ids = [sid for sid in seg_ids if sid in valid]
+        if len(new_seg_ids) != len(seg_ids):
+            g_copy = dict(g)
+            g_copy["segment_ids"] = new_seg_ids
+            cleaned.append(g_copy)
+        else:
+            cleaned.append(g)
+    return cleaned
 
 
 def _is_empty_citation(cit):
@@ -922,6 +947,7 @@ def compare_execute(case_id, citation_ids):
     if kw_path.exists():
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
+    keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
     field = meta.get("field", "cosmetics")
     prompt_text = _gen(segs, citations, keywords, field)

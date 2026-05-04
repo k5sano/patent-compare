@@ -429,6 +429,14 @@ def reassign_keywords_to_tech_analysis_route(case_id):
     return _svc_response(reassign_keywords_to_tech_analysis(case_id))
 
 
+@app.route("/case/<case_id>/keywords/prune-segment-ids", methods=["POST"])
+def prune_keyword_segment_ids_route(case_id):
+    """segments.json に存在しない古い segment_id を keywords.json から削除
+    (請求項補正で 1A〜1G が 1A〜1E に縮約された後の整合化)。"""
+    from services.keyword_service import prune_keyword_segment_ids
+    return _svc_response(prune_keyword_segment_ids(case_id))
+
+
 @app.route("/case/<case_id>/keywords/search-hints/preview", methods=["GET"])
 def search_hints_preview_route(case_id):
     """予備検索ヒント (hongan_analysis 7.2/7.3/7.4) の構造化結果を返す (適用前確認用)。"""

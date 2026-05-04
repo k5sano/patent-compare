@@ -574,6 +574,66 @@ def rebuild_keywords_from_tech_analysis(case_id):
     }, 200
 
 
+def prune_keyword_segment_ids(case_id):
+    """segments.json に存在しない segment_id を keywords.json の各グループから削除。
+
+    請求項を補正して分節 ID が変わった (例 1A〜1G → 1A〜1E) 後、Step 3 グループの
+    segment_ids に古い ID (1F, 1G) が残ると prompt_generator が古い分節を含めた
+    プロンプトを作って LLM が混乱する (silent stale)。これを掃除する。
+
+    Returns:
+        ({removed_count, groups_modified, valid_segment_ids, groups}, status)
+    """
+    from services.case_service import get_case_dir as _gcd
+    case_dir = _gcd(case_id)
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+
+    seg_path = case_dir / "segments.json"
+    if not seg_path.exists():
+        return {"error": "segments.json がありません"}, 400
+    try:
+        with open(seg_path, "r", encoding="utf-8") as f:
+            segs = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"error": f"segments.json 読み込みエラー: {e}"}, 500
+
+    valid_ids = set()
+    for c in segs:
+        for s in c.get("segments") or []:
+            sid = s.get("id")
+            if sid:
+                valid_ids.add(sid)
+
+    groups, kw_path = _load_keywords(case_id)
+    groups = list(groups or [])
+    if kw_path is None:
+        kw_path = case_dir / "keywords.json"
+
+    removed_count = 0
+    groups_modified = 0
+    removed_by_group = {}  # {group_id: [removed_seg_ids]}
+    for g in groups:
+        seg_ids = g.get("segment_ids") or []
+        new_seg_ids = [sid for sid in seg_ids if sid in valid_ids]
+        removed_here = [sid for sid in seg_ids if sid not in valid_ids]
+        if removed_here:
+            removed_by_group[g.get("group_id")] = removed_here
+            removed_count += len(removed_here)
+            g["segment_ids"] = new_seg_ids
+            groups_modified += 1
+    if removed_count:
+        _save_keywords(kw_path, groups)
+    return {
+        "success": True,
+        "removed_count": removed_count,
+        "groups_modified": groups_modified,
+        "removed_by_group": removed_by_group,
+        "valid_segment_ids": sorted(valid_ids),
+        "groups": groups,
+    }, 200
+
+
 def add_keyword_group(case_id, label="新規グループ", segment_ids=None):
     case_dir = get_case_dir(case_id)
     kw_path = case_dir / "keywords.json"

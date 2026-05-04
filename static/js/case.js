@@ -1979,6 +1979,40 @@ function _shMarkApplied(d) {
   } catch (e) { /* 不可なら諦める */ }
 }
 
+async function pruneKeywordSegmentIds() {
+  if (!confirm(
+    'segments.json に存在しない古い segment_id を keywords.json の各グループから削除します。\n' +
+    '\n' +
+    '・請求項を補正して分節 ID が変わった (例 1A〜1G → 1A〜1E) 後に必要\n' +
+    '・キーワード自体は消えません (segment_ids リストだけ整理)\n' +
+    '・実行後に再対比すると正しいプロンプトで LLM が走ります\n' +
+    '\n' +
+    '実行しますか?'
+  )) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/keywords/prune-segment-ids`, { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { alert(d.error || `HTTP ${resp.status}`); return; }
+    let msg = `✅ 整理完了: ${d.removed_count} 件削除 / ${d.groups_modified} グループ修正`;
+    if (d.removed_by_group && Object.keys(d.removed_by_group).length) {
+      msg += '\n\n削除内容:';
+      for (const [gid, sids] of Object.entries(d.removed_by_group)) {
+        msg += `\n  グループ #${gid}: ${sids.join(', ')}`;
+      }
+    }
+    msg += `\n\n現分節 ID: ${(d.valid_segment_ids || []).join(', ')}`;
+    alert(msg);
+    if (typeof kwGroups !== 'undefined' && d.groups) {
+      kwGroups = d.groups;
+      if (typeof renderGroups === 'function') renderGroups();
+    } else {
+      location.reload();
+    }
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 async function reassignKeywordsToTechAnalysis() {
   const ok = confirm(
     'Step 4 element の語彙と既存キーワードを照合し、一致する element のグループへ移動します。\n' +
