@@ -171,6 +171,42 @@ def _build_segments_section(segments):
     return "\n".join(lines)
 
 
+def _build_hongan_body_section(hongan):
+    """本願の明細書本文 + 表セクション (実施例の具体例を LLM に提示)。
+
+    chat と同じハイブリッド方針: 本願は数万字程度なので全文 inline する。
+    引例本文との「具体例レベル対比」(例: 本願実施例 X-25-9138A を 5% 配合 vs
+    引例実施例) で LLM が見落とさないように。
+    """
+    if not hongan:
+        return ""
+    lines = ["## 本願の明細書本文 (全段落) — 実施例の具体例参照用"]
+    paragraphs = hongan.get("paragraphs") or []
+    if paragraphs:
+        for p in paragraphs:
+            lines.append(f"【{p.get('id', '')}】({p.get('section', '')}) {p.get('text', '')}")
+    tables = hongan.get("tables") or []
+    if tables:
+        lines.append("")
+        lines.append(f"### 本願の表 (全 {len(tables)} 件)")
+        for i, t in enumerate(tables):
+            tbl_label = t.get("caption") or t.get("title") or f"表 {i+1}"
+            lines.append(f"#### {tbl_label}")
+            rows = t.get("rows") or t.get("data") or []
+            if rows:
+                for row in rows:
+                    if isinstance(row, list):
+                        lines.append("\t".join(str(x) for x in row))
+                    else:
+                        lines.append(str(row))
+            else:
+                # 構造未知の表は content フィールド or JSON を出す
+                content = t.get("content")
+                if content:
+                    lines.append(content)
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def _build_keywords_section(keywords):
     """キーワードグループセクション"""
     if not keywords:
@@ -429,7 +465,7 @@ def _build_output_format_multi(citations, segments):
 - **document_id は上記「## 引用文献N: ラベル（{', '.join(d['id'] for d in doc_list)}）」内のカッコ内の文字列をそのまま使ってください**（半角/全角・空白・ハイフン・スラッシュを変えずに）。表記揺れがあると UI で取り込めません"""
 
 
-def generate_prompt(segments, citations, keywords=None, field="cosmetics"):
+def generate_prompt(segments, citations, keywords=None, field="cosmetics", hongan=None):
     """対比プロンプトを生成するメインエントリポイント
 
     Parameters:
@@ -437,6 +473,9 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics"):
         citations: 引用文献データ。dict(1件) or list[dict](複数件)
         keywords: キーワードグループ (keywords.json)、任意
         field: "cosmetics" | "laminate"
+        hongan: 本願データ (hongan.json) 任意。指定すると本願 paragraphs/tables も
+                inline される。LLM が本願実施例 (具体的化合物・配合量) を見て
+                引例と「具体例レベル対比」できるようになる。
 
     Returns:
         プロンプト文字列
@@ -458,6 +497,7 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics"):
         _build_judgment_criteria(),
         _build_field_notes(field),
         _build_segments_section(segments),
+        _build_hongan_body_section(hongan),
         _build_keywords_section(keywords),
         _build_citations_section(citations),
         _build_output_format_multi(citations, segments),

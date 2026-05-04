@@ -99,7 +99,12 @@ def generate_prompt_multi(case_id, citation_ids):
     keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
     field = meta.get("field", "cosmetics")
-    prompt_text = _gen(segs, citations, keywords, field)
+    hongan = None
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+    prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
 
     ids_label = "_".join(citation_ids)
     prompt_path = case_dir / "prompts" / f"{ids_label}_prompt.txt"
@@ -144,7 +149,12 @@ def generate_prompt_single(case_id, citation_id):
             keywords = json.load(f)
     keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
-    prompt_text = _gen(segs, citation, keywords)
+    hongan = None
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+    prompt_text = _gen(segs, citation, keywords, hongan=hongan)
 
     prompt_path = case_dir / "prompts" / f"{citation_id}_prompt.txt"
     with open(prompt_path, "w", encoding="utf-8") as f:
@@ -950,7 +960,12 @@ def compare_execute(case_id, citation_ids):
     keywords = _filter_keywords_by_valid_segments(keywords, segs)
 
     field = meta.get("field", "cosmetics")
-    prompt_text = _gen(segs, citations, keywords, field)
+    hongan = None
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            hongan = json.load(f)
+    prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
 
     ids_label = "_".join(citation_ids)
     prompts_dir = case_dir / "prompts"
