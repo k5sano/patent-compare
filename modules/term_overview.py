@@ -15,29 +15,55 @@
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 
 from modules.claude_client import call_claude, ClaudeClientError
 
 logger = logging.getLogger(__name__)
 
 
+def _normalize_for_match(s: str) -> str:
+    """検索一致判定用の正規化。
+
+    PDF 抽出時に全角英数字 (Ｘ-２５-９１３８Ａ) や OCR 由来の語間空白
+    (Ｘ - ２ ５ - ９ １ ３ ８ Ａ) が混じるため、NFKC で全角→半角化、
+    全空白を除去、英大小同一視 で吸収する。
+
+    LLM に渡す抜粋テキストはこの正規化を**しない** (原文を保つ)。
+    """
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s)
+    s = re.sub(r"\s+", "", s)
+    return s.lower()
+
+
 def _extract_relevant(term: str, hongan: dict, char_budget: int = 20000) -> list[str]:
-    """term を含む claim/paragraph を抽出。char_budget を超えたら以降省略。"""
-    excerpts = []
+    """term を含む claim/paragraph を抽出。char_budget を超えたら以降省略。
+
+    照合は NFKC + 空白除去 + 大小無視で行い、抜粋テキストは原文をそのまま返す。
+    """
+    excerpts: list[str] = []
     used = 0
+    term_norm = _normalize_for_match(term)
+    if not term_norm:
+        return excerpts
+
     for c in hongan.get("claims") or []:
         text = c.get("text") or ""
-        if term in text:
+        if term_norm in _normalize_for_match(text):
             entry = f"請求項{c.get('number')}: {text}"
             if used + len(entry) > char_budget:
                 break
             excerpts.append(entry)
             used += len(entry)
+
     paragraphs = hongan.get("paragraphs") or []
     truncated_at = None
     for i, p in enumerate(paragraphs):
         text = p.get("text") or ""
-        if term in text:
+        if term_norm in _normalize_for_match(text):
             section = p.get("section", "") or ""
             entry = f"【{p.get('id', '')}】({section}) {text}"
             if used + len(entry) > char_budget:
