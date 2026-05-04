@@ -3338,8 +3338,17 @@ function _compJDisp(comp) {
   if (!comp) return '—';
   if (typeof comp.judgment_display === 'string') return comp.judgment_display;
   const j = comp.judgment || '';
-  if (j === '○' || j === 'o' || j === 'O') return '';
-  return j;
+  let disp = (j === '○' || j === 'o' || j === 'O') ? '' : j;
+  // 該当箇所未明示の警告: judgment が ○/△ なのに cited_location が空
+  if (j === '○' || j === '△' || j === 'o' || j === 'O') {
+    const loc = (typeof comp.cited_location_expanded === 'string' && comp.cited_location_expanded)
+      ? comp.cited_location_expanded
+      : (comp.cited_location || '');
+    if (!String(loc).trim()) {
+      disp = (disp || '') + '⚠';
+    }
+  }
+  return disp;
 }
 
 // cited_location 表示: サーバ展開済み (cited_location_expanded) を優先、無ければ raw
