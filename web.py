@@ -1746,11 +1746,25 @@ def chat_delete_thread(case_id, thread_id):
 
 @app.route("/case/<case_id>/chat/threads/<thread_id>/message", methods=["POST"])
 def chat_post_message(case_id, thread_id):
+    """Chat メッセージ送信。LLM 呼び出しは数分〜十数分かかることがあり、
+    途中で何が起きても必ず JSON で返す (broad except)。
+
+    無防備に raise すると Flask が応答せずブラウザ側が 'Failed to fetch' に
+    なって状態が分からなくなる (chat は 1 ターンのコストが高いため致命)。
+    """
+    import traceback
     from services.chat_service import append_message_and_reply
     data = request.get_json() or {}
-    return _svc_response(
-        append_message_and_reply(case_id, thread_id, data.get("content", ""))
-    )
+    try:
+        return _svc_response(
+            append_message_and_reply(case_id, thread_id, data.get("content", ""))
+        )
+    except Exception as e:
+        app.logger.exception("chat_post_message failed")
+        return jsonify({
+            "error": f"chat 内部エラー: {type(e).__name__}: {e}",
+            "traceback": traceback.format_exc().splitlines()[-3:],
+        }), 500
 
 
 @app.route("/case/<case_id>/chat/threads/<thread_id>/apply", methods=["POST"])

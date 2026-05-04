@@ -456,8 +456,13 @@ def _build_chat_prompt(case_id: str, topic: str, history: list[dict],
 # ============================================================
 
 def append_message_and_reply(case_id: str, thread_id: str, user_msg: str,
-                             claude_timeout: int = 300):
-    """ユーザーメッセージを追記し、LLM 応答を生成して同じスレッドに追記する。"""
+                             claude_timeout: int = 900):
+    """ユーザーメッセージを追記し、LLM 応答を生成して同じスレッドに追記する。
+
+    タイムアウト 15 分 (900 秒): chat は Read/Grep ツールで案件全データ
+    に自律アクセスする設計のため、長文回答だと数分〜10分かかる。
+    短くするとブラウザ側 'Failed to fetch' が早すぎて UX 崩壊する。
+    """
     if not load_case_meta(case_id):
         return {"error": "案件が見つかりません"}, 404
     user_msg = (user_msg or "").strip()
