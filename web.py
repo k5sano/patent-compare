@@ -327,7 +327,18 @@ def get_segments(case_id):
 @app.route("/case/<case_id>/segments", methods=["POST"])
 def save_segments(case_id):
     from services.case_service import save_json_file
-    save_json_file(case_id, "segments.json", request.get_json())
+    data = request.get_json()
+    # 分節編集が UI 表示に反映されない不具合の根治: 各 claim の full_text を
+    # segments[].text の結合で再生成する。
+    # full_text が古いまま (PDF 抽出時のノイズ込み) だと、対比表 UI の renderer が
+    # claim.full_text を優先して表示し、編集が無視されているように見えていた。
+    if isinstance(data, list):
+        for c in data:
+            if isinstance(c, dict) and isinstance(c.get("segments"), list):
+                c["full_text"] = "".join(
+                    (s.get("text") or "") for s in c["segments"]
+                )
+    save_json_file(case_id, "segments.json", data)
     return jsonify({"success": True})
 
 
