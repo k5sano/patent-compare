@@ -59,10 +59,12 @@ DEPENDENCY_PATTERN = re.compile(
 )
 
 # --- 英語請求項パターン ---
-CLAIM_PATTERN_EN = re.compile(r'\n\s*(\d+)\.\s+')
+CLAIM_PATTERN_EN = re.compile(r'(?:^|\n)\s*(\d+)\.\s+')
 CLAIM_PATTERN_WO = re.compile(r'\[Claim\s+(\d+)\]', re.I)  # WO形式: [Claim 1]
 CLAIM_SECTION_START_EN = re.compile(
-    r'(?:What is claimed is|CLAIMS|The Claims|I claim|We claim)\s*:?\s*\n', re.I
+    r'(?:What is claimed is|CLAIMS|The Claims|I claim|We claim'
+    r'|REVENDICATIONS|ANSPRÜCHE|ANSPRUCHE)\s*:?\s*\n',
+    re.I,
 )
 DEPENDENCY_PATTERN_EN = re.compile(
     r'claim\s+(\d+)'
@@ -86,8 +88,12 @@ def detect_format(text):
     # WO/EP: [XXXX] 段落番号
     if re.search(r'\[\d{4}\]', text):
         return "WO"
-    # 英語特許の一般検出: CLAIMS/ABSTRACT/DESCRIPTION 等のヘッダー
-    if re.search(r'\b(?:CLAIMS|ABSTRACT|DETAILED DESCRIPTION|FIELD OF THE INVENTION)\b', text):
+    # 英語/仏語/独語特許の一般検出: 各国の請求項セクション or 英語明細書ヘッダー
+    if re.search(
+        r'\b(?:CLAIMS|ABSTRACT|DETAILED DESCRIPTION|FIELD OF THE INVENTION'
+        r'|REVENDICATIONS|ANSPRÜCHE|ANSPRUCHE|DOMAINE TECHNIQUE)\b',
+        text,
+    ):
         return "US"
     return "JP"  # デフォルト
 
