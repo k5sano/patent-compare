@@ -1196,18 +1196,21 @@ def _compare_execute_per_citation_parallel(
         "response_length": resp_total,
         "parallel": max_workers,
         "model": model,
+        "mode_used": "legacy",  # 並列版は常に legacy 統合 prompt
+        "fallback_to_legacy": False,
     }, 200
 
 
-def compare_execute(case_id, citation_ids, model=None, mode="legacy", effort=None):
+def compare_execute(case_id, citation_ids, model=None, mode="requirement_first", effort=None):
     """直接実行: 対比プロンプト → Claude CLI → パース
 
     Parameters:
         model: 'opus'/'sonnet'/'haiku' のエイリアスまたはフル ID。
                None の場合 CLI 既定 (通常 Opus)。
-        mode: "legacy" (default) = 本願全文を流す従来方式
-              "requirement_first" = 構成要件主体型 (試作・新形式)。
+        mode: "requirement_first" (default, 推奨) = 構成要件主体型。
               本願はキーワード経由で必要箇所のみ抜粋。
+              "legacy" = 本願全文を流す旧方式。
+              keywords.json が無い案件では自動的に legacy にフォールバック。
         effort: 'low'/'medium'/'high'/'xhigh'/'max'。
                 None なら call_claude のデフォルト (high)。
     """
@@ -1259,6 +1262,16 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy", effort=Non
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
     keywords = _filter_keywords_by_valid_segments(keywords, segs)
+
+    # mode 安全装置: requirement_first はキーワード経由で本願参酌を抽出するので、
+    # keywords.json が無い (Step 3 未完了) 案件では効果が薄い → legacy にフォールバック
+    fallback_to_legacy = False
+    if mode == "requirement_first" and not (keywords or []):
+        mode = "legacy"
+        fallback_to_legacy = True
+        # _gen を切り替え (mode が変わったので generate_prompt 系を選び直し)
+        from modules.prompt_generator import generate_prompt as _gen_legacy_fb
+        _gen = _gen_legacy_fb
 
     field = meta.get("field", "cosmetics")
     hongan = None
@@ -1343,6 +1356,8 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy", effort=Non
         "resolved": resolved_log,  # ID 吸着の履歴 (デバッグ用)
         "char_count": len(prompt_text),
         "response_length": len(raw_response),
+        "mode_used": mode,
+        "fallback_to_legacy": fallback_to_legacy,
     }, 200
 
 

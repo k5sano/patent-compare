@@ -947,7 +947,7 @@ def compare_execute(case_id):
         case_id,
         data.get("citation_ids", []),
         model=data.get("model"),
-        mode=data.get("mode") or "legacy",
+        mode=data.get("mode") or "requirement_first",  # A: デフォルト切替
         effort=data.get("effort"),
     ))
 
