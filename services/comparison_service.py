@@ -1044,8 +1044,13 @@ def annotate_all_citations(case_id, max_workers=None):
             "workers_used": workers if jobs else 0}, 200
 
 
-def compare_execute(case_id, citation_ids):
-    """直接実行: 対比プロンプト → Claude CLI → パース"""
+def compare_execute(case_id, citation_ids, model=None):
+    """直接実行: 対比プロンプト → Claude CLI → パース
+
+    Parameters:
+        model: 'opus'/'sonnet'/'haiku' のエイリアスまたはフル ID。
+               None の場合 CLI 既定 (通常 Opus)。
+    """
     from modules.prompt_generator import generate_prompt as _gen
     from modules.response_parser import parse_response, split_multi_response
     from modules.claude_client import call_claude, ClaudeClientError
@@ -1105,7 +1110,7 @@ def compare_execute(case_id, citation_ids):
 
     timeout = 600 if len(citations) <= 2 else 900
     try:
-        raw_response = call_claude(prompt_text, timeout=timeout)
+        raw_response = call_claude(prompt_text, timeout=timeout, model=model)
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 

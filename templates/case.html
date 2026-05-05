@@ -932,9 +932,13 @@
 
       <!-- プロンプト生成 -->
       <div id="prompt-section">
-        <div class="btn-row" style="margin-top:0; margin-bottom:0.8rem;">
+        <div class="btn-row" style="margin-top:0; margin-bottom:0.8rem; align-items:center;">
           <button class="btn btn-primary" onclick="generatePrompt()">プロンプト生成</button>
           <button class="btn btn-success" onclick="copyPrompt()">クリップボードにコピー</button>
+          <label style="font-size:0.8rem; color:var(--text2); margin-left:0.5rem;">モデル:</label>
+          <select class="model-picker" data-model-key="compare-step5" data-model-default="opus"
+                  title="直接実行/一括実行で使う Claude モデル（Opus=厳密判定 / Sonnet=2-3倍速・コスト1/5）"
+                  style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-execute" onclick="executeCompare()" style="display:none;">&#9889; 直接実行</button>
           <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>

@@ -3063,22 +3063,24 @@ async function executeCompareUnanswered() {
     alert('未対比の文献がありません (全件回答済)');
     return;
   }
+  const model = getPickerModel('compare-step5', 'opus');
   if (!confirm(
     `未対比の ${targetIds.length} 件で対比を直接実行します。\n\n` +
-    `対象: ${targetIds.join(', ')}\n\n` +
-    `Claude 5〜10 分かかります (件数次第)。続行しますか?\n` +
+    `対象: ${targetIds.join(', ')}\n` +
+    `モデル: ${model}\n\n` +
+    `Claude 5〜10 分かかります (件数・モデル次第)。続行しますか?\n` +
     `完了後、結果反映のためページを自動リロードします。`
   )) return;
 
   const overlay = document.getElementById('exec-compare-progress');
   const status = document.getElementById('exec-compare-status');
   if (overlay) overlay.classList.add('show');
-  if (status) status.textContent = `Claude CLIで未対比 ${targetIds.length} 件を対比分析中...`;
+  if (status) status.textContent = `Claude CLI(${model})で未対比 ${targetIds.length} 件を対比分析中...`;
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: targetIds })
+      body: JSON.stringify({ citation_ids: targetIds, model })
     });
     const data = await resp.json();
     if (overlay) overlay.classList.remove('show');
@@ -4465,14 +4467,15 @@ async function executeCompare() {
   const progress = document.getElementById('exec-compare-progress');
   btn.disabled = true;
   progress.classList.add('show');
+  const model = getPickerModel('compare-step5', 'opus');
   document.getElementById('exec-compare-status').textContent =
-    `Claude CLIで${citIds.length}件の文献を対比分析中...`;
+    `Claude CLI(${model})で${citIds.length}件の文献を対比分析中...`;
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: citIds })
+      body: JSON.stringify({ citation_ids: citIds, model })
     });
     const data = await resp.json();
     progress.classList.remove('show');

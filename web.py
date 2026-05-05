@@ -938,7 +938,11 @@ def _open_with_pdf_xchange(pdf_path):
 def compare_execute(case_id):
     from services.comparison_service import compare_execute
     data = request.get_json() or {}
-    return _svc_response(compare_execute(case_id, data.get("citation_ids", [])))
+    return _svc_response(compare_execute(
+        case_id,
+        data.get("citation_ids", []),
+        model=data.get("model"),
+    ))
 
 
 # ===== 進歩性 =====
