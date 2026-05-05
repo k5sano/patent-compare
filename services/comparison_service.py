@@ -589,6 +589,67 @@ def get_response(case_id, citation_id):
     return _decorate_comparison_with_notation(data), 200
 
 
+def prune_orphan_comparisons(case_id):
+    """全 response から「現 segments に無い requirement_id」のエントリを削除。
+
+    補正で消えた旧分節 (1F, 1G 等) の判定が response 内に残ったまま、
+    UI に表示できない死にデータになっているケースの掃除。
+    再対比は走らせない (純粋にゴミ消し)。
+
+    Returns:
+        ({success, removed_total, removed_per_doc, valid_segment_ids}, status)
+    """
+    case_dir = get_case_dir(case_id)
+    seg_path = case_dir / "segments.json"
+    if not seg_path.exists():
+        return {"error": "segments.json がありません"}, 400
+    try:
+        with open(seg_path, "r", encoding="utf-8") as f:
+            segs = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return {"error": f"segments.json 読み込み失敗: {e}"}, 500
+
+    valid_ids = set(_get_all_segment_ids(segs))
+
+    resp_dir = case_dir / "responses"
+    if not resp_dir.exists():
+        return {"success": True, "removed_total": 0,
+                "removed_per_doc": {}, "valid_segment_ids": sorted(valid_ids)}, 200
+
+    removed_per_doc: dict[str, list[str]] = {}
+    removed_total = 0
+    for p in resp_dir.glob("*.json"):
+        if p.name.startswith("_"):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                rdata = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        comps = rdata.get("comparisons") or []
+        kept = []
+        removed_here = []
+        for c in comps:
+            rid = (c.get("requirement_id") or "").strip()
+            if rid and rid not in valid_ids:
+                removed_here.append(rid)
+                continue
+            kept.append(c)
+        if removed_here:
+            rdata["comparisons"] = kept
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(rdata, f, ensure_ascii=False, indent=2)
+            removed_per_doc[p.stem] = removed_here
+            removed_total += len(removed_here)
+
+    return {
+        "success": True,
+        "removed_total": removed_total,
+        "removed_per_doc": removed_per_doc,
+        "valid_segment_ids": sorted(valid_ids),
+    }, 200
+
+
 def update_comparison_cell(case_id, citation_id, target_kind, target_key, fields):
     """対比表セルを手動修正する。
 

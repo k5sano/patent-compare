@@ -28,8 +28,15 @@
       {% endif %}
       )
       <div style="margin-top:0.3rem; font-size:0.8rem; color:#fcd34d;">
-        Step 2 で分節を編集すると、既存の対比結果は古い分節 ID のまま残ります。
-        Step 5 で再対比をかけて整合させてください。
+        <strong>用語</strong>:
+        「判定なし分節」= 現 segments にあるが対比結果に未判定の構成要件 (再対比で埋まる) /
+        「孤立分節」= 旧分節 ID (例 補正で消えた 1F, 1G) の判定が古いまま response に
+        残っているもの (Step 5 で表示されない死にデータ)。
+        <br>
+        対処: ① <strong>再対比</strong>で正しい現分節の判定を取り直す、または
+        ② 孤立分節だけサクッと削除するなら <button class="btn btn-outline"
+            style="font-size:0.75rem; padding:0.1rem 0.5rem; vertical-align:baseline;"
+            onclick="pruneOrphanComparisons()">🧹 孤立分節を掃除</button>
       </div>
       {% if freshness.missing_in_responses %}
       <details style="margin-top:0.3rem;">

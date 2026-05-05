@@ -3752,6 +3752,34 @@ function _setCompSummaryLoadError(msg) {
   if (colbar) colbar.innerHTML = '';
 }
 
+async function pruneOrphanComparisons() {
+  if (!confirm(
+    '全引例の対比結果から、現 segments に無い古い requirement_id の判定エントリ\n' +
+    'を削除します (例: 補正で消えた 1F, 1G の旧判定)。\n\n' +
+    '・現分節の判定エントリは保持されます\n' +
+    '・cited_text や judgment_reason 等の周辺情報は古い ID と共に消えます\n' +
+    '・再対比は実行されません (純粋にゴミ消し)\n\n' +
+    '実行しますか?'
+  )) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/responses/prune-orphans`, { method: 'POST' });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { alert(d.error || `HTTP ${resp.status}`); return; }
+    let msg = `✅ 掃除完了: ${d.removed_total} 件の孤立判定を削除`;
+    if (d.removed_per_doc && Object.keys(d.removed_per_doc).length) {
+      msg += '\n\n削除内訳:';
+      for (const [doc, ids] of Object.entries(d.removed_per_doc)) {
+        msg += `\n  ${doc}: ${ids.join(', ')}`;
+      }
+    }
+    msg += '\n\nページをリロードします。';
+    alert(msg);
+    location.reload();
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 // ----------------------------------------------------------------
 // 対比表セルの手動編集
 // ----------------------------------------------------------------

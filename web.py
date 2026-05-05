@@ -349,6 +349,13 @@ def segments_freshness(case_id):
     return _svc_response(check_segments_freshness(case_id))
 
 
+@app.route("/case/<case_id>/responses/prune-orphans", methods=["POST"])
+def prune_orphan_comparisons_route(case_id):
+    """全 response から「現 segments に無い requirement_id」のエントリを削除。"""
+    from services.comparison_service import prune_orphan_comparisons
+    return _svc_response(prune_orphan_comparisons(case_id))
+
+
 # ===== キーワード =====
 
 @app.route("/case/<case_id>/keywords", methods=["GET"])
