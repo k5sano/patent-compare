@@ -187,7 +187,7 @@ def _verify_candidates(candidates):
 
 def _auto_download_citations(case_id, case_dir, meta):
     """候補文献のPDFダウンロード + テキスト抽出（並列）"""
-    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
+    from modules.patent_downloader import download_patent_pdf_smart, build_jplatpat_url
     from modules.pdf_extractor import extract_patent_pdf
 
     candidates = load_search_data(case_dir, "presearch_candidates.json")
@@ -254,7 +254,9 @@ def _auto_download_citations(case_id, case_dir, meta):
 
     def _download_one(candidate, patent_id, doc_id):
         """1件のPDFダウンロード + テキスト抽出"""
-        dl_result = download_patent_pdf(patent_id, case_dir / "input", timeout=60)
+        dl_result = download_patent_pdf_smart(
+            patent_id, case_dir / "input", timeout=60, headless=True,
+        )
         if not dl_result["success"]:
             return None, f"{patent_id}: DL失敗 - {dl_result.get('error', '')}"
 

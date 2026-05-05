@@ -114,7 +114,7 @@ def search_download(case_id, patent_ids, role="主引例"):
     Returns:
         (dict, int): {"results": [...]}, status_code
     """
-    from modules.patent_downloader import download_patent_pdf
+    from modules.patent_downloader import download_patent_pdf_smart
     from modules.pdf_extractor import extract_patent_pdf
 
     case_dir = get_case_dir(case_id)
@@ -127,7 +127,7 @@ def search_download(case_id, patent_ids, role="主引例"):
 
     results = []
     for patent_id in patent_ids:
-        dl_result = download_patent_pdf(patent_id, case_dir / "input")
+        dl_result = download_patent_pdf_smart(patent_id, case_dir / "input", headless=True)
 
         if dl_result["success"]:
             try:

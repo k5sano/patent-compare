@@ -389,3 +389,87 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
         "error": last_error or "全候補 URL で PDF を取得できませんでした",
         "google_patents_url": last_url,
     }
+
+
+# ----------------------------------------------------------------
+# 統合ダウンローダ: JP は J-PlatPat、それ以外は Google Patents
+# ----------------------------------------------------------------
+
+def is_jp_patent_id(patent_id):
+    """patent_id が J-PlatPat 番号照会で扱える日本特許番号かを判定。
+
+    特開/特表/特許 + 西暦・元号、JP-yyyy-nnnnnnA、JP-nnnnnnnB 等を JP として扱い、
+    WO/US/EP/再表/再公表 や正規化不能な文字列は False を返す
+    (jplatpat_pdf_downloader.normalize_jp_patent_number に委譲)。
+    """
+    if not (patent_id or "").strip():
+        return False
+    try:
+        from modules.jplatpat_pdf_downloader import normalize_jp_patent_number
+    except ImportError:
+        return False
+    try:
+        normalize_jp_patent_number(patent_id)
+        return True
+    except ValueError:
+        return False
+
+
+def download_patent_pdf_smart(patent_id, save_dir, *, timeout=30,
+                              prefer_jplatpat=True, headless=True,
+                              on_progress=None):
+    """JP 番号は J-PlatPat、それ以外は Google Patents。失敗時クロスフォールバック。
+
+    - JP 番号: J-PlatPat 番号照会 → 公報 PDF 内部 API → ページ結合
+        失敗したら Google Patents に切替
+    - 非 JP / JP 判定不能: Google Patents 直行
+    - 両方失敗: Google Patents の失敗 dict を返す (エラーには J-PlatPat 側のメッセージも添付)
+
+    既存の download_patent_pdf と互換のレスポンス dict (success/path/error/google_patents_url)
+    に加え、成功時は ``source`` フィールドで取得経路を示す:
+        "jplatpat" — J-PlatPat 経由 (num_pages, title も付与)
+        "google_patents" — Google Patents 経由
+
+    Parameters:
+        prefer_jplatpat: False にすると JP 番号でも Google Patents に直行 (既存挙動互換)
+        headless: J-PlatPat 取得時の Playwright モード (バッチ実行は True 推奨)
+        on_progress: J-PlatPat 進捗ログ用コールバック
+    """
+    pid = (patent_id or "").strip()
+    if not pid:
+        return {"success": False, "error": "patent_id が空です",
+                "google_patents_url": ""}
+
+    if prefer_jplatpat and is_jp_patent_id(pid):
+        jp_error = ""
+        try:
+            from modules.jplatpat_pdf_downloader import download_jplatpat_pdf
+            jp_result = download_jplatpat_pdf(
+                pid, save_dir, headless=headless, on_progress=on_progress,
+            )
+            if jp_result.get("success"):
+                return {
+                    "success": True,
+                    "path": jp_result["path"],
+                    "source": "jplatpat",
+                    "num_pages": jp_result.get("num_pages"),
+                    "title": jp_result.get("title", ""),
+                    "google_patents_url": build_google_patents_url(pid),
+                }
+            jp_error = jp_result.get("error", "")
+        except Exception as e:
+            jp_error = f"J-PlatPat 経路で例外: {e}"
+
+        # フォールバック: Google Patents
+        gp_result = download_patent_pdf(pid, save_dir, timeout=timeout)
+        gp_result["jplatpat_error"] = jp_error
+        if gp_result.get("success"):
+            gp_result["source"] = "google_patents"
+            gp_result["fallback"] = True
+        return gp_result
+
+    # 非 JP は Google Patents 直行
+    gp_result = download_patent_pdf(pid, save_dir, timeout=timeout)
+    if gp_result.get("success"):
+        gp_result["source"] = "google_patents"
+    return gp_result

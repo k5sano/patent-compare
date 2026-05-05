@@ -197,7 +197,7 @@ def fetch_cited_documents(case_id, filename, citation_nums):
         citation_nums: 取得対象の num のリスト（Box C内の通し番号）
     """
     import time
-    from modules.patent_downloader import download_patent_pdf
+    from modules.patent_downloader import download_patent_pdf_smart, is_jp_patent_id
 
     if not load_case_meta(case_id):
         return {"error": "案件が見つかりません"}, 404
@@ -229,12 +229,16 @@ def fetch_cited_documents(case_id, filename, citation_nums):
             cit["fetch_status"] = "no_id"
             continue
 
-        # 2回目以降のDL前にスリープ（Google Patents 連続アクセス対策）
+        # 連続アクセスのスロットル: JP は J-PlatPat 内部 API 経由で Playwright プロセス
+        # 起動コストが大きいので緩めに、非 JP は Google Patents の従来スロットルを維持。
         if dl_count > 0:
-            time.sleep(GOOGLE_PATENTS_DL_INTERVAL)
+            if is_jp_patent_id(doc_id):
+                time.sleep(min(GOOGLE_PATENTS_DL_INTERVAL, 1.0))
+            else:
+                time.sleep(GOOGLE_PATENTS_DL_INTERVAL)
         dl_count += 1
 
-        dl = download_patent_pdf(doc_id, input_dir, timeout=60)
+        dl = download_patent_pdf_smart(doc_id, input_dir, timeout=60, headless=True)
         if not dl.get("success"):
             results.append({
                 "num": cit.get("num"), "doc_id": doc_id, "label": label,

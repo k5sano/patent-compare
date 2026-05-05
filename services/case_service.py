@@ -298,7 +298,7 @@ def create_case(case_number, year="", month="", field="cosmetics",
     Returns:
         dict: 結果情報
     """
-    from modules.patent_downloader import download_patent_pdf
+    from modules.patent_downloader import download_patent_pdf_smart
     from modules.pdf_extractor import extract_patent_pdf
     from modules.claim_segmenter import segment_claims
 
@@ -347,7 +347,7 @@ def create_case(case_number, year="", month="", field="cosmetics",
         }
 
     jp_id = parsed["jp_id"] or case_number
-    dl_result = download_patent_pdf(jp_id, case_dir / "input", timeout=60)
+    dl_result = download_patent_pdf_smart(jp_id, case_dir / "input", timeout=60, headless=True)
     if not dl_result["success"]:
         return {
             "success": True,
@@ -561,7 +561,7 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
     case_dir = get_case_dir(case_id)
     input_dir = case_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
-    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
+    from modules.patent_downloader import download_patent_pdf_smart, build_jplatpat_url
 
     results = []
     for r in refs:
@@ -572,7 +572,7 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
                 "raw_text": r.get("raw_text", ""),
             })
             continue
-        dl = download_patent_pdf(r["patent_id"], save_dir=input_dir)
+        dl = download_patent_pdf_smart(r["patent_id"], save_dir=input_dir, headless=True)
         if not dl.get("success"):
             # 失敗時は J-PlatPat 固定 URL も返して UI で手動 DL を促す
             # (Google Patents は古い特許 / マイナー国の特許で失敗しやすい)
@@ -621,7 +621,7 @@ def register_citation_by_patent_id(case_id, patent_id, role="主引例"):
     Returns:
         ({success/error/doc_id/...}, status_code)
     """
-    from modules.patent_downloader import download_patent_pdf, build_jplatpat_url
+    from modules.patent_downloader import download_patent_pdf_smart, build_jplatpat_url
 
     if not load_case_meta(case_id):
         return {"error": "案件が見つかりません"}, 404
@@ -633,7 +633,7 @@ def register_citation_by_patent_id(case_id, patent_id, role="主引例"):
     input_dir = case_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
 
-    dl = download_patent_pdf(pid, save_dir=input_dir)
+    dl = download_patent_pdf_smart(pid, save_dir=input_dir, headless=True)
     if not dl.get("success"):
         return {
             "error": dl.get("error", "PDF ダウンロードに失敗しました"),
