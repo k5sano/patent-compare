@@ -1161,16 +1161,25 @@ def _compare_execute_per_citation_parallel(
     }, 200
 
 
-def compare_execute(case_id, citation_ids, model=None):
+def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
     """直接実行: 対比プロンプト → Claude CLI → パース
 
     Parameters:
         model: 'opus'/'sonnet'/'haiku' のエイリアスまたはフル ID。
                None の場合 CLI 既定 (通常 Opus)。
+        mode: "legacy" (default) = 本願全文を流す従来方式
+              "requirement_first" = 構成要件主体型 (試作・新形式)。
+              本願はキーワード経由で必要箇所のみ抜粋。
     """
-    from modules.prompt_generator import generate_prompt as _gen
+    from modules.prompt_generator import (
+        generate_prompt as _gen_legacy,
+        generate_prompt_requirement_first as _gen_reqfirst,
+    )
     from modules.response_parser import parse_response, split_multi_response
     from modules.claude_client import call_claude, ClaudeClientError
+
+    # mode に応じて prompt 生成関数を切替
+    _gen = _gen_reqfirst if mode == "requirement_first" else _gen_legacy
 
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)

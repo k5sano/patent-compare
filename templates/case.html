@@ -963,6 +963,13 @@
           <select class="model-picker" data-model-key="compare-step5" data-model-default="opus"
                   title="直接実行/一括実行で使う Claude モデル（Opus=厳密判定 / Sonnet=2-3倍速・コスト1/5）"
                   style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
+          <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">方式:</label>
+          <select id="compare-mode-picker"
+                  title="legacy=本願全文をプロンプトに含める従来方式 / requirement_first=構成要件単位で本願はキーワード抜粋（試作）"
+                  style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;">
+            <option value="legacy" selected>legacy (本願全文)</option>
+            <option value="requirement_first">requirement_first (構成要件主体・試作)</option>
+          </select>
           <button class="btn btn-execute" onclick="executeCompare()" style="display:none;">&#9889; 直接実行</button>
           <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>

@@ -374,20 +374,54 @@ def _build_segments_section(segments):
     return "\n".join(lines)
 
 
-def _build_hongan_body_section(hongan):
+# compact 時に必ず残す本願セクション (実施例の具体例・配合表は判定の根拠になる)
+_COMPACT_KEEP_SECTIONS = {"実施例", "実施形態", "比較例", "課題", "表"}
+
+
+def _build_hongan_body_section(hongan, *, compact=False, related_para_ids=None,
+                                compact_mode="relaxed"):
     """本願の明細書本文 + 表セクション (実施例の具体例を LLM に提示)。
 
-    chat と同じハイブリッド方針: 本願は数万字程度なので全文 inline する。
-    引例本文との「具体例レベル対比」(例: 本願実施例 X-25-9138A を 5% 配合 vs
-    引例実施例) で LLM が見落とさないように。
+    Parameters:
+        hongan: hongan.json
+        compact: True にすると本願段落を絞り込む
+        related_para_ids: 関連段落の id セット (related_paragraphs.json を分節横断で
+                         マージしたもの)
+        compact_mode:
+            "relaxed" (default): 関連段落 ∪ 重要セクション (実施例/実施形態/比較例/課題)
+            "strict": 関連段落のみ (＋表)。実施例の数値証拠が失われる可能性あり
     """
     if not hongan:
         return ""
-    lines = ["## 本願の明細書本文 (全段落) — 実施例の具体例参照用"]
+
     paragraphs = hongan.get("paragraphs") or []
-    if paragraphs:
-        for p in paragraphs:
-            lines.append(f"【{p.get('id', '')}】({p.get('section', '')}) {p.get('text', '')}")
+    if compact and paragraphs:
+        keep_ids = set(related_para_ids or [])
+        if compact_mode == "strict":
+            filtered = [p for p in paragraphs if str(p.get("id", "")) in keep_ids]
+            mode_label = "strict: 関連段落のみ"
+        else:  # relaxed
+            filtered = []
+            for p in paragraphs:
+                pid = str(p.get("id", ""))
+                section = p.get("section", "") or ""
+                if pid in keep_ids:
+                    filtered.append(p)
+                elif any(k in section for k in _COMPACT_KEEP_SECTIONS):
+                    filtered.append(p)
+            mode_label = "relaxed: 関連段落 + 実施例/実施形態/比較例/課題セクション"
+        title = (
+            f"## 本願の明細書本文 (compact {mode_label}, 計 {len(filtered)} / {len(paragraphs)} 段落)"
+        )
+        out_paragraphs = filtered
+    else:
+        title = "## 本願の明細書本文 (全段落) — 実施例の具体例参照用"
+        out_paragraphs = paragraphs
+
+    lines = [title]
+    for p in out_paragraphs:
+        lines.append(f"【{p.get('id', '')}】({p.get('section', '')}) {p.get('text', '')}")
+
     tables = hongan.get("tables") or []
     if tables:
         lines.append("")
@@ -403,7 +437,6 @@ def _build_hongan_body_section(hongan):
                     else:
                         lines.append(str(row))
             else:
-                # 構造未知の表は content フィールド or JSON を出す
                 content = t.get("content")
                 if content:
                     lines.append(content)
@@ -668,7 +701,9 @@ def _build_output_format_multi(citations, segments):
 - **document_id は上記「## 引用文献N: ラベル（{', '.join(d['id'] for d in doc_list)}）」内のカッコ内の文字列をそのまま使ってください**（半角/全角・空白・ハイフン・スラッシュを変えずに）。表記揺れがあると UI で取り込めません"""
 
 
-def generate_prompt(segments, citations, keywords=None, field="cosmetics", hongan=None):
+def generate_prompt(segments, citations, keywords=None, field="cosmetics", hongan=None,
+                    *, compact_hongan=False, related_paragraphs=None,
+                    compact_mode="relaxed"):
     """対比プロンプトを生成するメインエントリポイント
 
     Parameters:
@@ -676,9 +711,11 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
         citations: 引用文献データ。dict(1件) or list[dict](複数件)
         keywords: キーワードグループ (keywords.json)、任意
         field: "cosmetics" | "laminate"
-        hongan: 本願データ (hongan.json) 任意。指定すると本願 paragraphs/tables も
-                inline される。LLM が本願実施例 (具体的化合物・配合量) を見て
-                引例と「具体例レベル対比」できるようになる。
+        hongan: 本願データ (hongan.json) 任意。
+        compact_hongan: True の場合、本願段落を「関連段落 + 重要セクション」に絞る。
+                        related_paragraphs と組み合わせて使う。
+        related_paragraphs: related_paragraphs.json (dict: seg_id → list[{id,page,...}])。
+                           compact_hongan=True のときに参照される。
 
     Returns:
         プロンプト文字列
@@ -693,6 +730,15 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
     if citations and hasattr(citations[0], 'get'):
         field = citations[0].get("field", field)
 
+    # compact mode の関連段落 ID 集合をマージ
+    related_para_ids = set()
+    if compact_hongan and related_paragraphs:
+        for seg_id, paras in related_paragraphs.items():
+            for p in (paras or []):
+                pid = p.get("id") if isinstance(p, dict) else p
+                if pid:
+                    related_para_ids.add(str(pid))
+
     # 静的部分 (案件・実行ごとに変わらない) を先頭、動的部分 (案件固有) を末尾に
     # → Anthropic の prompt cache が先頭から最大 cache 境界までヒット
     # → 同一 field の連続対比で 2 回目以降のレイテンシ・トークンコスト削減
@@ -706,7 +752,10 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
 
         # === 動的部分 (案件固有、毎回変わる) ===
         _build_segments_section(segments),
-        _build_hongan_body_section(hongan),
+        _build_hongan_body_section(
+            hongan, compact=compact_hongan, related_para_ids=related_para_ids,
+            compact_mode=compact_mode,
+        ),
         _build_keywords_section(keywords),
         _build_citations_section(citations),
         _build_output_format_multi(citations, segments),
@@ -714,3 +763,246 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
 
     prompt = "\n\n---\n\n".join(s for s in sections if s.strip())
     return prompt
+
+# ====================================================================
+# 構成要件主体型 prompt (審査官実務に近い形式) — Phase: 試作
+# ====================================================================
+#
+# 設計思想 (ユーザー実務指示 2026-05-05):
+#   - 請求項を構成要件単位で分解し、文言ごとに引例本文と照合する
+#   - 本願明細書は「言葉の定義・該当成分名・実施例の数値」を参酌する
+#     ための辞書として扱う (全文を流し込まない)
+#   - キーワードでマッチした段落・表のみを構成要件ごとに抜粋して prompt 化
+#   - 構成要件単位のブロックを並べることで、判定漏れを抑制 +
+#     「複合要件の一部開示→△」が自然に出やすい構造
+#
+# 利用方法:
+#   from modules.prompt_generator import generate_prompt_requirement_first
+#   prompt = generate_prompt_requirement_first(
+#       segments, citations, keywords, field, hongan=hongan
+#   )
+#   raw = call_claude(prompt, model="sonnet")
+#   # parse_response は既存と同じ JSON 出力形式
+
+# 抜粋上限 (これ以上は段落が多くても切る)
+_MAX_HONGAN_HITS_PER_SEG = 8
+_MAX_CITATION_HITS_PER_SEG = 8
+_MAX_PARA_TEXT_CHARS = 600  # 1段落の最大表示文字数 (長文段落は冒頭のみ)
+
+
+def _build_segment_keyword_map(keywords):
+    """seg_id → [term, ...] のマップを構築。
+
+    keywords.json の構造: [{group_id, label, segment_ids:[...], keywords:[{term,type,source,...}]}, ...]
+    """
+    m = {}
+    for group in (keywords or []):
+        terms = [kw.get("term", "") for kw in group.get("keywords", []) if kw.get("term")]
+        for seg_id in group.get("segment_ids", []):
+            m.setdefault(seg_id, []).extend(terms)
+    # 重複除去 (順序維持)
+    for k in list(m.keys()):
+        seen = set(); uniq = []
+        for t in m[k]:
+            if t not in seen:
+                seen.add(t); uniq.append(t)
+        m[k] = uniq
+    return m
+
+
+def _truncate(text, n):
+    text = text or ""
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def _find_matching_paragraphs(units, terms, max_hits):
+    """段落リストからキーワードを含むものを返す (大文字小文字無視)。
+
+    units: [{"id":..., "text":..., "section":..., "page":...}, ...]
+    """
+    if not terms or not units:
+        return []
+    norm_terms = [t for t in terms if t]
+    if not norm_terms:
+        return []
+    out = []
+    for u in units:
+        text = u.get("text", "") or ""
+        if any(t in text for t in norm_terms):
+            out.append(u)
+            if len(out) >= max_hits:
+                break
+    return out
+
+
+def _find_matching_claims(claims, terms, max_hits=3):
+    if not terms or not claims:
+        return []
+    out = []
+    for cl in claims:
+        text = cl.get("text", "") or ""
+        if any(t in text for t in terms if t):
+            out.append(cl)
+            if len(out) >= max_hits:
+                break
+    return out
+
+
+def _find_matching_tables(tables, terms, max_hits=3):
+    """表本文 (rows をフラット化) にキーワードがあれば含める"""
+    if not terms or not tables:
+        return []
+    out = []
+    for t in tables:
+        rows = t.get("rows") or t.get("data") or []
+        flat = []
+        if isinstance(rows, list):
+            for r in rows:
+                flat.append("\t".join(str(x) for x in r) if isinstance(r, list) else str(r))
+        flat_text = "\n".join(flat) + "\n" + (t.get("content") or "") + (t.get("caption") or "")
+        if any(term in flat_text for term in terms if term):
+            out.append(t)
+            if len(out) >= max_hits:
+                break
+    return out
+
+
+def _build_citations_overview(citations):
+    """各引例の概要 (請求項 + 主要メタ) のみ。本文は構成要件ブロックで抜粋する"""
+    lines = ["## 引用文献の概要"]
+    for i, cit in enumerate(citations, 1):
+        label = cit.get("label") or cit.get("patent_number") or f"引例{i}"
+        pn = cit.get("patent_number", "")
+        lines.append(f"\n### 引用文献{i}: {label} ({pn})")
+        title = cit.get("patent_title") or cit.get("title")
+        if title:
+            lines.append(f"- 発明の名称: {title}")
+        claims = cit.get("claims", [])
+        if claims:
+            lines.append("- 請求項一覧:")
+            for cl in claims[:5]:  # 多すぎなら先頭5件
+                lines.append(f"  【請求項{cl.get('number','?')}】{_truncate(cl.get('text',''), 300)}")
+            if len(claims) > 5:
+                lines.append(f"  （…他 {len(claims)-5} 請求項）")
+        # 課題 (進歩性チェックの素地として一行)
+        for p in cit.get("paragraphs", []):
+            sec = p.get("section", "") or ""
+            if "課題" in sec:
+                lines.append(f"- 引例の課題 (段落{p.get('id','')}): {_truncate(p.get('text',''), 250)}")
+                break
+    return "\n".join(lines)
+
+
+def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
+    """構成要件単位のブロック群 — 請求項主体型 prompt の中核"""
+    lines = ["## 構成要件別 対比 (各構成要件を独立に判定すること)"]
+
+    hongan_paras = (hongan or {}).get("paragraphs", []) or []
+    hongan_tables = (hongan or {}).get("tables", []) or []
+
+    for claim in segments:
+        claim_num = claim.get("claim_number", "?")
+        is_indep = claim.get("is_independent", False)
+        deps = claim.get("dependencies", [])
+        dep_label = "独立" if is_indep else f"従属(→請求項{','.join(map(str, deps))})"
+        lines.append(f"\n### 請求項{claim_num} ({dep_label})")
+
+        for seg in claim.get("segments", []):
+            seg_id = seg.get("id", "?")
+            seg_text = seg.get("text", "")
+            terms = seg_keywords.get(seg_id, [])
+            terms_label = (
+                "、".join(terms[:6]) + (f"…(他{len(terms)-6}件)" if len(terms) > 6 else "")
+                if terms else "(キーワード未登録)"
+            )
+
+            lines.append(f"\n#### 構成要件 {seg_id}")
+            lines.append(f"**請求項文言**: 「{seg_text}」")
+            lines.append(f"**参酌キーワード**: {terms_label}")
+
+            # 本願参酌
+            h_para_hits = _find_matching_paragraphs(hongan_paras, terms, _MAX_HONGAN_HITS_PER_SEG)
+            h_table_hits = _find_matching_tables(hongan_tables, terms)
+            if h_para_hits or h_table_hits:
+                lines.append("\n**本願参酌** (本願での定義・成分名・実施例の用法):")
+                for p in h_para_hits:
+                    lines.append(
+                        f"- 段落{p.get('id','')}({p.get('section','')}): "
+                        f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                    )
+                for t in h_table_hits:
+                    cap = t.get("caption") or t.get("title") or "(表)"
+                    lines.append(f"- 本願表「{cap}」 ※詳細は末尾の表セクション参照")
+            elif terms:
+                lines.append("\n**本願参酌**: 本願段落でキーワードヒットなし (定義は明細書の他箇所か業界用語)")
+
+            # 引例該当
+            for i, cit in enumerate(citations, 1):
+                cit_label = cit.get("label") or cit.get("patent_number") or f"引例{i}"
+                cit_paras = cit.get("paragraphs", []) or []
+                cit_claims = cit.get("claims", []) or []
+                cit_tables = cit.get("tables", []) or []
+
+                claim_hits = _find_matching_claims(cit_claims, terms)
+                para_hits = _find_matching_paragraphs(cit_paras, terms, _MAX_CITATION_HITS_PER_SEG)
+                table_hits = _find_matching_tables(cit_tables, terms)
+
+                if claim_hits or para_hits or table_hits:
+                    lines.append(f"\n**引例{i} ({cit_label}) 該当**:")
+                    for cl in claim_hits:
+                        lines.append(
+                            f"- 請求項{cl.get('number','?')}: "
+                            f"{_truncate(cl.get('text',''), 350)}"
+                        )
+                    for p in para_hits:
+                        lines.append(
+                            f"- 段落{p.get('id','')}({p.get('section','')}): "
+                            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                        )
+                    for t in table_hits:
+                        cap = t.get("caption") or t.get("title") or "(表)"
+                        para_id = t.get("paragraph_id", "?")
+                        lines.append(f"- 表「{cap}」 段落{para_id}付近 ※詳細は引例本文セクション参照")
+                else:
+                    lines.append(
+                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし → "
+                        "上位概念チェック (本願語の上位概念で再走査)・同義語チェックを実施し、"
+                        "それでも無ければ × (judgment_reason に「上位概念 (○○) も記載なし」と明記)"
+                    )
+
+    return "\n".join(lines)
+
+
+def generate_prompt_requirement_first(segments, citations, keywords=None,
+                                       field="cosmetics", hongan=None):
+    """構成要件主体型の対比 prompt を生成 (新形式・試作版)。
+
+    審査官の実務に沿って、請求項の構成要件ごとに「文言 + 本願参酌 + 引例該当」を
+    並べて Claude に判定させる。本願明細書全文は流し込まない (キーワード経由で
+    必要箇所のみ抜粋)。
+
+    出力 JSON 形式は既存 generate_prompt と同じ (parse_response がそのまま使える)。
+
+    Parameters と Returns は generate_prompt と同じ。
+    """
+    if isinstance(citations, dict):
+        citations = [citations]
+    if citations and hasattr(citations[0], 'get'):
+        field = citations[0].get("field", field)
+
+    seg_keywords = _build_segment_keyword_map(keywords)
+
+    sections = [
+        # === 静的部分 (cache 対象) ===
+        _build_task_definition(),
+        _build_citation_priority_rules(),
+        _build_cited_location_notation_rules(),
+        _build_judgment_criteria(),
+        _build_field_notes(field),
+        # === 動的部分 ===
+        _build_citations_overview(citations),
+        _build_requirement_blocks(segments, citations, hongan, seg_keywords),
+        _build_output_format_multi(citations, segments),
+    ]
+    return "\n\n---\n\n".join(s for s in sections if s.strip())
+
