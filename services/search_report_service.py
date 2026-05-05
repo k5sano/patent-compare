@@ -109,7 +109,7 @@ def delete_report(case_id, filename):
     return {"success": True}, 200
 
 
-def summarize_box_v(case_id, filename):
+def summarize_box_v(case_id, filename, model=None):
     """Box V本文をClaudeで要約。結果を search_reports.json に保存"""
     from modules.claude_client import call_claude, ClaudeClientError
 
@@ -164,13 +164,14 @@ def summarize_box_v(case_id, filename):
 """
 
     try:
-        response = call_claude(prompt, timeout=300)
+        response = call_claude(prompt, timeout=300, model=model)
     except ClaudeClientError as e:
         return {"error": f"Claude呼び出し失敗: {e}"}, 500
 
     target["box_v_summary"] = response
+    target["box_v_summary_model"] = model or ""  # どのモデルで要約したか記録
     save_reports(case_id, data)
-    return {"success": True, "summary": response}, 200
+    return {"success": True, "summary": response, "model": model or ""}, 200
 
 
 def _category_to_role(cat):

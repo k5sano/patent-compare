@@ -1121,7 +1121,9 @@ def search_report_delete(case_id, filename):
 @app.route("/case/<case_id>/search-report/<path:filename>/summarize", methods=["POST"])
 def search_report_summarize(case_id, filename):
     from services.search_report_service import summarize_box_v
-    return _svc_response(summarize_box_v(case_id, filename))
+    body = request.get_json(silent=True) or {}
+    model = body.get("model") or request.args.get("model")
+    return _svc_response(summarize_box_v(case_id, filename, model=model))
 
 
 @app.route("/case/<case_id>/search-report/<path:filename>/fetch", methods=["POST"])

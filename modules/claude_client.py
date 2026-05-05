@@ -96,6 +96,24 @@ def is_claude_available():
     return shutil.which("claude") is not None
 
 
+# UI / API パラメータで受け取るエイリアスをフルモデル ID に解決する。
+# CLI が直接エイリアス受け付けに対応する版もあるが、ここでは安全のため明示的にマップ。
+MODEL_ALIASES = {
+    "opus":   "claude-opus-4-6",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku":  "claude-haiku-4-5-20251001",
+}
+
+
+def resolve_model(name):
+    """エイリアス ('opus'/'sonnet'/'haiku') もフル ID も同じく受け付け、
+    フル ID を返す。空・未知文字列はそのまま返す（CLI 側に解釈を任せる）。
+    None なら None（CLI既定）。"""
+    if not name:
+        return None
+    return MODEL_ALIASES.get(name, name)
+
+
 def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None):
     """Claude Code CLI にプロンプトを送信し、回答テキストを返す。
 
@@ -103,7 +121,8 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=No
         prompt_text: プロンプト文字列
         timeout: タイムアウト秒数（デフォルト600秒）
         use_search: True の場合、MCP検索サーバーを有効にする
-        model: モデル ID (例: "claude-opus-4-6")。None の場合 CLI 既定を使用。
+        model: モデル指定。'opus'/'sonnet'/'haiku' エイリアスまたは
+               'claude-opus-4-6' 等のフル ID。None の場合 CLI 既定。
 
     Returns:
         str: Claude の回答テキスト
@@ -125,8 +144,9 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=No
 
     # コマンド構築
     cmd = ["claude", "-p"]
-    if model:
-        cmd.extend(["--model", model])
+    resolved_model = resolve_model(model)
+    if resolved_model:
+        cmd.extend(["--model", resolved_model])
 
     # MCP検索サーバー設定
     mcp_config_path = None

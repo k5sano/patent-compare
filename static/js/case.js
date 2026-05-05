@@ -1,5 +1,60 @@
 const CASE_ID = window.CASE_BOOTSTRAP.case_id;
 
+// =============================================================
+// LLM モデル選択 (各「LLM 駆動ボタン」の横に置くプルダウン)
+// =============================================================
+//
+// HTML 側:
+//   <select class="model-picker" data-model-key="suggest-keywords"
+//           data-model-default="sonnet">
+//     <!-- options は initModelPickers() で自動補完 -->
+//   </select>
+//   <button onclick="suggestKeywords()">提案実行</button>
+//
+// JS 側:
+//   - initModelPickers(): DOMContentLoaded 時に option を流し込み、
+//     localStorage に保存された前回値を復元
+//   - getPickerModel(key): 'opus' | 'sonnet' | 'haiku' を返す
+//
+const _MODEL_OPTIONS = [
+  { value: 'opus',   label: 'Opus 4.6 (高精度・低速)' },
+  { value: 'sonnet', label: 'Sonnet 4.6 (バランス)' },
+  { value: 'haiku',  label: 'Haiku 4.5 (高速・軽量)' },
+];
+
+function _modelStorageKey(key) { return `pc-model:${key}`; }
+
+function initModelPickers() {
+  document.querySelectorAll('select.model-picker').forEach(sel => {
+    if (sel.dataset._inited) return;
+    sel.dataset._inited = '1';
+    const key = sel.dataset.modelKey || '';
+    const def = sel.dataset.modelDefault || 'sonnet';
+    let saved = def;
+    if (key) {
+      try { saved = localStorage.getItem(_modelStorageKey(key)) || def; }
+      catch (_) { /* noop */ }
+    }
+    sel.innerHTML = _MODEL_OPTIONS.map(o =>
+      `<option value="${o.value}"${o.value === saved ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+    sel.addEventListener('change', () => {
+      if (!key) return;
+      try { localStorage.setItem(_modelStorageKey(key), sel.value); }
+      catch (_) { /* noop */ }
+    });
+  });
+}
+
+/** 同じ data-model-key を持つピッカーの選択値（'opus'/'sonnet'/'haiku'）を返す */
+function getPickerModel(key, fallback = 'sonnet') {
+  const sel = document.querySelector(`select.model-picker[data-model-key="${key}"]`);
+  if (!sel) return fallback;
+  return sel.value || fallback;
+}
+
+document.addEventListener('DOMContentLoaded', initModelPickers);
+
 // === 画面幅モード切替 (3440x1440 / 2560x1440 のワイドディスプレイ向け) ===
 function setWidthMode(mode) {
   if (mode !== 'narrow' && mode !== 'wide' && mode !== 'ultra') mode = 'wide';
@@ -587,7 +642,9 @@ function renderSearchReport(report) {
       <div style="display:flex; gap:4px; flex-wrap:wrap;">
         <a href="/case/${CASE_ID}/search-report/${encodeURIComponent(fname)}/pdf" target="_blank"
            class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;">PDF表示</a>
-        ${hasBoxV ? `<button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
+        ${hasBoxV ? `<select class="model-picker" data-model-key="boxv-summary" data-model-default="sonnet"
+                style="padding:0.3rem 0.4rem; font-size:0.75rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
+        <button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
                 onclick="summarizeBoxV('${safeFname}', this)">Box V要約</button>` : ''}
         <button class="btn btn-danger" style="padding:0.3rem 0.8rem; font-size:0.8rem;"
                 onclick="deleteSearchReport('${safeFname}')">削除</button>
@@ -637,6 +694,7 @@ async function loadSearchReports() {
       return;
     }
     list.innerHTML = data.reports.map(renderSearchReport).join('');
+    initModelPickers();  // 動的に挿入された <select.model-picker> を初期化
   } catch(e) {
     console.error('loadSearchReports', e);
   }
@@ -686,11 +744,21 @@ async function deleteSearchReport(filename) {
 async function summarizeBoxV(filename, btn) {
   const orig = btn.textContent;
   btn.disabled = true;
-  btn.textContent = '要約中...';
+  // 同じカード内のピッカーから model を取る（renderSearchReport 直後は
+  // initModelPickers が走っていない可能性があるので明示的に初期化）
+  initModelPickers();
+  const card = btn.closest('.sr-card');
+  const sel = card?.querySelector('select.model-picker[data-model-key="boxv-summary"]');
+  const model = (sel && sel.value) || 'sonnet';
+  btn.textContent = `要約中(${model})...`;
   try {
     const resp = await fetch(
       `/case/${CASE_ID}/search-report/${encodeURIComponent(filename)}/summarize`,
-      { method: 'POST' }
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      }
     );
     const data = await resp.json();
     if (data.success) await loadSearchReports();
