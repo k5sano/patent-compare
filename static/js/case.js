@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const sel = document.getElementById('compare-mode-picker');
   if (!sel) return;
   try {
-    const saved = localStorage.getItem('pc-compare-mode');
+    const saved = localStorage.getItem('pc-compare-mode-v2');
     if (saved && Array.from(sel.options).some(o => o.value === saved)) {
       sel.value = saved;
     }
@@ -3084,7 +3084,7 @@ async function executeCompareUnanswered() {
   }
   const model = getPickerModel('compare-step5', 'opus');
   const mode = (document.getElementById('compare-mode-picker')?.value) || 'legacy';
-  try { localStorage.setItem('pc-compare-mode', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
   if (!confirm(
     `未対比の ${targetIds.length} 件で対比を直接実行します。\n\n` +
     `対象: ${targetIds.join(', ')}\n` +
@@ -4493,7 +4493,7 @@ async function executeCompare() {
   progress.classList.add('show');
   const model = getPickerModel('compare-step5', 'opus');
   const mode = (document.getElementById('compare-mode-picker')?.value) || 'legacy';
-  try { localStorage.setItem('pc-compare-mode', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
   document.getElementById('exec-compare-status').textContent =
     `Claude CLI(${model}/${mode})で${citIds.length}件の文献を対比分析中...`;
 

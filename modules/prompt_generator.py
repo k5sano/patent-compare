@@ -619,17 +619,42 @@ def _build_output_format_multi(citations, segments):
 
     sub_claim_example = ""
     if sub_claims:
+        # 全 sub_claim を列挙してリスト化 (Sonnet が 1 件だけ出して終わる漏れを防ぐ)
+        sub_claim_ids = []
+        sub_claim_seg_ids = []  # 各 sub_claim の最初の segment id (例: 2A, 3A, 4A)
+        for sc in sub_claims:
+            sub_claim_ids.append(str(sc.get("claim_number", "?")))
+            segs_in_sc = sc.get("segments", [])
+            if segs_in_sc:
+                sub_claim_seg_ids.append(segs_in_sc[0].get("id", f'{sc["claim_number"]}A'))
+        sub_claim_seg_ids_label = ", ".join(sub_claim_seg_ids)
+        sub_claim_count = len(sub_claims)
+
+        # サンプル: 全 sub_claim 分のスケルトンを表示
+        sub_claim_blocks = []
+        for sc in sub_claims:
+            cn = sc.get("claim_number", "?")
+            segs_in_sc = sc.get("segments", [])
+            seg_id = segs_in_sc[0].get("id", f'{cn}A') if segs_in_sc else f'{cn}A'
+            sub_claim_blocks.append(f"""        {{
+            "claim_number": {cn},
+            "requirement_id": "{seg_id}",
+            "requirement_text": "★ 追加された限定事項のみ (請求項1部分は除く)",
+            "judgment": "○ or △ or ×",
+            "judgment_reason": "★ 追加限定にフォーカス。請求項1部分は冗長判定しない。根拠タイプを括弧書きで明記",
+            "cited_location": "コンパクト記法 (例: 20 / CL3 / T4;15 等)",
+            "cited_text": "引用文献の該当記載をそのまま抜粋",
+            "note": ""
+        }}""")
+        sub_claim_blocks_str = ",\n".join(sub_claim_blocks)
+
         sub_claim_example = f""",
     "sub_claims": [
-        {{
-            "claim_number": {sub_claims[0]['claim_number']},
-            "requirement_text": "★ 追加された限定事項のみ (請求項1部分は除く)。例: 「グリセロール化シリコーン樹脂の質量比が 0.8 以上」",
-            "judgment": "○ or △ or ×",
-            "judgment_reason": "★ 追加限定にフォーカス。請求項1部分は冗長判定しない。例: 「実施例3 表1 で質量比 0.8 が示される (計算: A=4g/B=5g → 0.8、本願範囲内)」",
-            "cited_location": "コンパクト記法 (例: 20 / CL3 / T4;15 等)",
-            "note": ""
-        }}
-    ]"""
+{sub_claim_blocks_str}
+    ]
+    /* ★ sub_claims 配列には **必ず {sub_claim_count} 件すべて** を出力すること
+       (claim_number={', '.join(sub_claim_ids)} / requirement_id={sub_claim_seg_ids_label})。
+       1 件だけで省略せず、全件分の判定を必須とする。 */"""
 
     # 単一文献の場合
     if len(citations) == 1:
@@ -678,10 +703,23 @@ def _build_output_format_multi(citations, segments):
     if len(doc_list) > 2:
         remaining = f"\n        ... （残り{len(doc_list) - 2}件も同じ形式で）"
 
+    sub_claim_required_msg = ""
+    if sub_claims:
+        sub_ids = [str(sc.get("claim_number", "?")) for sc in sub_claims]
+        sub_seg_ids = [
+            (sc.get("segments", [{}])[0].get("id", f'{sc["claim_number"]}A') if sc.get("segments") else f'{sc["claim_number"]}A')
+            for sc in sub_claims
+        ]
+        sub_claim_required_msg = (
+            f"\n- **★ sub_claims 配列には {len(sub_claims)} 件すべて出力**: "
+            f"請求項 {', '.join(sub_ids)} (requirement_id: {', '.join(sub_seg_ids)}) を全件含めること。"
+            "サンプルが 1 件でも省略せず必ず全件分の判定を出すこと。"
+        )
+
     return f"""## 出力フォーマット
 **{len(citations)}件の文献それぞれについて**、以下のJSON形式で回答してください。
 全文献の結果を `results` 配列にまとめてください。
-必ず全ての構成要件（{', '.join(claim1_ids)}）について各文献ごとに判定を含めてください。
+必ず全ての構成要件（{', '.join(claim1_ids)}）について各文献ごとに判定を含めてください。{sub_claim_required_msg}
 
 ```json
 {{
