@@ -114,7 +114,14 @@ def resolve_model(name):
     return MODEL_ALIASES.get(name, name)
 
 
-def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None):
+# --effort のデフォルト値。ユーザ設定 (settings.json) で xhigh/max になっている
+# 場合があるが、本プロジェクトの対比/検索/キーワードでは high で十分。
+# レートリミット消費を抑える目的で明示的に指定する。
+DEFAULT_EFFORT = "high"
+
+
+def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None,
+                effort=DEFAULT_EFFORT):
     """Claude Code CLI にプロンプトを送信し、回答テキストを返す。
 
     Parameters:
@@ -123,6 +130,9 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=No
         use_search: True の場合、MCP検索サーバーを有効にする
         model: モデル指定。'opus'/'sonnet'/'haiku' エイリアスまたは
                'claude-opus-4-6' 等のフル ID。None の場合 CLI 既定。
+        effort: Effort レベル ('low'/'medium'/'high'/'xhigh'/'max')。
+                None なら CLI 既定 (= ユーザ settings.json) を使う。
+                デフォルトは 'high' (リミット消費を抑える)。
 
     Returns:
         str: Claude の回答テキスト
@@ -147,6 +157,8 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=No
     resolved_model = resolve_model(model)
     if resolved_model:
         cmd.extend(["--model", resolved_model])
+    if effort:
+        cmd.extend(["--effort", effort])
 
     # MCP検索サーバー設定
     mcp_config_path = None
@@ -223,7 +235,8 @@ _PATENT_RE = re.compile(
 )
 
 
-def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None):
+def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None,
+                        effort=DEFAULT_EFFORT):
     """Claude Code CLI にプロンプトを送信し、進捗イベントを yield するジェネレータ。
 
     --output-format stream-json を使用してストリーミング出力を取得し、
@@ -249,6 +262,8 @@ def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, m
     resolved_model = resolve_model(model)
     if resolved_model:
         cmd.extend(["--model", resolved_model])
+    if effort:
+        cmd.extend(["--effort", effort])
 
     mcp_config_path = None
     if use_search:
