@@ -217,10 +217,13 @@
           本願 PDF に埋め込まれた図表 (実施例組成表など) を Vision で構造化し、検索・対比に使えるようにします。
           1 表あたり 20-30 秒、サブスク消費は 1 案件 $0.3 前後の目安。
         </p>
-        <div class="btn-row">
-          <button id="btn-extract-hongan-tables" class="btn btn-outline" onclick="extractHonganTables()" title="Claude Sonnet で本願 PDF の表画像を JSON 化します (Max サブスク消費)">
+        <div class="btn-row" style="align-items:center;">
+          <button id="btn-extract-hongan-tables" class="btn btn-outline" onclick="extractHonganTables()" title="Claude Vision で本願 PDF の表画像を JSON 化します (Max サブスク消費)">
             &#128202; 本願 実施例表を抽出
           </button>
+          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet"
+                  title="表抽出 (Vision) のモデル"
+                  style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-outline" onclick="loadHonganTables()" title="既に抽出済みの本願表データを表示します">
             &#128214; 抽出済み表を表示
           </button>
@@ -844,6 +847,9 @@
           <span id="sr-pkm-bulk-status" style="font-size:0.8rem; color:var(--text2);"></span>
           <button class="btn btn-success" onclick="srDownloadStarred()" title="☆マークの候補を一括DL&amp;引用登録">☆をまとめてDL&amp;引用登録</button>
           <button class="btn btn-outline" onclick="srExtractTablesBulk()" title="チェックを入れた引用文献(DL済み)の図表をClaude Visionで一括抽出。サブスク消費 約$0.3/件">📊 選択した引例の表を抽出</button>
+          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet"
+                  title="表抽出 (Vision) のモデル — Step 1 と連動"
+                  style="padding:0.2rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <span style="flex:1"></span>
           <label style="font-size:0.8rem; color:var(--text2);">フィルタ:</label>
           <select id="sr-filter" onchange="renderSrHits()">

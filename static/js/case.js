@@ -1469,9 +1469,11 @@ async function extractHonganTables() {
   result.innerHTML = '';
   _appendTableProgress('抽出を開始します...');
   try {
+    const model = getPickerModel('table-extract', 'sonnet');
     const resp = await fetch(`/case/${CASE_ID}/hongan/extract-tables`, {
       method: 'POST',
-      headers: {'Accept': 'text/event-stream'},
+      headers: {'Accept': 'text/event-stream', 'Content-Type': 'application/json'},
+      body: JSON.stringify({ model }),
     });
     if (!resp.ok) {
       const err = await resp.text();
@@ -6450,10 +6452,11 @@ async function srExtractOneTable(pid, btn) {
   btn.disabled = true;
   btn.textContent = '⏳';
   try {
+    const model = getPickerModel('table-extract', 'sonnet');
     const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(pid)}/extract-tables`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({force: orig === '🔄'}),
+      body: JSON.stringify({force: orig === '🔄', model}),
     });
     if (!resp.ok) throw new Error(await resp.text());
     const reader = resp.body.getReader();
@@ -6642,10 +6645,11 @@ async function srExtractTablesBulk() {
 
   if (lbl) lbl.textContent = `表抽出 0/${sel.length} ...`;
   try {
+    const model = getPickerModel('table-extract', 'sonnet');
     const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citations/extract-tables-bulk`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({citation_ids: sel}),
+      body: JSON.stringify({citation_ids: sel, model}),
     });
     if (!resp.ok) throw new Error(await resp.text());
     const reader = resp.body.getReader();

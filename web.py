@@ -818,8 +818,10 @@ def extract_hongan_tables(case_id):
     最終 stage="done" イベントの後、GET /case/<id>/hongan/tables で全文取得する。
     """
     from services.case_service import stream_hongan_table_extraction
+    body = request.get_json(silent=True) or {}
+    model = body.get("model") or request.args.get("model") or "sonnet"
     return Response(
-        stream_hongan_table_extraction(case_id),
+        stream_hongan_table_extraction(case_id, model=model),
         mimetype="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -843,8 +845,9 @@ def extract_citation_tables_route(case_id, citation_id):
     from services.case_service import stream_citation_table_extraction
     body = request.get_json(silent=True) or {}
     force = bool(body.get("force"))
+    model = body.get("model") or "sonnet"
     return Response(
-        stream_citation_table_extraction(case_id, citation_id, force=force),
+        stream_citation_table_extraction(case_id, citation_id, model=model, force=force),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -853,16 +856,17 @@ def extract_citation_tables_route(case_id, citation_id):
 @app.route("/case/<case_id>/citations/extract-tables-bulk", methods=["POST"])
 def extract_citation_tables_bulk_route(case_id):
     """複数の引用文献を順次抽出 (SSE)。
-    body: {"citation_ids": ["JP2024-051653", ...], "force": false}
+    body: {"citation_ids": ["JP2024-051653", ...], "force": false, "model": "sonnet"}
     """
     from services.case_service import stream_bulk_citation_table_extraction
     body = request.get_json(silent=True) or {}
     cids = body.get("citation_ids") or []
     force = bool(body.get("force"))
+    model = body.get("model") or "sonnet"
     if not cids:
         return jsonify({"error": "citation_ids が空です"}), 400
     return Response(
-        stream_bulk_citation_table_extraction(case_id, cids, force=force),
+        stream_bulk_citation_table_extraction(case_id, cids, model=model, force=force),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
