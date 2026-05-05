@@ -3064,10 +3064,11 @@ async function executeCompareUnanswered() {
     return;
   }
   const model = getPickerModel('compare-step5', 'opus');
+  const parallelHint = (model === 'sonnet' || model === 'haiku') ? ' x3並列' : '';
   if (!confirm(
     `未対比の ${targetIds.length} 件で対比を直接実行します。\n\n` +
     `対象: ${targetIds.join(', ')}\n` +
-    `モデル: ${model}\n\n` +
+    `モデル: ${model}${parallelHint}\n\n` +
     `Claude 5〜10 分かかります (件数・モデル次第)。続行しますか?\n` +
     `完了後、結果反映のためページを自動リロードします。`
   )) return;
@@ -3075,7 +3076,8 @@ async function executeCompareUnanswered() {
   const overlay = document.getElementById('exec-compare-progress');
   const status = document.getElementById('exec-compare-status');
   if (overlay) overlay.classList.add('show');
-  if (status) status.textContent = `Claude CLI(${model})で未対比 ${targetIds.length} 件を対比分析中...`;
+  if (status) status.textContent =
+    `Claude CLI(${model}${parallelHint})で未対比 ${targetIds.length} 件を対比分析中...`;
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
@@ -4468,8 +4470,9 @@ async function executeCompare() {
   btn.disabled = true;
   progress.classList.add('show');
   const model = getPickerModel('compare-step5', 'opus');
+  const parallelHint = (model === 'sonnet' || model === 'haiku') ? ' x3並列' : '';
   document.getElementById('exec-compare-status').textContent =
-    `Claude CLI(${model})で${citIds.length}件の文献を対比分析中...`;
+    `Claude CLI(${model}${parallelHint})で${citIds.length}件の文献を対比分析中...`;
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {

@@ -1044,6 +1044,123 @@ def annotate_all_citations(case_id, max_workers=None):
             "workers_used": workers if jobs else 0}, 200
 
 
+def _compare_execute_per_citation_parallel(
+    *, case_id, citations, segs, keywords, hongan, field,
+    model, known_cit_ids, max_workers=3,
+):
+    """citation ごとに個別 prompt を生成して Claude を並列呼び出し。
+
+    Sonnet/Haiku 専用の高速パス。1プロンプトに全 citation を統合する従来方式
+    （Opus 用）と異なり、各 citation を別 Claude プロセスで処理することで:
+      - 並列化で総所要時間を短縮（max_workers=3）
+      - 1 件の失敗が他に波及しない
+      - 各 prompt のサイズが小さいので Sonnet が読みやすい
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from modules.prompt_generator import generate_prompt as _gen
+    from modules.response_parser import parse_response, split_multi_response
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    case_dir = get_case_dir(case_id)
+    responses_dir = case_dir / "responses"
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    prompts_dir = case_dir / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    all_segment_ids = _get_all_segment_ids(segs)
+
+    def _safe_label(cit):
+        label = cit.get("patent_number") or cit.get("label") or cit.get("doc_number") or "unknown"
+        return "".join(ch for ch in str(label) if ch not in '/\\:*?"<>|').strip() or "unknown"
+
+    def _one(cit):
+        safe_label = _safe_label(cit)
+        try:
+            prompt_text = _gen(segs, [cit], keywords, field, hongan=hongan)
+        except Exception as e:
+            return {"doc_id": safe_label, "ok": False,
+                    "error": f"prompt生成失敗: {e}", "char_count": 0, "response_length": 0}
+
+        try:
+            with open(prompts_dir / f"compare_prompt_{safe_label}.txt", "w", encoding="utf-8") as f:
+                f.write(prompt_text)
+        except OSError:
+            pass
+
+        try:
+            raw = call_claude(prompt_text, timeout=600, model=model)
+        except ClaudeClientError as e:
+            return {"doc_id": safe_label, "ok": False, "error": str(e),
+                    "phase": "claude_call",
+                    "char_count": len(prompt_text), "response_length": 0}
+
+        try:
+            with open(responses_dir / f"_raw_{safe_label}.txt", "w", encoding="utf-8") as f:
+                f.write(raw)
+        except OSError:
+            pass
+
+        result, errors = parse_response(raw, all_segment_ids)
+        if not result:
+            return {"doc_id": safe_label, "ok": False, "errors": errors,
+                    "char_count": len(prompt_text), "response_length": len(raw)}
+
+        per_doc = split_multi_response(result)
+        saved = []
+        resolved_log = []
+        for doc_id, doc_result in per_doc.items():
+            resolved = _resolve_doc_id(doc_id, known_cit_ids)
+            if resolved != doc_id:
+                resolved_log.append(f"{doc_id} → {resolved}")
+            with open(responses_dir / f"{resolved}.json", "w", encoding="utf-8") as f:
+                json.dump(doc_result, f, ensure_ascii=False, indent=2)
+            saved.append(resolved)
+
+        return {
+            "doc_id": safe_label, "ok": True, "saved": saved,
+            "errors": errors, "resolved": resolved_log,
+            "char_count": len(prompt_text), "response_length": len(raw),
+        }
+
+    saved_docs = []
+    all_errors = []
+    resolved_log = []
+    char_total = 0
+    resp_total = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(_one, c): c for c in citations}
+        for fut in as_completed(futures, timeout=1800):
+            try:
+                r = fut.result()
+            except Exception as e:
+                all_errors.append(f"_one fatal: {e}")
+                continue
+            char_total += r.get("char_count", 0)
+            resp_total += r.get("response_length", 0)
+            if r.get("ok"):
+                saved_docs.extend(r.get("saved", []))
+                if r.get("errors"):
+                    all_errors.extend(f"{r['doc_id']}: {e}" for e in r["errors"])
+                if r.get("resolved"):
+                    resolved_log.extend(f"{r['doc_id']}: {x}" for x in r["resolved"])
+            else:
+                err_msg = r.get("error") or "; ".join(r.get("errors") or [])
+                all_errors.append(f"{r['doc_id']}: {err_msg}")
+
+    return {
+        "success": len(saved_docs) > 0,
+        "errors": all_errors,
+        "saved_docs": saved_docs,
+        "num_docs": len(saved_docs),
+        "resolved": resolved_log,
+        "char_count": char_total,
+        "response_length": resp_total,
+        "parallel": max_workers,
+        "model": model,
+    }, 200
+
+
 def compare_execute(case_id, citation_ids, model=None):
     """直接実行: 対比プロンプト → Claude CLI → パース
 
@@ -1100,6 +1217,19 @@ def compare_execute(case_id, citation_ids, model=None):
     if hongan_path.exists():
         with open(hongan_path, "r", encoding="utf-8") as f:
             hongan = json.load(f)
+
+    # Sonnet/Haiku の場合は citation 単位で 3 並列実行（軽量モデル前提）。
+    # Opus は1プロンプトに全 citation を統合して送信（従来動作）。
+    model_l = (model or "").lower()
+    use_parallel = ("sonnet" in model_l) or ("haiku" in model_l)
+    if use_parallel and len(citations) >= 2:
+        known_cit_ids = [c.get("id") for c in (meta or {}).get("citations", []) if c.get("id")]
+        return _compare_execute_per_citation_parallel(
+            case_id=case_id, citations=citations, segs=segs,
+            keywords=keywords, hongan=hongan, field=field,
+            model=model, known_cit_ids=known_cit_ids, max_workers=3,
+        )
+
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
 
     ids_label = "_".join(citation_ids)
