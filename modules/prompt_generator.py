@@ -894,8 +894,20 @@ def _build_citations_overview(citations):
 
 
 def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
-    """構成要件単位のブロック群 — 請求項主体型 prompt の中核"""
-    lines = ["## 構成要件別 対比 (各構成要件を独立に判定すること)"]
+    """構成要件単位のブロック群 — 請求項主体型 prompt の中核
+
+    各構成要件について「文言・参酌資料・引例該当箇所」を提示するだけ。
+    判定タスクの指示・JSON 出力フォーマットは末尾セクションで一括指示する
+    (二重指示になると LLM が出力構造を見失うため)。
+    """
+    lines = [
+        "## 構成要件別 参考資料 (この後の出力フォーマットに従って判定すること)",
+        "",
+        "以下の各構成要件 (segment) について、本願での参酌情報と引例での該当箇所を",
+        "事前に抽出した。全構成要件について必ず判定し、末尾の出力フォーマットに従って",
+        "JSON で結果を返すこと。キーワードヒットがない場合も「上位概念チェック→同義語",
+        "チェック→それでも無ければ ×」のフローを必ず実施し、必ず判定を出力する。",
+    ]
 
     hongan_paras = (hongan or {}).get("paragraphs", []) or []
     hongan_tables = (hongan or {}).get("tables", []) or []
@@ -965,9 +977,143 @@ def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
                         lines.append(f"- 表「{cap}」 段落{para_id}付近 ※詳細は引例本文セクション参照")
                 else:
                     lines.append(
-                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし → "
-                        "上位概念チェック (本願語の上位概念で再走査)・同義語チェックを実施し、"
-                        "それでも無ければ × (judgment_reason に「上位概念 (○○) も記載なし」と明記)"
+                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし "
+                        "(上位概念・同義語チェックを試みること、無ければ ×)"
+                    )
+
+    return "\n".join(lines)
+
+
+def _build_hongan_reference_section(hongan, seg_keywords):
+    """本願参酌セクションを 1 度だけ出す (グローバルユニーク版)。
+
+    各 segment ごとに本願段落を抜粋すると重複・サイズ膨張するため、
+    全 segment のキーワードでヒットした段落をユニーク化して 1 セクションにまとめる。
+    """
+    if not hongan:
+        return ""
+    paragraphs = hongan.get("paragraphs", []) or []
+    if not paragraphs:
+        return ""
+
+    # 全キーワードを 1 つに集約
+    all_terms = set()
+    for terms in (seg_keywords or {}).values():
+        for t in terms:
+            if t:
+                all_terms.add(t)
+    if not all_terms:
+        return ""
+
+    matched_para_ids = set()
+    matched = []
+    for p in paragraphs:
+        pid = str(p.get("id", ""))
+        text = p.get("text", "") or ""
+        if pid in matched_para_ids:
+            continue
+        if any(t in text for t in all_terms):
+            matched.append(p)
+            matched_para_ids.add(pid)
+
+    if not matched:
+        return ""
+
+    lines = [
+        f"## 本願 参酌資料 ({len(matched)} / {len(paragraphs)} 段落、キーワードヒット分のみ)",
+        "本願明細書から、各構成要件のキーワードがヒットした段落を抜粋した。",
+        "用語の定義・成分名・実施例での用法を確認するための参考資料。",
+        "",
+    ]
+    for p in matched:
+        lines.append(
+            f"- 段落{p.get('id','')}({p.get('section','')}): "
+            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+        )
+
+    # 表は全件 (構造的に重要)
+    tables = hongan.get("tables", []) or []
+    if tables:
+        lines.append(f"\n### 本願の表 (全 {len(tables)} 件)")
+        for i, t in enumerate(tables):
+            cap = t.get("caption") or t.get("title") or f"表 {i+1}"
+            lines.append(f"#### {cap}")
+            rows = t.get("rows") or t.get("data") or []
+            if rows:
+                for row in rows:
+                    if isinstance(row, list):
+                        lines.append("\t".join(str(x) for x in row))
+                    else:
+                        lines.append(str(row))
+            elif t.get("content"):
+                lines.append(t["content"])
+
+    return "\n".join(lines)
+
+
+def _build_requirement_blocks_v2(segments, citations, seg_keywords):
+    """v2: 本願参酌は別セクション (グローバル) に出すので、ここでは引例該当のみ。
+
+    各構成要件ブロックは「文言 + 引例該当箇所」のみのコンパクト構造。
+    """
+    lines = [
+        "## 構成要件別 引例該当抜粋",
+        "",
+        "各構成要件 (segment) について、引例本文からキーワードでヒットした箇所を抜粋した。",
+        "本願側の参酌資料は前のセクション「本願 参酌資料」を参照すること。",
+        "全構成要件について必ず判定し、末尾の出力フォーマットの JSON で結果を返すこと。",
+    ]
+
+    for claim in segments:
+        claim_num = claim.get("claim_number", "?")
+        is_indep = claim.get("is_independent", False)
+        deps = claim.get("dependencies", [])
+        dep_label = "独立" if is_indep else f"従属(→請求項{','.join(map(str, deps))})"
+        lines.append(f"\n### 請求項{claim_num} ({dep_label})")
+
+        for seg in claim.get("segments", []):
+            seg_id = seg.get("id", "?")
+            seg_text = seg.get("text", "")
+            terms = seg_keywords.get(seg_id, [])
+            terms_label = (
+                "、".join(terms[:6]) + (f"…(他{len(terms)-6}件)" if len(terms) > 6 else "")
+                if terms else "(キーワード未登録)"
+            )
+
+            lines.append(f"\n#### 構成要件 {seg_id}")
+            lines.append(f"**請求項文言**: 「{seg_text}」")
+            lines.append(f"**参酌キーワード**: {terms_label}")
+
+            for i, cit in enumerate(citations, 1):
+                cit_label = cit.get("label") or cit.get("patent_number") or f"引例{i}"
+                cit_paras = cit.get("paragraphs", []) or []
+                cit_claims = cit.get("claims", []) or []
+                cit_tables = cit.get("tables", []) or []
+
+                claim_hits = _find_matching_claims(cit_claims, terms)
+                para_hits = _find_matching_paragraphs(cit_paras, terms, _MAX_CITATION_HITS_PER_SEG)
+                table_hits = _find_matching_tables(cit_tables, terms)
+
+                if claim_hits or para_hits or table_hits:
+                    lines.append(f"\n**引例{i} ({cit_label}) 該当**:")
+                    for cl in claim_hits:
+                        lines.append(
+                            f"- 請求項{cl.get('number','?')}: "
+                            f"{_truncate(cl.get('text',''), 350)}"
+                        )
+                    for p in para_hits:
+                        lines.append(
+                            f"- 段落{p.get('id','')}({p.get('section','')}): "
+                            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                        )
+                    for t in table_hits:
+                        cap = t.get("caption") or t.get("title") or "(表)"
+                        para_id = t.get("paragraph_id", "?")
+                        lines.append(f"- 表「{cap}」 段落{para_id}付近")
+                else:
+                    lines.append(
+                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし "
+                        "(上位概念・同義語チェックを試み、それでも無ければ ×)"
                     )
 
     return "\n".join(lines)
@@ -975,11 +1121,11 @@ def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
 
 def generate_prompt_requirement_first(segments, citations, keywords=None,
                                        field="cosmetics", hongan=None):
-    """構成要件主体型の対比 prompt を生成 (新形式・試作版)。
+    """構成要件主体型の対比 prompt を生成 (新形式)。
 
-    審査官の実務に沿って、請求項の構成要件ごとに「文言 + 本願参酌 + 引例該当」を
-    並べて Claude に判定させる。本願明細書全文は流し込まない (キーワード経由で
-    必要箇所のみ抜粋)。
+    審査官の実務に沿って、請求項の構成要件ごとに「文言 + 引例該当」を並べて
+    Claude に判定させる。本願参酌は構成要件ブロックの外で 1 度だけまとめて
+    出すことで重複を排除しサイズを抑える (v2 構造)。
 
     出力 JSON 形式は既存 generate_prompt と同じ (parse_response がそのまま使える)。
 
@@ -1001,7 +1147,8 @@ def generate_prompt_requirement_first(segments, citations, keywords=None,
         _build_field_notes(field),
         # === 動的部分 ===
         _build_citations_overview(citations),
-        _build_requirement_blocks(segments, citations, hongan, seg_keywords),
+        _build_hongan_reference_section(hongan, seg_keywords),
+        _build_requirement_blocks_v2(segments, citations, seg_keywords),
         _build_output_format_multi(citations, segments),
     ]
     return "\n\n---\n\n".join(s for s in sections if s.strip())
