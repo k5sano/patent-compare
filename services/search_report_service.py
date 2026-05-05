@@ -181,12 +181,19 @@ def _category_to_role(cat):
     return "参考"
 
 
+GOOGLE_PATENTS_DL_INTERVAL = 2.0  # 秒。Google Patents への連続DL間の最小間隔（ロボット判定回避）
+
+
 def fetch_cited_documents(case_id, filename, citation_nums):
     """指定された引用文献のPDFをGoogle Patentsから取得し、既存citationsに統合。
+
+    Google Patents への連続アクセスは GOOGLE_PATENTS_DL_INTERVAL 秒の間隔を空ける
+    （ロボット判定回避）。並列化しないこと。
 
     Parameters:
         citation_nums: 取得対象の num のリスト（Box C内の通し番号）
     """
+    import time
     from modules.patent_downloader import download_patent_pdf
 
     if not load_case_meta(case_id):
@@ -204,6 +211,7 @@ def fetch_cited_documents(case_id, filename, citation_nums):
     nums_set = set(citation_nums or [])
     citations = target.get("citations", [])
     results = []
+    dl_count = 0  # 実際にDLを試みた件数（レート制御の基準）
 
     for cit in citations:
         if nums_set and cit.get("num") not in nums_set:
@@ -217,6 +225,11 @@ def fetch_cited_documents(case_id, filename, citation_nums):
             })
             cit["fetch_status"] = "no_id"
             continue
+
+        # 2回目以降のDL前にスリープ（Google Patents 連続アクセス対策）
+        if dl_count > 0:
+            time.sleep(GOOGLE_PATENTS_DL_INTERVAL)
+        dl_count += 1
 
         dl = download_patent_pdf(doc_id, input_dir, timeout=60)
         if not dl.get("success"):
