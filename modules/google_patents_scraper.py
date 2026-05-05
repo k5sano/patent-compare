@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 from urllib.parse import quote_plus
 
+from modules import google_patents_throttle
+
 logger = logging.getLogger(__name__)
 
 
@@ -88,6 +90,7 @@ def search_google_patents(
                 locale=language,
             )
             page = context.new_page()
+            google_patents_throttle.wait()
             page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
 
@@ -251,6 +254,7 @@ def fetch_patent_detail(
             try:
                 context = browser.new_context(locale=language)
                 page = context.new_page()
+                google_patents_throttle.wait()
                 page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 page.wait_for_timeout(2500)
 
@@ -415,6 +419,7 @@ def fetch_patent_full_text(
                 except Exception:
                     pass
                 page = context.new_page()
+                google_patents_throttle.wait()
                 page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 # 必須要素 (タイトル) → 本文 (description) の順に待つ
                 try:

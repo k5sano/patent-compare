@@ -150,8 +150,11 @@ def _verify_candidates(candidates):
         """1件の特許番号を検証"""
         return search_google_patents(pid, max_results=1)
 
-    logger.info("候補検証開始: %d件を並列検証", len(to_verify))
-    with ThreadPoolExecutor(max_workers=min(len(to_verify), 6)) as executor:
+    # Google Patents へのアクセスは google_patents_throttle で2秒間隔に
+    # スロットルされる（並列起動しても直列化されるだけ）。
+    # ThreadPool構造は維持しつつ max_workers=1 でロボット判定回避を明示。
+    logger.info("候補検証開始: %d件を逐次検証（GPレート制御）", len(to_verify))
+    with ThreadPoolExecutor(max_workers=1) as executor:
         future_map = {
             executor.submit(_check_one, pid): (i, c, pid)
             for i, c, pid in to_verify
@@ -272,10 +275,12 @@ def _auto_download_citations(case_id, case_dir, meta):
     downloaded = already_done
     errors = []
     failed_pids = set()
-    logger.info("引例DL開始: %d件を並列ダウンロード（%d件はキャッシュ済み）",
+    # Google Patents へのアクセスは google_patents_throttle で2秒間隔にスロットル
+    # されるため、ThreadPool は形だけ残して max_workers=1 で逐次化（ロボット判定回避）
+    logger.info("引例DL開始: %d件を逐次ダウンロード（%d件はキャッシュ済み, GPレート制御）",
                 len(to_download), already_done)
 
-    with ThreadPoolExecutor(max_workers=min(len(to_download), 6)) as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {
             executor.submit(_download_one, c, pid, did): (pid, c)
             for c, pid, did in to_download

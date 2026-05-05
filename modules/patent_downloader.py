@@ -12,6 +12,8 @@ from pathlib import Path
 
 import requests
 
+from modules import google_patents_throttle
+
 # Google Patents ページ取得時のヘッダー
 _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -345,6 +347,7 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
         last_url = google_url
         # Step 1: Google Patents ページを取得して PDF URL を抽出
         try:
+            google_patents_throttle.wait()
             page_resp = requests.get(google_url, headers=_HEADERS, timeout=timeout,
                                      allow_redirects=True)
             if page_resp.status_code != 200:
@@ -361,8 +364,9 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
             last_error = f"Google Patents ページ取得エラー: {e}"
             continue
 
-        # Step 2: PDF をダウンロード
+        # Step 2: PDF をダウンロード（patentimages も同じドメイン群なので throttle 対象）
         try:
+            google_patents_throttle.wait()
             pdf_resp = requests.get(pdf_url, headers=_HEADERS, timeout=timeout,
                                     allow_redirects=True)
             if (pdf_resp.status_code == 200 and
