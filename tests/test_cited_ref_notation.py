@@ -192,6 +192,38 @@ class TestCommentMemo:
         assert comment_of(s) == "備考"
         assert memo_of(s) == "メモ"
 
+    # ===== 新仕様: / 単独でコメント開始（"" と並存） =====
+    def test_comment_after_single_slash(self):
+        p = parse('20;/備考メモ')
+        assert p.refs[0].kind == "para"
+        assert p.comment == "備考メモ"
+        assert p.memo == ""
+
+    def test_comment_only_single_slash(self):
+        p = parse('/コメントだけ')
+        assert p.refs == []
+        assert p.comment == "コメントだけ"
+
+    def test_slash_inline(self):
+        # トークン内で / が来てもコメント開始として扱う
+        p = parse('20/備考')
+        assert p.refs[0].values == [20]
+        assert p.comment == "備考"
+
+    def test_slash_comment_then_memo(self):
+        p = parse('20;/備考;//防備録')
+        assert p.comment == "備考"
+        assert p.memo == "防備録"
+
+    def test_double_slash_takes_precedence_over_single(self):
+        # // は memo 記号として優先される（先頭・トークン内とも）
+        p = parse('20;//メモ')
+        assert p.memo == "メモ"
+        assert p.comment == ""
+        p2 = parse('20//メモ単体')
+        assert p2.memo == "メモ単体"
+        assert p2.comment == ""
+
 
 class TestExpand:
     def test_full_example(self):

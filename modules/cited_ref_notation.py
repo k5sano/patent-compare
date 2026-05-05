@@ -4,7 +4,8 @@
 
 仕様: memory/reference_cited_ref_notation.md と同期。
 
-入力例: ``20;F2;CL3,5;T4;P1A2-4;C4G12-15;"備考メモ;//防備録メモ``
+入力例: ``20;F2;CL3,5;T4;P1A2-4;C4G12-15;/備考メモ;//防備録メモ``
+       (`"` も互換として受け入れる: ``"備考メモ`` ≡ ``/備考メモ``)
 出力 (parse): {
     "refs": [
         {"kind": "para",   "values": [20]},
@@ -236,13 +237,26 @@ def _classify_token(tok: str) -> ParsedRef:
     return ParsedRef(kind="unknown", raw=raw)
 
 
+def _find_single_slash(tok: str) -> int:
+    """`//` の一部ではない単独の `/` の最初の位置を返す。なければ -1。"""
+    i = 0
+    while i < len(tok):
+        if tok[i] == "/":
+            if i + 1 < len(tok) and tok[i + 1] == "/":
+                i += 2  # `//` はメモ記号なのでスキップ
+                continue
+            return i
+        i += 1
+    return -1
+
+
 def parse(text: str) -> ParsedNotation:
     """記法文字列を ParsedNotation に分解する。
 
     - 全角→半角正規化
-    - ``"..`` でコメント開始（最初の ``;`` または末尾まで）
+    - ``/..`` でコメント開始（最初の ``;`` または末尾まで）。`"..` も互換でコメント扱い
     - ``//..`` でメモ開始（最初の ``;`` または末尾まで）
-    - 残りを ``;`` で分割し、各トークンを ParsedRef に分類。
+    - 残りを ``;`` で分割し、各トークンを ParsedRef に分類
     """
     if not text:
         return ParsedNotation()
@@ -252,20 +266,14 @@ def parse(text: str) -> ParsedNotation:
 
     notation = ParsedNotation(raw=text)
 
-    # ; で分割しつつ、" や // が来たらその後ろを comment/memo に振る。
+    # ; で分割しつつ、" / // が来たらその後ろを comment/memo に振る。
     # 単純化のため、; 区切りでまずトークン化し、各トークンの先頭で判定する。
     tokens = src.split(";")
     for tok in tokens:
         tok = tok.strip()
         if not tok:
             continue
-        if tok.startswith('"'):
-            body = tok[1:].strip()
-            if notation.comment:
-                notation.comment += " / " + body
-            else:
-                notation.comment = body
-            continue
+        # 行頭判定: // が最優先（メモ）、続いて " or 単独/（コメント）
         if tok.startswith("//"):
             body = tok[2:].strip()
             if notation.memo:
@@ -273,17 +281,33 @@ def parse(text: str) -> ParsedNotation:
             else:
                 notation.memo = body
             continue
-        # 通常のトークンだが、内部に " や // が混じっていれば分離
-        # 例: `20"備考` → para 20 + comment "備考"
-        cm_idx = tok.find('"')
+        if tok.startswith('"') or tok.startswith("/"):
+            body = tok[1:].strip()
+            if notation.comment:
+                notation.comment += " / " + body
+            else:
+                notation.comment = body
+            continue
+
+        # 通常のトークンだが、内部に "/`/`// が混じっていれば分離
+        # 例: `20"備考` `20/備考` → para 20 + comment "備考"
         memo_idx = tok.find("//")
-        # 一番早い区切りを優先
-        candidates = [(i, k) for (i, k) in [(cm_idx, "c"), (memo_idx, "m")] if i >= 0]
+        quote_idx = tok.find('"')
+        slash_idx = _find_single_slash(tok)
+
+        candidates = []
+        if memo_idx >= 0:
+            candidates.append((memo_idx, "m", 2))
+        if quote_idx >= 0:
+            candidates.append((quote_idx, "c", 1))
+        if slash_idx >= 0:
+            candidates.append((slash_idx, "c", 1))
+
         if candidates:
             candidates.sort()
-            cut, kind = candidates[0]
+            cut, kind, sep_len = candidates[0]
             head = tok[:cut].strip()
-            tail = tok[cut + (1 if kind == "c" else 2):].strip()
+            tail = tok[cut + sep_len:].strip()
             if head:
                 notation.refs.append(_classify_token(head))
             if kind == "c":

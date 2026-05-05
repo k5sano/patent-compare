@@ -1158,7 +1158,12 @@
       </div>
       <div style="margin-bottom:0.6rem;">
         <label style="font-size:0.85rem; color:#cbd5e1; display:block; margin-bottom:0.2rem;">cited_location (該当箇所):</label>
-        <input type="text" id="comp-edit-loc" placeholder="例: CL1;0023;T4" style="width:100%; padding:0.35rem 0.5rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-family:monospace;">
+        <input type="text" id="comp-edit-loc" placeholder="例: 0023;F2;CL1,3;T4;P1A2-4;/備考;//防備録" style="width:100%; padding:0.35rem 0.5rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-family:monospace;">
+        <div style="font-size:0.72rem; color:var(--text2); margin-top:0.25rem; line-height:1.5;">
+          段落=数字 / 請求項=<code>CL</code>n / 図=<code>F</code>n / 表=<code>T</code>n / 化=<code>K</code>n / 式=<code>E</code>n / 数=<code>S</code>n<br>
+          ページ=<code>P</code>n+欄(<code>A</code>/<code>B</code>/<code>C</code>/<code>D</code>/<code>L</code>/<code>R</code>)+行 ・ コラム=<code>C</code>n<code>G</code>行 ・ 区切り=<code>;</code> 範囲=<code>-</code> 複数=<code>,</code><br>
+          <code>/</code>…=備考（検索報告書の備考欄に転記） ・ <code>//</code>…=防備録（転記されない）
+        </div>
       </div>
       <div style="margin-bottom:0.6rem;">
         <label style="font-size:0.85rem; color:#cbd5e1; display:block; margin-bottom:0.2rem;">judgment_reason (理由・コメント):</label>
