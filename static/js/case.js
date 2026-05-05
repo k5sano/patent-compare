@@ -67,6 +67,18 @@ document.addEventListener('DOMContentLoaded', function () {
   } catch (e) {/* noop */}
 });
 
+// compare effort の前回値を復元
+document.addEventListener('DOMContentLoaded', function () {
+  const sel = document.getElementById('compare-effort-picker');
+  if (!sel) return;
+  try {
+    const saved = localStorage.getItem('pc-compare-effort');
+    if (saved && Array.from(sel.options).some(o => o.value === saved)) {
+      sel.value = saved;
+    }
+  } catch (e) {/* noop */}
+});
+
 // === 画面幅モード切替 (3440x1440 / 2560x1440 のワイドディスプレイ向け) ===
 function setWidthMode(mode) {
   if (mode !== 'narrow' && mode !== 'wide' && mode !== 'ultra') mode = 'wide';
@@ -3084,13 +3096,16 @@ async function executeCompareUnanswered() {
   }
   const model = getPickerModel('compare-step5', 'opus');
   const mode = (document.getElementById('compare-mode-picker')?.value) || 'legacy';
+  const effort = (document.getElementById('compare-effort-picker')?.value) || 'high';
   try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
   if (!confirm(
     `未対比の ${targetIds.length} 件で対比を直接実行します。\n\n` +
     `対象: ${targetIds.join(', ')}\n` +
     `モデル: ${model}\n` +
-    `方式: ${mode}\n\n` +
-    `Claude 5〜10 分かかります (件数・モデル次第)。続行しますか?\n` +
+    `方式: ${mode}\n` +
+    `Effort: ${effort}\n\n` +
+    `Claude 5〜10 分かかります (件数・モデル・effort 次第)。続行しますか?\n` +
     `完了後、結果反映のためページを自動リロードします。`
   )) return;
 
@@ -3098,12 +3113,12 @@ async function executeCompareUnanswered() {
   const status = document.getElementById('exec-compare-status');
   if (overlay) overlay.classList.add('show');
   if (status) status.textContent =
-    `Claude CLI(${model}/${mode})で未対比 ${targetIds.length} 件を対比分析中...`;
+    `Claude CLI(${model}/${mode}/effort=${effort})で未対比 ${targetIds.length} 件を対比分析中...`;
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: targetIds, model, mode })
+      body: JSON.stringify({ citation_ids: targetIds, model, mode, effort })
     });
     const data = await resp.json();
     if (overlay) overlay.classList.remove('show');
@@ -4493,15 +4508,17 @@ async function executeCompare() {
   progress.classList.add('show');
   const model = getPickerModel('compare-step5', 'opus');
   const mode = (document.getElementById('compare-mode-picker')?.value) || 'legacy';
+  const effort = (document.getElementById('compare-effort-picker')?.value) || 'high';
   try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
   document.getElementById('exec-compare-status').textContent =
-    `Claude CLI(${model}/${mode})で${citIds.length}件の文献を対比分析中...`;
+    `Claude CLI(${model}/${mode}/effort=${effort})で${citIds.length}件の文献を対比分析中...`;
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: citIds, model, mode })
+      body: JSON.stringify({ citation_ids: citIds, model, mode, effort })
     });
     const data = await resp.json();
     progress.classList.remove('show');

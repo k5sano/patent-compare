@@ -970,6 +970,16 @@
             <option value="requirement_first" selected>requirement_first (構成要件主体・推奨)</option>
             <option value="legacy">legacy (本願全文・旧方式)</option>
           </select>
+          <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">Effort:</label>
+          <select id="compare-effort-picker"
+                  title="Claude の thinking レベル。high=既定、xhigh/max=より深く考えるが時間とリミット消費が増える"
+                  style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;">
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high" selected>high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+          </select>
           <button class="btn btn-execute" onclick="executeCompare()" style="display:none;">&#9889; 直接実行</button>
           <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>

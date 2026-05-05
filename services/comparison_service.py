@@ -1080,7 +1080,7 @@ def annotate_all_citations(case_id, max_workers=None):
 
 def _compare_execute_per_citation_parallel(
     *, case_id, citations, segs, keywords, hongan, field,
-    model, known_cit_ids, max_workers=3,
+    model, known_cit_ids, max_workers=3, effort=None,
 ):
     """citation ごとに個別 prompt を生成して Claude を並列呼び出し。
 
@@ -1121,8 +1121,11 @@ def _compare_execute_per_citation_parallel(
         except OSError:
             pass
 
+        call_kwargs = {"timeout": 600, "model": model}
+        if effort is not None:
+            call_kwargs["effort"] = effort
         try:
-            raw = call_claude(prompt_text, timeout=600, model=model)
+            raw = call_claude(prompt_text, **call_kwargs)
         except ClaudeClientError as e:
             return {"doc_id": safe_label, "ok": False, "error": str(e),
                     "phase": "claude_call",
@@ -1196,7 +1199,7 @@ def _compare_execute_per_citation_parallel(
     }, 200
 
 
-def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
+def compare_execute(case_id, citation_ids, model=None, mode="legacy", effort=None):
     """直接実行: 対比プロンプト → Claude CLI → パース
 
     Parameters:
@@ -1205,6 +1208,8 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
         mode: "legacy" (default) = 本願全文を流す従来方式
               "requirement_first" = 構成要件主体型 (試作・新形式)。
               本願はキーワード経由で必要箇所のみ抜粋。
+        effort: 'low'/'medium'/'high'/'xhigh'/'max'。
+                None なら call_claude のデフォルト (high)。
     """
     from modules.prompt_generator import (
         generate_prompt as _gen_legacy,
@@ -1279,7 +1284,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
             case_id=case_id, citations=citations, segs=segs,
             keywords=keywords, hongan=hongan, field=field,
             model=model, known_cit_ids=known_cit_ids,
-            max_workers=parallel_workers,
+            max_workers=parallel_workers, effort=effort,
         )
 
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
@@ -1291,8 +1296,11 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
         f.write(prompt_text)
 
     timeout = 600 if len(citations) <= 2 else 900
+    call_kwargs = {"timeout": timeout, "model": model}
+    if effort is not None:
+        call_kwargs["effort"] = effort
     try:
-        raw_response = call_claude(prompt_text, timeout=timeout, model=model)
+        raw_response = call_claude(prompt_text, **call_kwargs)
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 
