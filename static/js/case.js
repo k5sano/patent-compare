@@ -121,8 +121,8 @@ function buildJplatpatUrl(pid) {
   if ((m = pid.match(/特願\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/10/ja`;
   // 特表yyyy-nnnnnn
   if ((m = pid.match(/特表\s*(\d{4})\s*[-ー]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
-  // 再公表yyyy-nnnnnn / 再表yyyy/nnnnnn (スラッシュ区切りも許容)
-  if ((m = pid.match(/再(?:公)?表\s*(\d{4})\s*[-\/]\s*(\d+)/))) return `${B}/WO-A-${m[1]}-${m[2].padStart(6,'0')}/50/ja`;
+  // 再公表yyyy-nnnnnn / 再表yyyy/nnnnnn (J-PlatPat固定URLでは JP-yyyy-nnnnnn/19)
+  if ((m = pid.match(/再(?:公)?表\s*(\d{4})\s*[-\/]\s*(\d+)/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/19/ja`;
   // 特許nnnnnnn
   if ((m = pid.match(/特許(?:第)?\s*(\d+)/))) return `${B}/JP-${m[1]}/15/ja`;
   // JP2023-123456A / JP2023123456A
@@ -166,6 +166,54 @@ function jumpToJplatpatByQuery(q) {
   window.open(url, '_blank', 'noopener');
   if (input) {
     input.select();
+  }
+}
+
+async function downloadJplatpatPdfByQuery(q) {
+  const src = (q || '').trim();
+  const input = document.getElementById('jpp-quick-input');
+  const msg = document.getElementById('jpp-quick-msg');
+  const btn = document.getElementById('jpp-pdf-download-btn');
+  const setMsg = (t, kind) => {
+    if (!msg) return;
+    msg.textContent = t || '';
+    msg.className = 'jpp-quick-msg ' + (kind || '');
+  };
+  if (!src) {
+    setMsg('番号が空です。例: JP7250676B2 / 特許7250676', 'err');
+    return;
+  }
+
+  const oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'PDF取得中...';
+  }
+  setMsg('J-PlatPatを操作してPDFを取得中です。ブラウザが開く場合があります。', 'ok');
+
+  try {
+    const roleEl = document.getElementById('cit-role');
+    const role = roleEl ? roleEl.value : '主引例';
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/jplatpat-download`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patent_id: src, role})
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      throw new Error(data.error || `HTTP ${resp.status}`);
+    }
+    const pages = data.downloaded_pages ? ` / ${data.downloaded_pages}ページ` : '';
+    setMsg(`引用文献に登録しました: ${data.doc_id || src}${pages}`, 'ok');
+    if (input) input.select();
+    setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    setMsg('PDF取得に失敗しました: ' + (e && e.message ? e.message : e), 'err');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || 'J-PlatPatからPDF取得';
+    }
   }
 }
 

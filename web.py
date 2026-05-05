@@ -1024,6 +1024,17 @@ def search_download(case_id):
     return _svc_response(search_download(case_id, patent_ids, data.get("role", "主引例")))
 
 
+@app.route("/case/<case_id>/citation/jplatpat-download", methods=["POST"])
+def jplatpat_download_citation(case_id):
+    from services.jplatpat_pdf_service import download_citation_pdf_from_jplatpat
+    data = request.get_json() or {}
+    return _svc_response(download_citation_pdf_from_jplatpat(
+        case_id,
+        data.get("patent_id", ""),
+        data.get("role", "主引例"),
+    ))
+
+
 @app.route("/case/<case_id>/search/execute", methods=["POST"])
 def search_execute(case_id):
     from services.search_service import search_execute

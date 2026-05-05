@@ -357,6 +357,10 @@
                   onclick="jumpToJplatpatByQuery(document.getElementById('jpp-quick-input').value)">
             開く
           </button>
+          <button class="btn btn-success" type="button" id="jpp-pdf-download-btn"
+                  onclick="downloadJplatpatPdfByQuery(document.getElementById('jpp-quick-input').value)">
+            J-PlatPatからPDF取得
+          </button>
           <button class="btn btn-outline" type="button"
                   onclick="(function(){var i=document.getElementById('jpp-quick-input');i.value='';i.focus();document.getElementById('jpp-quick-msg').textContent='';})()"
                   title="入力欄をクリア">クリア</button>
