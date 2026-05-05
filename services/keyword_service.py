@@ -872,7 +872,7 @@ def delete_fterm(case_id, group_id, code):
     return {"success": True}, 200
 
 
-def suggest_keywords(case_id):
+def suggest_keywords(case_id, model=None):
     """AIキーワード提案"""
     from modules.keyword_recommender import recommend_by_tech_analysis
     from modules.keyword_suggester import build_keyword_groups_from_pipeline
@@ -907,7 +907,7 @@ def suggest_keywords(case_id):
         except (json.JSONDecodeError, ValueError):
             pass
 
-    tech_analysis, pipeline_result = recommend_by_tech_analysis(segs, hongan, field)
+    tech_analysis, pipeline_result = recommend_by_tech_analysis(segs, hongan, field, model=model)
 
     if tech_analysis:
         with open(case_dir / "tech_analysis.json", "w", encoding="utf-8") as f:

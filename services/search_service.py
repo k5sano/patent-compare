@@ -188,7 +188,7 @@ def search_download(case_id, patent_ids, role="主引例"):
 # 4. 先行技術検索パイプライン直接実行
 # ------------------------------------------------------------------
 
-def search_execute(case_id):
+def search_execute(case_id, model=None):
     """プロンプト生成 → Claude CLI 呼び出し → パース を一気通貫で実行
 
     Returns:
@@ -230,7 +230,7 @@ def search_execute(case_id):
 
     # Claude CLI 呼び出し
     try:
-        raw_response = call_claude(prompt_text, timeout=600, use_search=False)
+        raw_response = call_claude(prompt_text, timeout=600, use_search=False, model=model)
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 
@@ -613,12 +613,13 @@ def get_search_data_file(case_id, filename):
 # 13. 3段階検索の個別ステージ直接実行
 # ------------------------------------------------------------------
 
-def stage_execute(case_id, stage):
+def stage_execute(case_id, stage, model=None):
     """指定ステージのプロンプト生成 → Claude CLI → パース → 保存 を一気通貫で実行
 
     Args:
         case_id: 案件ID
         stage: 実行するステージ (1, 2, or 3)
+        model: モデル名 ('opus'/'sonnet'/'haiku') または完全 ID。
 
     Returns:
         (dict, int): 実行結果, status_code
@@ -683,7 +684,9 @@ def stage_execute(case_id, stage):
 
     # --- Claude CLI 呼び出し（Stage 1 はウェブ検索を有効化） ---
     try:
-        raw_response = call_claude(prompt_text, timeout=600, use_search=(stage == 1))
+        raw_response = call_claude(
+            prompt_text, timeout=600, use_search=(stage == 1), model=model,
+        )
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 
@@ -731,7 +734,7 @@ def stage_execute(case_id, stage):
 # 14. Stage 1 ストリーミング実行
 # ------------------------------------------------------------------
 
-def stage_execute_stream(case_id):
+def stage_execute_stream(case_id, model=None):
     """Stage 1 をストリーミング実行し、進捗イベントをNDJSONで返すジェネレータを返す
 
     Returns:
@@ -771,7 +774,7 @@ def stage_execute_stream(case_id):
     prompt_text = generate_presearch_prompt(segs, hongan, keywords, field, case_meta=meta)
 
     def generate():
-        for evt in call_claude_stream(prompt_text, timeout=600, use_search=True):
+        for evt in call_claude_stream(prompt_text, timeout=600, use_search=True, model=model):
             if evt["type"] == "done":
                 full_response = evt["response"]
                 # パース・保存

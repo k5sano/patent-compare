@@ -223,7 +223,7 @@ _PATENT_RE = re.compile(
 )
 
 
-def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
+def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None):
     """Claude Code CLI にプロンプトを送信し、進捗イベントを yield するジェネレータ。
 
     --output-format stream-json を使用してストリーミング出力を取得し、
@@ -246,6 +246,9 @@ def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
     env.pop("ANTHROPIC_API_KEY", None)
 
     cmd = ["claude", "-p", "--verbose", "--output-format", "stream-json"]
+    resolved_model = resolve_model(model)
+    if resolved_model:
+        cmd.extend(["--model", resolved_model])
 
     mcp_config_path = None
     if use_search:
@@ -254,8 +257,8 @@ def call_claude_stream(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False):
             cmd.extend(["--mcp-config", mcp_config_path])
             cmd.extend(["--allowedTools", "mcp__patent-search__*"])
 
-    logger.info("Claude CLI ストリーム呼び出し: prompt=%d文字, search=%s",
-                len(prompt_text), use_search)
+    logger.info("Claude CLI ストリーム呼び出し: prompt=%d文字, search=%s, model=%s",
+                len(prompt_text), use_search, resolved_model or "default")
 
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".txt", encoding="utf-8", delete=False

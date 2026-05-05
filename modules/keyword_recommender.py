@@ -798,16 +798,22 @@ def _extract_json_object(raw_text):
     return extract_json_object(raw_text, required_key="elements")
 
 
-def _call_ai_tech_analysis(prompt, field):
+def _call_ai_tech_analysis(prompt, field, model=None):
     """AIを呼び出してtech_analysisを取得。
 
-    API key → anthropic SDK (claude-opus-4-6)
+    API key → anthropic SDK
     API keyなし → Claude CLI (call_claude)
     どちらも失敗 → AIResult(success=False)
 
+    Parameters:
+        model: 'opus'/'sonnet'/'haiku' エイリアスまたはフル ID。
+               None なら 'claude-opus-4-6' (従来既定)
     Returns:
         AIResult: success=True の場合 data に tech_analysis dict を格納
     """
+    from modules.claude_client import resolve_model
+    full_model = resolve_model(model) or "claude-opus-4-6"
+
     # 方法1: Anthropic API (API key あり)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if api_key:
@@ -815,15 +821,15 @@ def _call_ai_tech_analysis(prompt, field):
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
-                model="claude-opus-4-6",
+                model=full_model,
                 max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text
             result = _extract_json_object(raw)
             if result:
-                logger.info("tech_analysis: Anthropic API で取得 (%d 要素)",
-                            len(result.get("elements", {})))
+                logger.info("tech_analysis: Anthropic API (%s) で取得 (%d 要素)",
+                            full_model, len(result.get("elements", {})))
                 return AIResult(success=True, data=result)
             logger.warning("tech_analysis: API応答からJSONを抽出できませんでした")
             return AIResult(success=False, error="API応答からJSONを抽出できませんでした")
@@ -838,8 +844,9 @@ def _call_ai_tech_analysis(prompt, field):
         if not is_claude_available():
             logger.warning("Claude CLI 利用不可")
             return AIResult(success=False, error="Claude CLI 利用不可")
-        logger.info("tech_analysis: Claude CLI で実行 (prompt=%d 文字)", len(prompt))
-        raw = call_claude(prompt, timeout=300)
+        logger.info("tech_analysis: Claude CLI (%s) で実行 (prompt=%d 文字)",
+                    model or "default", len(prompt))
+        raw = call_claude(prompt, timeout=300, model=model)
         result = _extract_json_object(raw)
         if result:
             logger.info("tech_analysis: CLI で取得 (%d 要素)",
@@ -1028,7 +1035,7 @@ def _fallback_regex_anchors(segments, hongan, field):
     return results
 
 
-def recommend_by_tech_analysis(segments, hongan, field):
+def recommend_by_tech_analysis(segments, hongan, field, model=None):
     """新メインエントリポイント: AI技術構造化ベースのキーワード選定。
 
     AI技術構造化 → 明細書定義セクション解析 → 実施例抽出 → 辞書展開
@@ -1037,6 +1044,8 @@ def recommend_by_tech_analysis(segments, hongan, field):
         segments: 請求項分節データ (segments.json)
         hongan: 本願構造化テキスト (hongan.json)
         field: "cosmetics" | "laminate" | etc.
+        model: モデル名 ('opus'/'sonnet'/'haiku' または完全 ID)。
+               None なら従来既定 (claude-opus-4-6)
 
     Returns:
         tuple: (tech_analysis_dict or None, pipeline_result_list)
@@ -1045,7 +1054,7 @@ def recommend_by_tech_analysis(segments, hongan, field):
     prompt = _build_tech_analysis_prompt(segments, hongan, field)
     logger.info("tech_analysis プロンプト生成: %d 文字", len(prompt))
 
-    ai_result = _call_ai_tech_analysis(prompt, field)
+    ai_result = _call_ai_tech_analysis(prompt, field, model=model)
 
     if ai_result.success and ai_result.data and ai_result.data.get("elements"):
         tech_analysis = ai_result.data

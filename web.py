@@ -388,7 +388,8 @@ def edit_keyword(case_id):
 @app.route("/case/<case_id>/keywords/suggest", methods=["POST"])
 def suggest_keywords(case_id):
     from services.keyword_service import suggest_keywords
-    return _svc_response(suggest_keywords(case_id))
+    body = request.get_json(silent=True) or {}
+    return _svc_response(suggest_keywords(case_id, model=body.get("model")))
 
 
 @app.route("/case/<case_id>/keywords/suggest-by-segment", methods=["POST"])
@@ -962,7 +963,8 @@ def inventive_step_response(case_id):
 @app.route("/case/<case_id>/inventive-step/execute", methods=["POST"])
 def inventive_step_execute(case_id):
     from services.comparison_service import inventive_step_execute
-    return _svc_response(inventive_step_execute(case_id))
+    body = request.get_json(silent=True) or {}
+    return _svc_response(inventive_step_execute(case_id, model=body.get("model")))
 
 
 # ===== API =====
@@ -1019,7 +1021,8 @@ def search_download(case_id):
 @app.route("/case/<case_id>/search/execute", methods=["POST"])
 def search_execute(case_id):
     from services.search_service import search_execute
-    return _svc_response(search_execute(case_id))
+    body = request.get_json(silent=True) or {}
+    return _svc_response(search_execute(case_id, model=body.get("model")))
 
 
 @app.route("/case/<case_id>/search/presearch/prompt", methods=["POST"])
@@ -1074,14 +1077,14 @@ def get_search_data(case_id, filename):
 def stage_execute(case_id):
     from services.search_service import stage_execute
     data = request.get_json() or {}
-    return _svc_response(stage_execute(case_id, data.get("stage")))
+    return _svc_response(stage_execute(case_id, data.get("stage"), model=data.get("model")))
 
 
 @app.route("/case/<case_id>/search/stage-execute-stream", methods=["POST"])
 def stage_execute_stream(case_id):
     from services.search_service import stage_execute_stream
-    import types
-    result = stage_execute_stream(case_id)
+    body = request.get_json(silent=True) or {}
+    result = stage_execute_stream(case_id, model=body.get("model"))
     if isinstance(result, tuple):
         data, code = result
         return jsonify(data), code
@@ -1658,7 +1661,7 @@ def search_run_ai_score(case_id, run_id):
         # limit=None で未スコアの全件を処理。明示で {"limit": N} 指定があれば従う。
         raw_limit = body.get("limit")
         limit = int(raw_limit) if raw_limit not in (None, "", 0) else None
-        data = ai_score_run(case_id, run_id, limit=limit)
+        data = ai_score_run(case_id, run_id, limit=limit, model=body.get("model"))
     except NotImplementedError:
         return jsonify({"error": "AIスコア機能は未実装 (Phase2)"}), 501
     if not data:

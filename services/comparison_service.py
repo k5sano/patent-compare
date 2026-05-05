@@ -1355,7 +1355,7 @@ def inventive_step_response(case_id, raw_text):
     return {"success": data is not None, "data": data, "errors": errors}, 200
 
 
-def inventive_step_execute(case_id):
+def inventive_step_execute(case_id, model=None):
     """直接実行: 進歩性判断プロンプト → Claude CLI → パース"""
     from modules.inventive_step_analyzer import (
         generate_inventive_step_prompt, parse_inventive_step_response
@@ -1408,7 +1408,7 @@ def inventive_step_execute(case_id):
         f.write(prompt_text)
 
     try:
-        raw_response = call_claude(prompt_text, timeout=600)
+        raw_response = call_claude(prompt_text, timeout=600, model=model)
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 

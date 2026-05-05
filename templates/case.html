@@ -263,6 +263,9 @@
         <button class="btn btn-primary" id="btn-suggest" onclick="suggestKeywords()">
           AI自動提案
         </button>
+        <select class="model-picker" data-model-key="kw-suggest" data-model-default="sonnet"
+                title="AI自動提案のモデル (Sonnet 推奨: 軽量タスク)"
+                style="padding:0.3rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
         <button class="btn btn-outline" onclick="showTechAnalysisCandidates()"
                 title="Step 4 Stage 1 の技術構造化から候補語を一覧表示し、選んだものだけ既存グループに追加します (全消ししない)">
           📋 Step 4 候補から追加
@@ -383,11 +386,14 @@
           <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
             技術構造化 → 多言語同義語展開 → 予備検索候補の生成
           </p>
-          <div class="btn-row" style="margin-top:0;">
+          <div class="btn-row" style="margin-top:0; align-items:center;">
             <button class="btn btn-primary" onclick="stageGeneratePrompt(1)"
                     {% if not segments %}disabled title="分節データが必要です"{% endif %}>
               Stage 1 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage1" onclick="stageCopyPrompt(1)" style="display:none;">コピー</button>
+            <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+                    style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage1-execute" onclick="stageExecute(1)" style="display:none;"
                     {% if not segments %}disabled{% endif %}>&#9889; 直接実行</button>
             <span id="stage1-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
@@ -416,9 +422,12 @@
           <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
             代表文献からFI/Fterm/CPC/IPCを特定
           </p>
-          <div class="btn-row" style="margin-top:0;">
+          <div class="btn-row" style="margin-top:0; align-items:center;">
             <button class="btn btn-primary" onclick="stageGeneratePrompt(2)">Stage 2 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage2" onclick="stageCopyPrompt(2)" style="display:none;">コピー</button>
+            <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+                    style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage2-execute" onclick="stageExecute(2)" style="display:none;">&#9889; 直接実行</button>
             <span id="stage2-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
           </div>
@@ -444,9 +453,12 @@
           <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
             要素別キーワード辞書（コア語/拡張語/NOT語）+ OR束検索式
           </p>
-          <div class="btn-row" style="margin-top:0;">
+          <div class="btn-row" style="margin-top:0; align-items:center;">
             <button class="btn btn-primary" onclick="stageGeneratePrompt(3)">Stage 3 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage3" onclick="stageCopyPrompt(3)" style="display:none;">コピー</button>
+            <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+                    style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage3-execute" onclick="stageExecute(3)" style="display:none;">&#9889; 直接実行</button>
             <span id="stage3-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
           </div>
@@ -476,11 +488,14 @@
         </p>
 
         <!-- プロンプト生成 -->
-        <div class="btn-row" style="margin-top:0;">
+        <div class="btn-row" style="margin-top:0; align-items:center;">
           <button class="btn btn-primary" onclick="generateSearchPrompt()"
                   {% if not segments or not keywords %}disabled title="分節とキーワードが必要です"{% endif %}>
             検索プロンプト生成</button>
           <button class="btn btn-success" id="btn-copy-search" onclick="copySearchPrompt()" style="display:none;">コピー</button>
+          <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
+          <select class="model-picker" data-model-key="search-simple" data-model-default="sonnet"
+                  style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-execute" id="btn-search-execute" onclick="executeSearch()" style="display:none;"
                   {% if not segments or not keywords %}disabled{% endif %}>&#9889; 直接実行</button>
           <span id="search-api-status" style="display:none; font-size:0.75rem; padding:2px 6px; border-radius:4px; background:#14532d; color:#4ade80;">Web検索ON</span>
@@ -814,6 +829,9 @@
         <div class="btn-row" style="margin-top:0; margin-bottom:0.6rem; flex-wrap:wrap;">
           <button class="btn btn-outline" onclick="srEnrich()" title="Google Patents から要約/請求項1を取得">要約/請求項1 を取得</button>
           <button class="btn btn-outline" onclick="srAiScore()" title="Claudeで本願との関連度スコアを付与">AI関連度スコア</button>
+          <select class="model-picker" data-model-key="sr-aiscore" data-model-default="sonnet"
+                  title="関連度スコアのモデル (Sonnet 推奨)"
+                  style="padding:0.2rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-outline active" id="btn-sr-pkm" onclick="srTogglePkm()" title="Step 3 のキーワードグループでヒットの本文を色分け表示">🎨 ハイライト ON</button>
           <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">取得元:</label>
           <select id="sr-pkm-source" style="font-size:0.78rem; padding:0.2rem 0.4rem;" title="J-PlatPat 推奨（中韓特許も日本語で取得可）">
@@ -1057,9 +1075,13 @@
       </p>
 
       <!-- プロンプト生成 -->
-      <div class="btn-row" style="margin-top:0;">
+      <div class="btn-row" style="margin-top:0; align-items:center;">
         <button class="btn btn-primary" onclick="generateInventiveStepPrompt()">進歩性判断プロンプト生成</button>
         <button class="btn btn-success" id="btn-copy-inv" onclick="copyInventiveStepPrompt()" style="display:none;">コピー</button>
+        <label style="font-size:0.8rem; color:var(--text2); margin-left:0.5rem;">モデル:</label>
+        <select class="model-picker" data-model-key="inventive-step" data-model-default="opus"
+                title="進歩性判断は厳密性が必要なため Opus 推奨"
+                style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
         <button class="btn btn-execute" onclick="executeInventiveStep()" style="display:none;">&#9889; 直接実行</button>
         <span id="inv-prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
       </div>

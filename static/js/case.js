@@ -1802,12 +1802,17 @@ async function suggestKeywords() {
   const loading = document.getElementById('loading-suggest');
   btn.disabled = true;
   loading.classList.add('show');
+  const model = getPickerModel('kw-suggest', 'sonnet');
   try {
-    const res = await fetch(`/case/${CASE_ID}/keywords/suggest`, { method: 'POST' });
+    const res = await fetch(`/case/${CASE_ID}/keywords/suggest`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ model }),
+    });
     if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'エラー'); }
     kwGroups = await res.json();   // サーバー側でreplaceモード: AI結果で全置換（手動追加は保持）
     renderGroups();
-    showKwSaveMsg('AI提案で全グループを再生成しました');
+    showKwSaveMsg(`AI提案で全グループを再生成しました (model=${model})`);
   } catch(e) {
     alert('エラー: ' + e.message);
   } finally {
@@ -4424,10 +4429,11 @@ async function executeSearch() {
   progress.classList.add('show');
 
   try {
+    const model = getPickerModel('search-simple', 'sonnet');
     const resp = await fetch(`/case/${CASE_ID}/search/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({})
+      body: JSON.stringify({ model })
     });
     const data = await resp.json();
     progress.classList.remove('show');
@@ -4524,10 +4530,11 @@ async function executeInventiveStep() {
   progress.classList.add('show');
 
   try {
+    const model = getPickerModel('inventive-step', 'opus');
     const resp = await fetch(`/case/${CASE_ID}/inventive-step/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({})
+      body: JSON.stringify({ model })
     });
     const data = await resp.json();
     progress.classList.remove('show');
@@ -4944,9 +4951,10 @@ async function stageExecute(stage) {
   progress.classList.add('show');
 
   try {
+    const model = getPickerModel('search-stage', 'sonnet');
     const callResp = await fetch(`/case/${CASE_ID}/search/stage-execute`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ stage: stage })
+      body: JSON.stringify({ stage: stage, model })
     });
     const callData = await callResp.json();
 
@@ -5008,10 +5016,11 @@ async function stageExecuteStream() {
   addExecMsg(msgLog, 'Claude CLI 起動中...');
 
   try {
+    const model = getPickerModel('search-stage', 'sonnet');
     const resp = await fetch(`/case/${CASE_ID}/search/stage-execute-stream`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({})
+      body: JSON.stringify({ model })
     });
 
     if (!resp.ok) {
@@ -6381,14 +6390,15 @@ async function srEnrich() {
 async function srAiScore() {
   if (!_srCurrentRun) return;
   const pending = (_srCurrentRun.hits || []).filter(h => h.ai_score == null).length;
-  if (!confirm(`Claudeを呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
+  const model = getPickerModel('sr-aiscore', 'sonnet');
+  if (!confirm(`Claude(${model})を呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
   const loading = document.getElementById('loading-sr-aiscore');
   loading.classList.add('show');
   try {
     const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/ai-score`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({}),  // limit 未指定 = 全件
+      body: JSON.stringify({ model }),  // limit 未指定 = 全件
     });
     const data = await r.json();
     loading.classList.remove('show');

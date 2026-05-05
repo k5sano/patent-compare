@@ -642,13 +642,16 @@ def enrich_run(case_id: str, run_id: str, limit: int = 20) -> Optional[dict]:
     return data
 
 
-def ai_score_run(case_id: str, run_id: str, limit: Optional[int] = None) -> Optional[dict]:
+def ai_score_run(case_id: str, run_id: str, limit: Optional[int] = None,
+                 model: Optional[str] = None) -> Optional[dict]:
     """Claude を使って本願との関連度スコア (0-100) を付与する。
 
     本願の claim1 / 発明の名称を入力として各 hit の title+abstract+claim1 を
     評価し ai_score と ai_reason を書き込む。
 
-    limit=None なら未スコアのヒット全件に対して実行する。
+    Parameters:
+        limit: 処理する hit の上限。None なら未スコアの全件。
+        model: 'opus'/'sonnet'/'haiku' またはフル ID。None なら CLI 既定。
     """
     from modules.claude_client import call_claude, ClaudeClientError
 
@@ -668,7 +671,7 @@ def ai_score_run(case_id: str, run_id: str, limit: Optional[int] = None) -> Opti
             continue
         prompt = _build_scoring_prompt(hongan_summary, h)
         try:
-            raw = call_claude(prompt, timeout=120, use_search=False)
+            raw = call_claude(prompt, timeout=120, use_search=False, model=model)
         except (ClaudeClientError, Exception) as e:
             h["ai_reason"] = f"scoring error: {e}"
             continue
