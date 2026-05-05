@@ -1218,16 +1218,24 @@ def compare_execute(case_id, citation_ids, model=None):
         with open(hongan_path, "r", encoding="utf-8") as f:
             hongan = json.load(f)
 
-    # Sonnet/Haiku の場合は citation 単位で 3 並列実行（軽量モデル前提）。
-    # Opus は1プロンプトに全 citation を統合して送信（従来動作）。
+    # 並列実行は環境変数 COMPARE_PARALLEL=N (N>=2) で明示的に有効化したときのみ。
+    # 過去に Sonnet*3 並列でかえって遅くなる事例あり（CLI 起動オーバーヘッド +
+    # prompt cache が効かない+ session が分散するため）。デフォルトは Opus と
+    # 同じ「1 プロンプトに全 citation を統合」方式とする。
+    import os as _os
+    try:
+        parallel_workers = int(_os.environ.get("COMPARE_PARALLEL", "0"))
+    except ValueError:
+        parallel_workers = 0
     model_l = (model or "").lower()
-    use_parallel = ("sonnet" in model_l) or ("haiku" in model_l)
-    if use_parallel and len(citations) >= 2:
+    is_lightweight = ("sonnet" in model_l) or ("haiku" in model_l)
+    if parallel_workers >= 2 and is_lightweight and len(citations) >= 2:
         known_cit_ids = [c.get("id") for c in (meta or {}).get("citations", []) if c.get("id")]
         return _compare_execute_per_citation_parallel(
             case_id=case_id, citations=citations, segs=segs,
             keywords=keywords, hongan=hongan, field=field,
-            model=model, known_cit_ids=known_cit_ids, max_workers=3,
+            model=model, known_cit_ids=known_cit_ids,
+            max_workers=parallel_workers,
         )
 
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
