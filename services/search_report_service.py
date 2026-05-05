@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.case_service import (
-    get_case_dir, load_case_meta, upload_citation,
+    get_case_dir, load_case_meta, upload_citation, get_case_lock,
 )
 
 
@@ -81,12 +81,14 @@ def upload_report(case_id, src_path, original_filename):
     parsed["box_v_summary"] = ""
     parsed.pop("raw_text", None)  # 永続化からは外す（容量節約）
 
-    data = load_reports(case_id)
-    data.setdefault("reports", [])
-    # 同名は上書き
-    data["reports"] = [r for r in data["reports"] if r.get("filename") != original_filename]
-    data["reports"].append(parsed)
-    save_reports(case_id, data)
+    # 同一案件への並列アップロードで search_reports.json の lost-update を防ぐ
+    with get_case_lock(case_id):
+        data = load_reports(case_id)
+        data.setdefault("reports", [])
+        # 同名は上書き
+        data["reports"] = [r for r in data["reports"] if r.get("filename") != original_filename]
+        data["reports"].append(parsed)
+        save_reports(case_id, data)
 
     return {"success": True, "report": parsed}, 200
 

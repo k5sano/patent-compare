@@ -5,10 +5,25 @@
 import json
 import re
 import shutil
+import threading
 import yaml
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+
+# case_id ごとの排他制御。同一案件への並列書き込み（複数PDF同時アップロード等）で
+# case.yaml / search_reports.json などの lost-update を防ぐ。
+_case_locks: dict = {}
+_case_locks_master = threading.Lock()
+
+
+def get_case_lock(case_id: str) -> threading.Lock:
+    """case_id 単位の排他ロックを返す（初回作成、以降は同じインスタンス）"""
+    with _case_locks_master:
+        lock = _case_locks.get(case_id)
+        if lock is None:
+            lock = _case_locks[case_id] = threading.Lock()
+        return lock
 
 
 def get_cases_dir():
@@ -691,11 +706,14 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
     with open(case_dir / "citations" / f"{doc_id}.json", "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
 
-    citations = meta.get("citations", [])
-    if not any(normalize_citation_id(c.get("id", "")) == doc_id for c in citations):
-        citations.append({"id": doc_id, "role": role, "label": label or doc_id})
-        meta["citations"] = citations
-        save_case_meta(case_id, meta)
+    # 同一案件への並列アップロードで citations 配列の lost-update を防ぐ
+    with get_case_lock(case_id):
+        meta = load_case_meta(case_id) or meta  # ロック内で再読込（最新状態を取得）
+        citations = meta.get("citations", [])
+        if not any(normalize_citation_id(c.get("id", "")) == doc_id for c in citations):
+            citations.append({"id": doc_id, "role": role, "label": label or doc_id})
+            meta["citations"] = citations
+            save_case_meta(case_id, meta)
 
     response = {
         "success": True,

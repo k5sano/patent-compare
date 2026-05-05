@@ -434,26 +434,40 @@ async function uploadCitations(files) {
   const loading = document.getElementById('loading-citation');
   loading.classList.add('show');
 
-  for (const file of files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('role', document.getElementById('cit-role').value);
-    fd.append('label', document.getElementById('cit-label').value || '');
+  const role = document.getElementById('cit-role').value;
+  const label = document.getElementById('cit-label').value || '';
 
-    try {
-      const resp = await fetch(`/case/${CASE_ID}/upload/citation`, { method: 'POST', body: fd });
+  // 複数ファイルを Promise.allSettled で並列アップロード
+  // （サーバ側パースは Phase A/B でOCR並列化済み）
+  const results = await Promise.allSettled(
+    Array.from(files).map(async (file) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('role', role);
+      fd.append('label', label);
+      const resp = await fetch(`/case/${CASE_ID}/upload/citation`,
+                               { method: 'POST', body: fd });
       const data = await resp.json();
-      if (data.success) {
-        const list = document.getElementById('citations-list');
-        list.innerHTML += `<div class="cit-card"><div class="cit-info">
-          <h4>${data.doc_id}</h4>
-          <p>請求項${data.num_claims}件 / 段落${data.num_paragraphs}件</p>
-        </div></div>`;
-      }
-    } catch(e) {
-      alert('エラー: ' + e.message);
+      if (!data.success) throw new Error(`${file.name}: ${data.error || 'unknown'}`);
+      return { file, data };
+    })
+  );
+
+  const list = document.getElementById('citations-list');
+  const errors = [];
+  for (const r of results) {
+    if (r.status === 'fulfilled') {
+      const { data } = r.value;
+      list.innerHTML += `<div class="cit-card"><div class="cit-info">
+        <h4>${data.doc_id}</h4>
+        <p>請求項${data.num_claims}件 / 段落${data.num_paragraphs}件</p>
+      </div></div>`;
+    } else {
+      errors.push(r.reason?.message || String(r.reason));
     }
   }
+  if (errors.length) alert('一部失敗:\n' + errors.join('\n'));
+
   loading.classList.remove('show');
   setTimeout(() => location.reload(), 500);
 }
@@ -631,20 +645,26 @@ async function loadSearchReports() {
 async function uploadSearchReports(files) {
   const loading = document.getElementById('loading-search-report');
   loading.classList.add('show');
-  let errors = [];
-  for (const file of files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    try {
+
+  // 複数ファイルを並列アップロード
+  // （ISR/IPER パースは OCR 並列化済み, 1ファイル ~4 秒程度）
+  const results = await Promise.allSettled(
+    Array.from(files).map(async (file) => {
+      const fd = new FormData();
+      fd.append('file', file);
       const resp = await fetch(`/case/${CASE_ID}/search-report/upload`, {
         method: 'POST', body: fd,
       });
       const data = await resp.json();
-      if (!data.success) errors.push(`${file.name}: ${data.error || 'unknown'}`);
-    } catch(e) {
-      errors.push(`${file.name}: ${e.message}`);
-    }
-  }
+      if (!data.success) throw new Error(`${file.name}: ${data.error || 'unknown'}`);
+      return data;
+    })
+  );
+
+  const errors = results
+    .filter(r => r.status === 'rejected')
+    .map(r => r.reason?.message || String(r.reason));
+
   loading.classList.remove('show');
   if (errors.length) alert('一部失敗:\n' + errors.join('\n'));
   await loadSearchReports();
