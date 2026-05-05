@@ -1139,6 +1139,43 @@
   </div>
 </div>
 
+<!-- 対比表セル手動編集モーダル -->
+<div id="comp-edit-modal" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
+  <div style="width:min(720px,92vw); max-height:88vh; background:#0f172a; border:1px solid var(--border); border-radius:10px; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:0.7rem 1rem; border-bottom:1px solid var(--border);">
+      <strong style="color:#cbd5e1;">✏ 対比セルを修正 — <span id="comp-edit-title" style="color:#94a3b8; font-weight:normal;"></span></strong>
+      <button onclick="closeCompEdit()" style="background:none; border:none; color:#94a3b8; font-size:1.4rem; cursor:pointer; line-height:1;">×</button>
+    </div>
+    <div style="overflow:auto; padding:0.8rem 1rem; flex:1;">
+      <div style="display:flex; gap:0.6rem; align-items:center; margin-bottom:0.6rem;">
+        <label style="font-size:0.85rem; color:#cbd5e1; min-width:5em;">判定:</label>
+        <select id="comp-edit-judgment" style="padding:0.3rem 0.5rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px;">
+          <option value="○">○ (一致／充足)</option>
+          <option value="△">△ (部分一致)</option>
+          <option value="×">× (不一致)</option>
+          <option value="">— (未判定)</option>
+        </select>
+      </div>
+      <div style="margin-bottom:0.6rem;">
+        <label style="font-size:0.85rem; color:#cbd5e1; display:block; margin-bottom:0.2rem;">cited_location (該当箇所):</label>
+        <input type="text" id="comp-edit-loc" placeholder="例: CL1;0023;T4" style="width:100%; padding:0.35rem 0.5rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-family:monospace;">
+      </div>
+      <div style="margin-bottom:0.6rem;">
+        <label style="font-size:0.85rem; color:#cbd5e1; display:block; margin-bottom:0.2rem;">judgment_reason (理由・コメント):</label>
+        <textarea id="comp-edit-reason" rows="4" style="width:100%; padding:0.4rem 0.6rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-size:0.85rem; line-height:1.5; resize:vertical;"></textarea>
+      </div>
+      <div>
+        <label style="font-size:0.85rem; color:#cbd5e1; display:block; margin-bottom:0.2rem;">cited_text (引用本文・任意):</label>
+        <textarea id="comp-edit-text" rows="3" style="width:100%; padding:0.4rem 0.6rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-size:0.82rem; line-height:1.4; resize:vertical;"></textarea>
+      </div>
+    </div>
+    <div style="padding:0.6rem 1rem; border-top:1px solid var(--border); display:flex; gap:0.5rem; justify-content:flex-end;">
+      <button class="btn btn-outline" onclick="closeCompEdit()">キャンセル</button>
+      <button id="comp-edit-save-btn" class="btn btn-success" onclick="saveCompEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
 <!-- 予備検索ヒント取り込み プレビューモーダル -->
 <div id="sh-modal" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.6);">
   <div style="position:absolute; top:5%; left:50%; transform:translateX(-50%); width:min(900px,92vw); max-height:88vh; background:#0f172a; border:1px solid var(--border); border-radius:10px; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,0.6);">

@@ -516,6 +516,13 @@ function _escapeHtml(s) {
   }[ch]));
 }
 
+function _escapeAttr(s) {
+  // onclick="..." 内の文字列リテラル用 (シングルクォート + バックスラッシュをエスケープ)
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+}
+
 function renderSearchReport(report) {
   const fname = report.filename;
   const safeFname = _escapeHtml(fname);
@@ -3657,7 +3664,9 @@ function renderCompSummaryTable() {
         if (comp) {
           const reason = _compLinkifyParaRefs(_escapeHtml(comp.judgment_reason || ''), citId);
           const loc = _compLocHtml(comp, citId);
-          body += '<td class="comp-td-reason">' + reason + loc + '</td>';
+          const editedBadge = comp._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(comp._edited_at) + '">✏</span>' : '';
+          const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'comparison\',\'' + _escapeAttr(segId) + '\')">✏</button>';
+          body += '<td class="comp-td-reason">' + editedBadge + reason + loc + editBtn + '</td>';
         } else {
           body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
         }
@@ -3693,7 +3702,9 @@ function renderCompSummaryTable() {
             const jDisp = _compJDisp(sub);
             const jr = _compLinkifyParaRefs(_escapeHtml(sub.judgment_reason || ''), citId);
             const loc = _compLocHtml(sub, citId);
-            body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span></td>';
+            const editedBadge = sub._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(sub._edited_at) + '">✏</span>' : '';
+            const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'sub_claim\',\'' + claim.claim_number + '\')">✏</button>';
+            body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + editedBadge + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span> ' + editBtn + '</td>';
           } else {
             body += '<td style="color:var(--text2);">—</td>';
           }
@@ -3739,6 +3750,79 @@ function _setCompSummaryLoadError(msg) {
   }
   if (thead) thead.innerHTML = '';
   if (colbar) colbar.innerHTML = '';
+}
+
+// ----------------------------------------------------------------
+// 対比表セルの手動編集
+// ----------------------------------------------------------------
+window._compEditCtx = null;  // {citId, kind, key}
+
+function openCompEdit(citId, kind, key) {
+  const d = _compSummaryData;
+  if (!d) { alert('対比表データが未取得です'); return; }
+  const resp = d.responses && d.responses[citId];
+  if (!resp) { alert('引例データが見つかりません: ' + citId); return; }
+  let target = null;
+  if (kind === 'comparison') {
+    target = (resp.comparisons || []).find(c => c.requirement_id === key);
+  } else if (kind === 'sub_claim') {
+    target = (resp.sub_claims || []).find(c => Number(c.claim_number) === Number(key));
+  }
+  if (!target) { alert('編集対象が見つかりません'); return; }
+  window._compEditCtx = {citId, kind, key};
+  document.getElementById('comp-edit-title').textContent =
+    `${citId} / ${kind === 'comparison' ? '構成要件 ' + key : '請求項 ' + key}`;
+  document.getElementById('comp-edit-judgment').value = target.judgment || '';
+  document.getElementById('comp-edit-reason').value = target.judgment_reason || '';
+  document.getElementById('comp-edit-loc').value = target.cited_location || '';
+  document.getElementById('comp-edit-text').value = target.cited_text || '';
+  document.getElementById('comp-edit-modal').style.display = 'flex';
+}
+
+function closeCompEdit() {
+  document.getElementById('comp-edit-modal').style.display = 'none';
+  window._compEditCtx = null;
+}
+
+async function saveCompEdit() {
+  const ctx = window._compEditCtx;
+  if (!ctx) return;
+  const fields = {
+    judgment: document.getElementById('comp-edit-judgment').value || '',
+    judgment_reason: document.getElementById('comp-edit-reason').value || '',
+    cited_location: document.getElementById('comp-edit-loc').value || '',
+    cited_text: document.getElementById('comp-edit-text').value || '',
+  };
+  const btn = document.getElementById('comp-edit-save-btn');
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/response/${encodeURIComponent(ctx.citId)}/edit-cell`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        target_kind: ctx.kind,
+        target_key: ctx.key,
+        fields: fields,
+      }),
+    });
+    const d = await resp.json();
+    if (!resp.ok || d.error) {
+      alert(d.error || `HTTP ${resp.status}`);
+      return;
+    }
+    // ローカル _compSummaryData を更新 → 再描画
+    if (_compSummaryData && _compSummaryData.responses && d.doc) {
+      _compSummaryData.responses[ctx.citId] = d.doc;
+      renderCompSummaryTable();
+    }
+    closeCompEdit();
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存';
+  }
 }
 
 async function loadComparisonSummary() {

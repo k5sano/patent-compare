@@ -589,6 +589,75 @@ def get_response(case_id, citation_id):
     return _decorate_comparison_with_notation(data), 200
 
 
+def update_comparison_cell(case_id, citation_id, target_kind, target_key, fields):
+    """対比表セルを手動修正する。
+
+    Args:
+        case_id: 案件 ID
+        citation_id: 引例 ID (responses/<citation_id>.json)
+        target_kind: "comparison" (構成要件) or "sub_claim" (従属請求項)
+        target_key: comparison なら requirement_id (例 "1A"), sub_claim なら claim_number (int)
+        fields: 更新する辞書 {judgment, judgment_reason, cited_location, cited_text}
+                指定されたキーのみ更新 (None / 未指定はスキップ)
+
+    Returns:
+        ({success, updated, edited_at, doc}, status)
+    """
+    case_dir = get_case_dir(case_id)
+    resp_path = case_dir / "responses" / f"{citation_id}.json"
+    if not resp_path.exists():
+        return {"error": f"回答データがありません: {citation_id}"}, 404
+    try:
+        with open(resp_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return {"error": f"読み込み失敗: {e}"}, 500
+
+    target = None
+    if target_kind == "comparison":
+        for c in data.get("comparisons") or []:
+            if str(c.get("requirement_id")) == str(target_key):
+                target = c
+                break
+    elif target_kind == "sub_claim":
+        try:
+            tk = int(target_key)
+        except (TypeError, ValueError):
+            return {"error": f"sub_claim は claim_number(int) が必要: {target_key}"}, 400
+        for c in data.get("sub_claims") or []:
+            if int(c.get("claim_number") or -1) == tk:
+                target = c
+                break
+    else:
+        return {"error": f"target_kind は 'comparison' または 'sub_claim': {target_kind}"}, 400
+
+    if target is None:
+        return {"error": f"対象が見つかりません: {target_kind} {target_key}"}, 404
+
+    allowed = ("judgment", "judgment_reason", "cited_location", "cited_text")
+    updated = {}
+    for k in allowed:
+        if k in fields and fields[k] is not None:
+            target[k] = str(fields[k]) if not isinstance(fields[k], str) else fields[k]
+            updated[k] = target[k]
+
+    # 手動編集の証跡 (UI バッジ表示用)
+    from datetime import datetime as _dt
+    edited_at = _dt.now().strftime("%Y-%m-%dT%H:%M:%S")
+    target["_edited_at"] = edited_at
+    target["_edited_by"] = "user"
+
+    with open(resp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    return {
+        "success": True,
+        "updated": updated,
+        "edited_at": edited_at,
+        "doc": _decorate_comparison_with_notation(data),
+    }, 200
+
+
 def export_full_report(case_id, selected_citation_ids=None):
     """完成版対比表 (本願解析 / 対比表 / 進歩性判断 の 3 タブ統合) を生成。
 

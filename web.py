@@ -567,6 +567,26 @@ def get_response(case_id, citation_id):
     return _svc_response(get_response(case_id, citation_id))
 
 
+@app.route("/case/<case_id>/response/<citation_id>/edit-cell", methods=["POST"])
+def edit_comparison_cell(case_id, citation_id):
+    """対比表セルを手動修正 (LLM 判定の上書き)。
+
+    body: {
+        target_kind: "comparison" | "sub_claim",
+        target_key:  "1A" (req_id) or 7 (claim_number),
+        fields: {judgment, judgment_reason, cited_location, cited_text}
+    }
+    """
+    from services.comparison_service import update_comparison_cell
+    body = request.get_json(silent=True) or {}
+    return _svc_response(update_comparison_cell(
+        case_id, citation_id,
+        body.get("target_kind", "comparison"),
+        body.get("target_key", ""),
+        body.get("fields") or {},
+    ))
+
+
 @app.route("/case/<case_id>/citation/<citation_id>/paragraph/<para_id>", methods=["GET"])
 def get_citation_paragraph(case_id, citation_id, para_id):
     """対比結果で参照された段落 (例: 【0053】) の本文を返す。"""
