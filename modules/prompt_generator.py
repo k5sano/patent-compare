@@ -1149,10 +1149,21 @@ def _build_requirement_blocks_v2(segments, citations, seg_keywords):
                         para_id = t.get("paragraph_id", "?")
                         lines.append(f"- 表「{cap}」 段落{para_id}付近")
                 else:
+                    # キーワードヒットなしの場合、引例の請求項全文を提示して LLM が
+                    # 上位概念・同義語チェックで判定できるようにする
+                    # (例: 本願「シリコーン樹脂」が引例「トリメチルシロキシケイ酸 = MQ 樹脂」
+                    #  にヒットしないが、請求項を読めば包含関係が判定できる)
                     lines.append(
-                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし "
-                        "(上位概念・同義語チェックを試み、それでも無ければ ×)"
+                        f"\n**引例{i} ({cit_label})**: キーワードヒットなし。"
+                        "下記引例請求項全文を読み、上位概念・同義語・別名 (例: 商品名→一般名、"
+                        "INCI 名→慣用名) を考慮した上で判定すること。"
                     )
+                    if cit_claims:
+                        for cl in cit_claims[:3]:  # 上位 3 請求項
+                            lines.append(
+                                f"  - 請求項{cl.get('number','?')}: "
+                                f"{_truncate(cl.get('text',''), 400)}"
+                            )
 
     return "\n".join(lines)
 

@@ -505,6 +505,7 @@ def save_response_multi(case_id, raw_text):
             # 保存時に document_id も正規化して書き戻す (UI が citId 引き当てに使う)
             if isinstance(doc_result, dict):
                 doc_result["document_id"] = resolved
+            _normalize_cited_locations_inplace(doc_result)
             with open(resp_path, "w", encoding="utf-8") as f:
                 json.dump(doc_result, f, ensure_ascii=False, indent=2)
             saved_docs.append(resolved)
@@ -550,23 +551,56 @@ def save_response_single(case_id, citation_id, raw_text):
     }, 200
 
 
+def _normalize_cited_locations_inplace(data):
+    """LLM 応答の cited_location を正規化して in-place で上書き。
+
+    保存時に呼んでファイル上に正規化済み記法を残す (例: ``0023;0024`` →
+    ``23,24``、`T1;T2` → `T1,2`)。読み込み側 (_decorate_comparison_with_notation)
+    でも normalize するが、ファイル上を整えておくとコピペ用途で素直になる。
+    """
+    from modules.cited_ref_notation import normalize as _norm
+    if not isinstance(data, dict):
+        return data
+    for key in ("comparisons", "sub_claims"):
+        for item in (data.get(key) or []):
+            if isinstance(item, dict) and item.get("cited_location"):
+                try:
+                    item["cited_location"] = _norm(item["cited_location"])
+                except Exception:
+                    pass
+    return data
+
+
 def _decorate_comparison_with_notation(data):
-    """``cited_location`` 記法を展開した値を comparison/sub_claims に注入する。
+    """``cited_location`` 記法を正規化 + 展開して comparison/sub_claims に注入する。
 
     UI 側で記法を毎回パースせず済むよう、サーバで以下を補強:
+      - ``cited_location``: LLM 出力ゆれ (例: ``0023;0024`` `T1;T2`) を正規化
+        (``23,24`` `T1,2`)。raw 出力もこの値で上書きする。
       - ``cited_location_expanded``: 日本語展開済み (備考は含めない)
       - ``cited_location_comment``: コメント部分のみ ("..." 以降)
       - ``judgment_display``: ○ は "" に正規化済み (△/× はそのまま)
-    raw な ``cited_location`` / ``judgment`` は従来どおり残す (再編集の元)。
     """
-    from modules.cited_ref_notation import comment_of, display_judgment, expand
+    from modules.cited_ref_notation import (
+        comment_of, display_judgment, expand, normalize,
+    )
 
     def _decorate(comp):
         if not isinstance(comp, dict):
             return comp
         loc = comp.get("cited_location") or ""
-        comp["cited_location_expanded"] = expand(loc, with_comment=False) if loc else ""
-        comp["cited_location_comment"] = comment_of(loc) if loc else ""
+        if loc:
+            try:
+                normalized = normalize(loc)
+            except Exception:
+                normalized = loc
+            # 正規化結果が元と異なれば上書き (LLM 出力ゆれを補正)
+            comp["cited_location"] = normalized
+            comp["cited_location_expanded"] = expand(normalized, with_comment=False)
+            comp["cited_location_comment"] = comment_of(normalized)
+        else:
+            comp["cited_location_expanded"] = ""
+            comp["cited_location_comment"] = ""
         comp["judgment_display"] = display_judgment(comp.get("judgment", ""))
         return comp
 
@@ -1112,6 +1146,7 @@ def _compare_execute_per_citation_parallel(
             resolved = _resolve_doc_id(doc_id, known_cit_ids)
             if resolved != doc_id:
                 resolved_log.append(f"{doc_id} → {resolved}")
+            _normalize_cited_locations_inplace(doc_result)
             with open(responses_dir / f"{resolved}.json", "w", encoding="utf-8") as f:
                 json.dump(doc_result, f, ensure_ascii=False, indent=2)
             saved.append(resolved)
@@ -1286,6 +1321,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="legacy"):
             resolved = _resolve_doc_id(doc_id, known_cit_ids)
             if resolved != doc_id:
                 resolved_log.append(f"{doc_id} → {resolved}")
+            _normalize_cited_locations_inplace(doc_result)
             resp_path = responses_dir / f"{resolved}.json"
             with open(resp_path, "w", encoding="utf-8") as f:
                 json.dump(doc_result, f, ensure_ascii=False, indent=2)

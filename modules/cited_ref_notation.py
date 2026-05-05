@@ -463,6 +463,140 @@ def expand(text: str, *, with_comment: bool = False, with_memo: bool = False) ->
     return out
 
 
+# ============================================================
+# 正規化 (LLM 出力ゆれの修正用ポストプロセス)
+# ============================================================
+
+def _format_int_compact(xs):
+    """[20, 21, 22, 25] → '20-22,25' (3連続以上で範囲化、2連続は ,、単独は ,)。
+
+    例:
+      [20]            → '20'
+      [20, 21]        → '20,21'      (2連続は , のまま)
+      [20, 21, 22]    → '20-22'      (3連続以上で範囲化)
+      [21, 39, 41-45] → '21,39,41-45'
+    """
+    if not xs:
+        return ""
+    xs = sorted(set(xs))
+    runs = []
+    a = b = xs[0]
+    for x in xs[1:]:
+        if x == b + 1:
+            b = x
+        else:
+            runs.append((a, b))
+            a = b = x
+    runs.append((a, b))
+    parts = []
+    for s, e in runs:
+        if s == e:
+            parts.append(str(s))
+        elif e - s == 1:
+            parts.append(f"{s},{e}")  # 2連続は , 維持
+        else:
+            parts.append(f"{s}-{e}")  # 3連続以上で範囲化
+    return ",".join(parts)
+
+
+def _format_str_compact(xs):
+    """文字列リストを範囲化 (英字混じり対応、図番など)。"""
+    pure = []
+    mixed = []
+    for x in xs:
+        if x.isdigit():
+            pure.append(int(x))
+        else:
+            mixed.append(x)
+    parts = []
+    if pure:
+        parts.append(_format_int_compact(pure))
+    if mixed:
+        parts.extend(mixed)
+    return ",".join(parts) if parts else ""
+
+
+def normalize(text: str) -> str:
+    """LLM 出力の cited_location を正規化する。
+
+    変換例:
+      ``0023;0024``        → ``23,24``      (ゼロパディング除去 + 同種は , 連結)
+      ``T1;T2;T3``          → ``T1,2,3``     (同種接頭辞の重複排除)
+      ``CL1;CL2``           → ``CL1,2``
+      ``F1;F2;F1a``         → ``F1,2,1a``
+      ``20;F2;CL3;T4``     → ``20;F2;CL3;T4`` (異種は ; のまま)
+      ``20;/備考;//メモ``   → ``20;/備考;//メモ`` (コメント・メモは保持)
+
+    parse() を通して種類ごとに集約し再構築する。raw が同じ意味でも整った形に。
+    """
+    if not text or not text.strip():
+        return text or ""
+    p = parse(text)
+    if p.is_empty():
+        return text  # パース不能なら元のまま (壊さない)
+
+    # 入力順を保持しつつ種類ごとに集約
+    PREFIX_MAP = {
+        "para":    "",
+        "claim":   "CL",
+        "figure":  "F",
+        "table":   "T",
+        "chem":    "K",
+        "formula": "E",
+        "eq":      "S",
+    }
+
+    order = []  # 種類の出現順 (重複なし)
+    by_kind = {}  # kind -> [values...]
+    page_or_column = []  # raw を保持する種類は出現順に挿入
+    unknown_parts = []
+
+    for ref in p.refs:
+        if ref.kind == "page" or ref.kind == "column":
+            page_or_column.append((len(order), ref))
+            order.append(ref.kind + "__raw__")  # raw として個別に並べる
+        elif ref.kind == "unknown":
+            if ref.raw.strip():
+                unknown_parts.append((len(order), ref.raw.strip()))
+                order.append("unknown__raw__")
+        elif ref.kind in PREFIX_MAP:
+            if ref.kind not in order:
+                order.append(ref.kind)
+                by_kind[ref.kind] = []
+            by_kind[ref.kind].extend(ref.values or [])
+
+    # 出現順に文字列化
+    parts = []
+    raw_iter = iter(page_or_column)
+    unk_iter = iter(unknown_parts)
+    for kind in order:
+        if kind in PREFIX_MAP:
+            vals = by_kind.get(kind, [])
+            if not vals:
+                continue
+            prefix = PREFIX_MAP[kind]
+            if kind == "figure":
+                body = _format_str_compact([str(v) for v in vals])
+            else:
+                body = _format_int_compact(vals)
+            if body:
+                parts.append(f"{prefix}{body}")
+        elif kind.endswith("__raw__"):
+            if kind.startswith("page") or kind.startswith("column"):
+                _, ref = next(raw_iter)
+                parts.append(ref.raw.strip())
+            elif kind.startswith("unknown"):
+                _, raw = next(unk_iter)
+                parts.append(raw)
+
+    base = ";".join(s for s in parts if s)
+    if p.comment:
+        base = (base + ";" if base else "") + f"/{p.comment}"
+    if p.memo:
+        base = (base + ";" if base else "") + f"//{p.memo}"
+    return base or text
+
+
 def comment_of(text: str) -> str:
     """コメント部分のみ返す（Excel 備考列用）。"""
     return parse(text).comment
