@@ -50,6 +50,9 @@ def parse_args():
                    help="並列モードをスキップ (単一のみ実行)")
     p.add_argument("--skip-single", action="store_true",
                    help="単一モードをスキップ (並列のみ実行)")
+    p.add_argument("--compare-mode", choices=["legacy", "requirement_first", "both"],
+                   default="legacy",
+                   help="prompt 方式: legacy (既定) / requirement_first / both で両方計測")
     return p.parse_args()
 
 
@@ -88,9 +91,9 @@ def main():
 
     results = []
 
-    def run_one(label, parallel_workers):
+    def run_one(label, parallel_workers, mode):
         os.environ["COMPARE_PARALLEL"] = str(parallel_workers)
-        print(f"\n{'='*60}\n{label} (COMPARE_PARALLEL={parallel_workers})\n{'='*60}")
+        print(f"\n{'='*60}\n{label} (COMPARE_PARALLEL={parallel_workers}, mode={mode})\n{'='*60}")
         # 元の responses を復元してから実行
         if responses_dir.exists():
             shutil.rmtree(str(responses_dir))
@@ -99,7 +102,7 @@ def main():
 
         t0 = time.time()
         try:
-            result, code = compare_execute(args.case_id, cit_ids, model=args.model)
+            result, code = compare_execute(args.case_id, cit_ids, model=args.model, mode=mode)
         except Exception as e:
             elapsed = time.time() - t0
             print(f"  EXCEPTION after {elapsed:.1f}s: {e}")
@@ -107,6 +110,7 @@ def main():
         elapsed = time.time() - t0
         info = {
             "label": label,
+            "compare_mode": mode,
             "parallel_workers": parallel_workers,
             "elapsed_sec": round(elapsed, 1),
             "status_code": code,
@@ -125,12 +129,13 @@ def main():
         results.append(info)
         return info
 
-    if not args.skip_single:
-        run_one("Sonnet 単一プロセス (統合 prompt)", parallel_workers=0)
-
-    if not args.skip_parallel:
-        run_one(f"Sonnet 並列 ({args.workers} workers, citation 単位)",
-                parallel_workers=args.workers)
+    modes = ["legacy", "requirement_first"] if args.compare_mode == "both" else [args.compare_mode]
+    for mode in modes:
+        if not args.skip_single:
+            run_one(f"Sonnet 単一 / mode={mode}", parallel_workers=0, mode=mode)
+        if not args.skip_parallel:
+            run_one(f"Sonnet {args.workers}並列 / mode={mode}",
+                    parallel_workers=args.workers, mode=mode)
 
     # 結果保存
     out = bench_dir / "result.json"
