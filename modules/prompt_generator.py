@@ -77,7 +77,7 @@ def _build_cited_location_notation_rules():
 | 化学構造（化N） | `K` | `K2` |
 | 数式（式N） | `E` | `E3` |
 | 数（数N） | `S` | `S1` |
-| ページ | `P` | `P1A2-4` (1ページ左上欄2-4行) |
+| ページ/行 | `P` | `P1G2-4` (1ページ2-4行) / `P1A2-4` (1ページ左上欄2-4行) |
 | カラム/行 | `C` / `G` | `C4G12-15` (4カラム12-15行) |
 
 ### 区切り
@@ -95,6 +95,7 @@ def _build_cited_location_notation_rules():
 - 表4の段落15に記載: `T4;15`
 - **表1と表2に記載**: `T1,2`     ← `T1;T2` ❌ 同種は ; ではなく , で連結
 - **段落23と段落24に記載**: `23,24`  ← `0023;0024` ❌ ゼロパディング不要
+- **再表/WO等で段落番号がない箇所**: `P12G8-11` ← 12ページ8-11行。段組みが明確なら `P12A8-11` / `P12B8-11` 等
 - 段落20で記載されているが上位概念のみ: `20;/上位概念のみ`
 
 **判定が ○ または △ の時は `cited_location` 必須 (空文字禁止)**:
@@ -112,6 +113,7 @@ def _build_cited_location_notation_rules():
 **記法の禁止事項**:
 - 「段落【0020】」「請求項3」のような自然文表記は使わない（パーサが認識しない）
 - 「、」や「。」での連結は使わない（必ず `;` または `,`）
+- 再表・WO・翻訳文献などで段落番号が付与されていない場合、仮の段落番号を使わず、必ず `P<ページ>G<行>`（例: `P7G18-22`）でページ数と何行目かを明記する
 - **同種の要素を ; で繋がない**: `T1;T2;T3` ❌ → `T1,2,3` ✓
   / `CL1;CL2;CL3` ❌ → `CL1,2,3` ✓ / `F2;F5` ❌ → `F2,5` ✓
 - **段落番号にゼロパディングしない**: `0023;0024` ❌ → `23,24` ✓
@@ -899,8 +901,125 @@ def _truncate(text, n):
     return text if len(text) <= n else text[:n] + "…"
 
 
+def _normalize_for_keyword_match_with_map(text):
+    """Step 5 keyword matching with the same OCR tolerance as PKM highlight."""
+    try:
+        from services.search_run_service import _normalize_text_for_match
+        return _normalize_text_for_match(text or "")
+    except Exception:
+        raw = text or ""
+        return raw.lower(), list(range(len(raw)))
+
+
+def _normalize_for_keyword_match(text):
+    return _normalize_for_keyword_match_with_map(text)[0]
+
+
+def _any_keyword_matches(text, terms):
+    """Return True if any term appears in text after OCR/noise normalization."""
+    if not text or not terms:
+        return False
+    # Fast path for the common exact case.
+    raw = text or ""
+    for term in terms:
+        if term and term in raw:
+            return True
+
+    norm_text = _normalize_for_keyword_match(raw)
+    if not norm_text:
+        return False
+    for term in terms:
+        if not term:
+            continue
+        norm_term = _normalize_for_keyword_match(term)
+        if norm_term and norm_term in norm_text:
+            return True
+    return False
+
+
+def _first_keyword_match_span(text, terms):
+    """Return (start, end) in original text for the highest-priority term hit."""
+    if not text or not terms:
+        return None
+    norm_text, idx_map = _normalize_for_keyword_match_with_map(text)
+    if not norm_text or not idx_map:
+        return None
+
+    for term in terms:
+        if not term:
+            continue
+        norm_term = _normalize_for_keyword_match(term)
+        if not norm_term:
+            continue
+        pos = norm_text.find(norm_term)
+        if pos < 0:
+            continue
+        start = idx_map[pos]
+        end = idx_map[pos + len(norm_term) - 1] + 1
+        return start, end
+    return None
+
+
+def _excerpt_around_keyword(text, terms, n):
+    """Long paragraph excerpt centered on the first keyword hit."""
+    text = text or ""
+    if len(text) <= n:
+        return text
+    span = _first_keyword_match_span(text, terms)
+    if not span:
+        return _truncate(text, n)
+
+    start, end = span
+    context = max(0, (n - (end - start)) // 2)
+    left = max(0, start - context)
+    right = min(len(text), left + n)
+    if right - left < n:
+        left = max(0, right - n)
+
+    prefix = "…" if left > 0 else ""
+    suffix = "…" if right < len(text) else ""
+    return prefix + text[left:right] + suffix
+
+
+def _format_line_ref(page, line_start=None, line_end=None):
+    try:
+        page_i = int(page)
+    except (TypeError, ValueError):
+        return ""
+    if not line_start:
+        return f"P{page_i}"
+    try:
+        start_i = int(line_start)
+    except (TypeError, ValueError):
+        return f"P{page_i}"
+    try:
+        end_i = int(line_end) if line_end else start_i
+    except (TypeError, ValueError):
+        end_i = start_i
+    if end_i and end_i != start_i:
+        return f"P{page_i}G{start_i}-{end_i}"
+    return f"P{page_i}G{start_i}"
+
+
+def _paragraph_source_label(p):
+    """Prompt source label. Fake paragraph ids become page/line refs."""
+    pid = str(p.get("id", "") or "")
+    has_para = p.get("has_paragraph_number")
+    if has_para is False:
+        ref = _format_line_ref(p.get("page"), p.get("line_start"), p.get("line_end"))
+        return ref or "ページ不明"
+    if pid and not pid.startswith("_"):
+        return f"段落{pid}"
+    ref = _format_line_ref(p.get("page"), p.get("line_start"), p.get("line_end"))
+    if ref:
+        return ref
+    if pid.startswith("_"):
+        return "全文取得"
+    return f"段落{pid or '?'}"
+
+
 def _find_matching_paragraphs(units, terms, max_hits):
-    """段落リストからキーワードを含むものを返す (大文字小文字無視)。
+    """段落リストからキーワードを含むものを返す (OCR ゆれ吸収込み)。
 
     units: [{"id":..., "text":..., "section":..., "page":...}, ...]
     """
@@ -912,7 +1031,7 @@ def _find_matching_paragraphs(units, terms, max_hits):
     out = []
     for u in units:
         text = u.get("text", "") or ""
-        if any(t in text for t in norm_terms):
+        if _any_keyword_matches(text, norm_terms):
             out.append(u)
             if len(out) >= max_hits:
                 break
@@ -925,7 +1044,7 @@ def _find_matching_claims(claims, terms, max_hits=3):
     out = []
     for cl in claims:
         text = cl.get("text", "") or ""
-        if any(t in text for t in terms if t):
+        if _any_keyword_matches(text, terms):
             out.append(cl)
             if len(out) >= max_hits:
                 break
@@ -944,7 +1063,7 @@ def _find_matching_tables(tables, terms, max_hits=3):
             for r in rows:
                 flat.append("\t".join(str(x) for x in r) if isinstance(r, list) else str(r))
         flat_text = "\n".join(flat) + "\n" + (t.get("content") or "") + (t.get("caption") or "")
-        if any(term in flat_text for term in terms if term):
+        if _any_keyword_matches(flat_text, terms):
             out.append(t)
             if len(out) >= max_hits:
                 break
@@ -1023,8 +1142,8 @@ def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
                 lines.append("\n**本願参酌** (本願での定義・成分名・実施例の用法):")
                 for p in h_para_hits:
                     lines.append(
-                        f"- 段落{p.get('id','')}({p.get('section','')}): "
-                        f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                        f"- {_paragraph_source_label(p)}({p.get('section','')}): "
+                        f"{_excerpt_around_keyword(p.get('text',''), terms, _MAX_PARA_TEXT_CHARS)}"
                     )
                 for t in h_table_hits:
                     cap = t.get("caption") or t.get("title") or "(表)"
@@ -1052,8 +1171,8 @@ def _build_requirement_blocks(segments, citations, hongan, seg_keywords):
                         )
                     for p in para_hits:
                         lines.append(
-                            f"- 段落{p.get('id','')}({p.get('section','')}): "
-                            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                            f"- {_paragraph_source_label(p)}({p.get('section','')}): "
+                            f"{_excerpt_around_keyword(p.get('text',''), terms, _MAX_PARA_TEXT_CHARS)}"
                         )
                     for t in table_hits:
                         cap = t.get("caption") or t.get("title") or "(表)"
@@ -1096,7 +1215,7 @@ def _build_hongan_reference_section(hongan, seg_keywords):
         text = p.get("text", "") or ""
         if pid in matched_para_ids:
             continue
-        if any(t in text for t in all_terms):
+        if _any_keyword_matches(text, all_terms):
             matched.append(p)
             matched_para_ids.add(pid)
 
@@ -1111,8 +1230,8 @@ def _build_hongan_reference_section(hongan, seg_keywords):
     ]
     for p in matched:
         lines.append(
-            f"- 段落{p.get('id','')}({p.get('section','')}): "
-            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+            f"- {_paragraph_source_label(p)}({p.get('section','')}): "
+            f"{_excerpt_around_keyword(p.get('text',''), all_terms, _MAX_PARA_TEXT_CHARS)}"
         )
 
     # 表は全件 (構造的に重要)
@@ -1187,8 +1306,8 @@ def _build_requirement_blocks_v2(segments, citations, seg_keywords):
                         )
                     for p in para_hits:
                         lines.append(
-                            f"- 段落{p.get('id','')}({p.get('section','')}): "
-                            f"{_truncate(p.get('text',''), _MAX_PARA_TEXT_CHARS)}"
+                            f"- {_paragraph_source_label(p)}({p.get('section','')}): "
+                            f"{_excerpt_around_keyword(p.get('text',''), terms, _MAX_PARA_TEXT_CHARS)}"
                         )
                     for t in table_hits:
                         cap = t.get("caption") or t.get("title") or "(表)"

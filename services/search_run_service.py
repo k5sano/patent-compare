@@ -70,10 +70,49 @@ def _safe_pid(patent_id: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', s) or "_unknown"
 
 
+def _normalize_hit_text_patent_id(patent_id: str) -> str:
+    """hit_text lookup 用の公報番号正規化。
+
+    Step 4.5 の全文キャッシュは検索結果の表示名で保存されることがある
+    (例: 再表2007/108460 → 再表2007_108460.json)。Step 5 側の citation_id
+    は WO2007108460 のように別表記になり得るため、同一 WO 番号へ寄せる。
+    """
+    s = (patent_id or "").strip().upper()
+    if not s:
+        return ""
+
+    m = re.match(r"再(?:公)?表\s*(\d{4})\s*[-ー－/／_ ]\s*(\d+)", s)
+    if m:
+        return f"WO{m.group(1)}{m.group(2).zfill(6)}"
+
+    cleaned = re.sub(r"[\s\-/／_ー－]", "", s)
+    m = re.match(r"WO(\d{4})(\d+?)(?:A\d?)?$", cleaned)
+    if m:
+        return f"WO{m.group(1)}{m.group(2).zfill(6)}"
+
+    return re.sub(r"[^A-Z0-9]", "", cleaned)
+
+
 def get_hit_text(case_id: str, patent_id: str) -> Optional[dict]:
     p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
     if not p.exists():
-        return None
+        target_norm = _normalize_hit_text_patent_id(patent_id)
+        if not target_norm:
+            return None
+        for cand in _hit_text_dir(case_id).glob("*.json"):
+            cand_norm = _normalize_hit_text_patent_id(cand.stem)
+            if cand_norm == target_norm:
+                p = cand
+                break
+            try:
+                with open(cand, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            if _normalize_hit_text_patent_id(data.get("patent_id", "")) == target_norm:
+                return data
+        else:
+            return None
     try:
         with open(p, "r", encoding="utf-8") as f:
             return json.load(f)

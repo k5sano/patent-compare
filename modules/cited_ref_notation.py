@@ -139,6 +139,7 @@ def display_judgment(j: str) -> str:
 # 各トークンを判別する正規表現
 # 順序重要: 接頭辞が長いものから（CL > C）
 _TOK_CLAIM   = re.compile(r"^CL([0-9,\-]+)$", re.IGNORECASE)
+_TOK_PAGE_LINE = re.compile(r"^P([0-9]+)G([0-9]+)(?:-([0-9]+))?$", re.IGNORECASE)
 _TOK_PAGE    = re.compile(r"^P([0-9]+)([ABCDLR])?(?:([0-9]+)(?:-([0-9]+))?)?$", re.IGNORECASE)
 _TOK_COLUMN  = re.compile(r"^C([0-9]+)(?:G([0-9]+)(?:-([0-9]+))?)?$", re.IGNORECASE)
 _TOK_FIGURE  = re.compile(r"^F([0-9a-zA-Z,\-]+)$")          # F1, F1a, F5C, F1,6, F1-3
@@ -207,6 +208,11 @@ def _classify_token(tok: str) -> ParsedRef:
 
     if m := _TOK_CLAIM.match(tok):
         return ParsedRef(kind="claim", raw=raw, values=_expand_int_list(m.group(1)))
+    if m := _TOK_PAGE_LINE.match(tok):
+        page = int(m.group(1))
+        lf = int(m.group(2))
+        lt = int(m.group(3)) if m.group(3) else None
+        return ParsedRef(kind="page", raw=raw, page=page, quad=None, line_from=lf, line_to=lt)
     if m := _TOK_PAGE.match(tok):
         page = int(m.group(1))
         quad = m.group(2).upper() if m.group(2) else None

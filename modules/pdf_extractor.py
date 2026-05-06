@@ -614,6 +614,7 @@ def parse_paragraphs_jp(full_text, pages):
             "page": page_num,
             "section": current_section,
             "text": para_text.strip(),
+            "has_paragraph_number": True,
         })
 
     return paragraphs
@@ -667,6 +668,7 @@ def parse_paragraphs_en(full_text, pages, fmt="US"):
                 "page": page_num,
                 "section": current_section,
                 "text": para_text.strip(),
+                "has_paragraph_number": True,
             })
     else:
         # 段落番号なし: セクションヘッダーで分割し、空行で段落分割して連番を振る
@@ -696,10 +698,18 @@ def parse_paragraphs_en(full_text, pages, fmt="US"):
             # ページ特定
             pos = full_text.find(raw_para)
             page_num = 1
+            line_start = None
+            line_end = None
             if pos >= 0:
                 for po in page_offsets:
                     if po["start"] <= pos < po["end"]:
                         page_num = po["page"]
+                        page_text = pages[page_num - 1].get("text", "")
+                        local_start = max(0, pos - po["start"])
+                        local_end = max(local_start, min(len(page_text), pos + len(raw_para) - po["start"]))
+                        line_start, line_end = _line_span_for_page_text(
+                            page_text, local_start, local_end
+                        )
                         break
 
             if not _looks_like_table(text):
@@ -709,12 +719,24 @@ def parse_paragraphs_en(full_text, pages, fmt="US"):
             paragraphs.append({
                 "id": para_id,
                 "page": page_num,
+                "line_start": line_start,
+                "line_end": line_end,
+                "has_paragraph_number": False,
                 "section": current_section,
                 "text": text.strip(),
             })
             para_num += 1
 
     return paragraphs
+
+
+def _line_span_for_page_text(page_text, start, end):
+    """Return 1-based line span inside one page text for a character range."""
+    start = max(0, min(start, len(page_text or "")))
+    end = max(start, min(end, len(page_text or "")))
+    before_start = (page_text or "")[:start]
+    before_end = (page_text or "")[:end]
+    return before_start.count("\n") + 1, before_end.count("\n") + 1
 
 
 def _looks_like_table(text):

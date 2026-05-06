@@ -60,6 +60,23 @@ def test_new_run_id_format():
     assert len(rid) > 15
 
 
+def test_get_hit_text_resolves_saihyo_to_wo(case_dir):
+    hit_dir = case_dir / "search_runs" / "_hit_text"
+    hit_dir.mkdir(parents=True)
+    (hit_dir / "再表2007_108460.json").write_text(
+        json.dumps({
+            "patent_id": "再表2007/108460",
+            "description": "Ｎ－グアニルシステインを含む。",
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    hit = srs.get_hit_text("TEST-CASE", "WO2007108460")
+
+    assert hit is not None
+    assert "グアニルシステイン" in hit["description"]
+
+
 def test_create_and_load_run(case_dir):
     hits = [_make_hit("特開2023-123456"), _make_hit("特開2023-654321")]
     data = srs.create_run_from_hits(

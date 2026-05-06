@@ -114,6 +114,14 @@ class TestParsePage:
         r = parse("P5").refs[0]
         assert r.kind == "page" and r.page == 5
 
+    def test_page_line_without_quad(self):
+        r = parse("P12G8-11").refs[0]
+        assert r.kind == "page"
+        assert r.page == 12
+        assert r.quad is None
+        assert r.line_from == 8
+        assert r.line_to == 11
+
     @pytest.mark.parametrize("c,label_part", [
         ("A", "左上欄"),
         ("B", "右上欄"),
@@ -248,6 +256,9 @@ class TestExpand:
 
     def test_page_full(self):
         assert expand("P1A2-4") == "1ページ左上欄2〜4行"
+
+    def test_page_line_without_quad(self):
+        assert expand("P12G8-11") == "12ページ8〜11行"
 
     def test_column_line(self):
         assert expand("C4G12-15") == "4カラム12〜15行"
