@@ -2,10 +2,10 @@
 """
 本願 / 引用文献 PDF に埋め込まれた表画像から成分・配合量等の構造化データを抽出する。
 
-実装方式 = パス B: Claude Code CLI (`claude -p`) のサブプロセス呼び出し。
-- 課金は Claude Max サブスクリプション側で消費される (API キー従量課金は発生しない)
-- 1 表につき `claude --model sonnet -p ... --allowedTools Read --output-format json`
-  で 1 回呼び出し、画像を Read させて指定スキーマの JSON を返させる
+実装方式 = LLM CLI のサブプロセス呼び出し。
+- Claude モデルは Claude Code CLI (`claude -p`) で呼ぶ
+- Codex/GPT モデルは ChatGPT ログイン済みの Codex CLI (`codex exec`) で呼ぶ
+- GLM は画像入力対象外
 - Phase 0 検証時の実測: Sonnet 4.6 / 22 秒 / 約 $0.12 相当 (Max クォータ消費)
 
 抽出対象は「成分名 / 配合量」を含む実施例表が中心だが、汎用的に「表っぽい画像」
@@ -195,7 +195,7 @@ def find_table_references_in_text(pdf_path: Path) -> list[str]:
     return refs
 
 
-# ---------- claude -p 呼び出し ----------
+# ---------- LLM 呼び出し ----------
 
 # Phase 0 で実測: Sonnet が日本語化学名・全角数字に十分な精度。Haiku は誤読多発で不可。
 DEFAULT_MODEL = "sonnet"
@@ -260,6 +260,11 @@ def _parse_claude_result(raw_stdout: str) -> tuple[Optional[dict], dict]:
     except json.JSONDecodeError as e:
         return None, {"error": f"envelope parse error: {e}"}
 
+    # API 呼び出しでは Claude CLI の envelope ではなく、表JSON本体だけが
+    # 返ることがある。
+    if isinstance(envelope, dict) and "is_table" in envelope:
+        return envelope, {}
+
     meta = {
         "duration_ms": envelope.get("duration_ms"),
         "total_cost_usd": envelope.get("total_cost_usd"),
@@ -300,11 +305,11 @@ def extract_table_via_claude(image_path: Path, *, model: str = DEFAULT_MODEL,
                               timeout: int = 600,
                               caption_hint: Optional[str] = None,
                               effort: str = "low") -> ExtractedTable:
-    """1 枚の画像を `claude -p` に投げて表内容を JSON 抽出する。
+    """1 枚の画像を LLM に投げて表内容を JSON 抽出する。
 
     Args:
         image_path: 抽出対象画像 (PNG/JPG)。絶対パス推奨 (Read ツールが解決する)
-        model: --model に渡すエイリアス (sonnet/opus/haiku) または完全モデル名
+        model: モデルエイリアス (sonnet/codex-sonnet等) または完全モデル名
         timeout: subprocess の timeout (秒)
         caption_hint: PDF 本文から検出した画像近傍のキャプション (例: "【表１】")。
                       LLM のコンテキストとして与えると title 推定の精度・速度が上がる。
@@ -320,6 +325,53 @@ def extract_table_via_claude(image_path: Path, *, model: str = DEFAULT_MODEL,
     prompt = _EXTRACT_PROMPT_TEMPLATE.format(
         image_path=str(image_path), caption_hint=cap_block,
     )
+
+    from modules.claude_client import (
+        ClaudeClientError,
+        call_llm_with_image,
+        model_provider,
+    )
+    provider = model_provider(model)
+    if provider == "codex":
+        api_prompt = prompt.replace(
+            f"画像 `{image_path}` を Read ツールで読み取り",
+            "添付画像を読み取り",
+        )
+        t0 = time.monotonic()
+        try:
+            raw = call_llm_with_image(
+                api_prompt, image_path, timeout=timeout,
+                model=model, effort=effort,
+            )
+        except ClaudeClientError as e:
+            return ExtractedTable(
+                is_table=False, image_path=str(image_path),
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                model=model, error=str(e),
+            )
+        payload, meta = _parse_claude_result(raw)
+        elapsed_ms = meta.get("duration_ms") or int((time.monotonic() - t0) * 1000)
+        if payload is None:
+            return ExtractedTable(
+                is_table=False, image_path=str(image_path),
+                duration_ms=elapsed_ms, model=model,
+                error=meta.get("error") or "parse failure",
+            )
+        return ExtractedTable(
+            is_table=bool(payload.get("is_table")),
+            image_path=str(image_path),
+            title=payload.get("title"),
+            headers=list(payload.get("headers") or []),
+            rows=list(payload.get("rows") or []),
+            duration_ms=elapsed_ms,
+            cost_usd_equivalent=0.0,
+            model=model,
+        )
+    if provider != "claude":
+        return ExtractedTable(
+            is_table=False, image_path=str(image_path), model=model,
+            error=f"{model} は画像入力による表抽出に未対応です",
+        )
 
     cmd = [
         "claude", "-p", prompt,

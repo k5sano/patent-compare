@@ -811,12 +811,13 @@ def _call_ai_tech_analysis(prompt, field, model=None):
     Returns:
         AIResult: success=True の場合 data に tech_analysis dict を格納
     """
-    from modules.claude_client import resolve_model
+    from modules.claude_client import model_provider, resolve_model
     full_model = resolve_model(model) or "claude-opus-4-6"
+    provider = model_provider(model)
 
     # 方法1: Anthropic API (API key あり)
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if api_key:
+    if api_key and provider == "claude":
         try:
             import anthropic
             client = anthropic.Anthropic(api_key=api_key)
@@ -838,24 +839,24 @@ def _call_ai_tech_analysis(prompt, field, model=None):
         except Exception as e:
             logger.warning("tech_analysis API エラー: %s — CLI フォールバック", e)
 
-    # 方法2: Claude CLI (API keyなし or API失敗)
+    # 方法2: 共通 LLM クライアント (Claude CLI / Codex CLI / GLM)
     try:
-        from modules.claude_client import call_claude, is_claude_available, ClaudeClientError
-        if not is_claude_available():
-            logger.warning("Claude CLI 利用不可")
-            return AIResult(success=False, error="Claude CLI 利用不可")
-        logger.info("tech_analysis: Claude CLI (%s) で実行 (prompt=%d 文字)",
+        from modules.claude_client import call_claude, is_llm_available
+        if not is_llm_available(model):
+            logger.warning("LLM 利用不可: %s", model or "default")
+            return AIResult(success=False, error="LLM 利用不可")
+        logger.info("tech_analysis: LLM (%s) で実行 (prompt=%d 文字)",
                     model or "default", len(prompt))
         raw = call_claude(prompt, timeout=300, model=model)
         result = _extract_json_object(raw)
         if result:
-            logger.info("tech_analysis: CLI で取得 (%d 要素)",
+            logger.info("tech_analysis: LLM で取得 (%d 要素)",
                         len(result.get("elements", {})))
             return AIResult(success=True, data=result)
-        logger.warning("tech_analysis: CLI応答からJSONを抽出できませんでした")
-        return AIResult(success=False, error="CLI応答からJSONを抽出できませんでした")
+        logger.warning("tech_analysis: LLM応答からJSONを抽出できませんでした")
+        return AIResult(success=False, error="LLM応答からJSONを抽出できませんでした")
     except Exception as e:
-        logger.warning("tech_analysis CLI エラー: %s", e)
+        logger.warning("tech_analysis LLM エラー: %s", e)
         return AIResult(success=False, error=str(e))
 
 

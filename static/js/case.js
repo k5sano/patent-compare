@@ -14,15 +14,46 @@ const CASE_ID = window.CASE_BOOTSTRAP.case_id;
 // JS 側:
 //   - initModelPickers(): DOMContentLoaded 時に option を流し込み、
 //     localStorage に保存された前回値を復元
-//   - getPickerModel(key): 'opus' | 'sonnet' | 'haiku' を返す
+//   - getPickerModel(key): 選択されたモデルエイリアスを返す
 //
 const _MODEL_OPTIONS = [
-  { value: 'opus',   label: 'Opus 4.6 (高精度・低速)' },
-  { value: 'sonnet', label: 'Sonnet 4.6 (バランス)' },
-  { value: 'haiku',  label: 'Haiku 4.5 (高速・軽量)' },
+  { group: 'Claude', value: 'opus', label: 'Opus 4.6 (高精度)', scopes: ['text', 'search', 'vision'] },
+  { group: 'Claude', value: 'sonnet', label: 'Sonnet 4.6 (バランス)', scopes: ['text', 'search', 'vision'] },
+  { group: 'Claude', value: 'haiku', label: 'Haiku 4.5 (高速)', scopes: ['text', 'search'] },
+  { group: 'Codex (ChatGPT)', value: 'codex-opus', label: 'GPT-5.5 (高精度)', scopes: ['text', 'search', 'vision'] },
+  { group: 'Codex (ChatGPT)', value: 'codex-opus-pro', label: 'GPT-5.5 Pro (最厳密)', scopes: ['text'] },
+  { group: 'Codex (ChatGPT)', value: 'codex-sonnet', label: 'GPT-5.4 (バランス)', scopes: ['text', 'search', 'vision'] },
+  { group: 'Codex (ChatGPT)', value: 'codex-sonnet-fast', label: 'GPT-5.4 mini (高速)', scopes: ['text', 'search'] },
+  { group: 'GLM', value: 'glm-opus', label: 'GLM-5.1 (高精度・低コスト)', scopes: ['text'] },
+  { group: 'GLM', value: 'glm-sonnet', label: 'GLM-5-Turbo (バランス)', scopes: ['text'] },
+  { group: 'GLM', value: 'glm-fast', label: 'GLM-4.7 (高速・低コスト)', scopes: ['text'] },
+  { group: 'GLM', value: 'glm-haiku', label: 'GLM-4.5-Air (最軽量)', scopes: ['text'] },
 ];
 
 function _modelStorageKey(key) { return `pc-model:${key}`; }
+
+function _modelOptionsForScope(scope) {
+  scope = scope || 'text';
+  return _MODEL_OPTIONS.filter(o => (o.scopes || ['text']).includes(scope));
+}
+
+function _renderModelOptions(options, selected) {
+  const groups = [];
+  options.forEach(o => {
+    let g = groups.find(x => x.label === o.group);
+    if (!g) {
+      g = { label: o.group, options: [] };
+      groups.push(g);
+    }
+    g.options.push(o);
+  });
+  return groups.map(g => {
+    const inner = g.options.map(o =>
+      `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
+    ).join('');
+    return `<optgroup label="${g.label}">${inner}</optgroup>`;
+  }).join('');
+}
 
 function initModelPickers() {
   document.querySelectorAll('select.model-picker').forEach(sel => {
@@ -30,14 +61,16 @@ function initModelPickers() {
     sel.dataset._inited = '1';
     const key = sel.dataset.modelKey || '';
     const def = sel.dataset.modelDefault || 'sonnet';
+    const scope = sel.dataset.modelScope || 'text';
+    const options = _modelOptionsForScope(scope);
+    const optionValues = new Set(options.map(o => o.value));
     let saved = def;
     if (key) {
       try { saved = localStorage.getItem(_modelStorageKey(key)) || def; }
       catch (_) { /* noop */ }
     }
-    sel.innerHTML = _MODEL_OPTIONS.map(o =>
-      `<option value="${o.value}"${o.value === saved ? ' selected' : ''}>${o.label}</option>`
-    ).join('');
+    if (!optionValues.has(saved)) saved = optionValues.has(def) ? def : (options[0]?.value || '');
+    sel.innerHTML = _renderModelOptions(options, saved);
     sel.addEventListener('change', () => {
       if (!key) return;
       try { localStorage.setItem(_modelStorageKey(key), sel.value); }
@@ -46,7 +79,7 @@ function initModelPickers() {
   });
 }
 
-/** 同じ data-model-key を持つピッカーの選択値（'opus'/'sonnet'/'haiku'）を返す */
+/** 同じ data-model-key を持つピッカーの選択値を返す */
 function getPickerModel(key, fallback = 'sonnet') {
   const sel = document.querySelector(`select.model-picker[data-model-key="${key}"]`);
   if (!sel) return fallback;
@@ -1296,7 +1329,7 @@ async function saveSegmentsFromEditor(opts) {
         `この案件には既に ${n} 件の対比結果 (responses/*.json) があります。\n\n` +
         `分節を変更すると、対比結果に古い分節 ID が残り、Excel 出力で\n` +
         `「-」(判定なし) が並んだり、孤立した判定データが無視されたりします。\n\n` +
-        `保存後、その ${n} 件で自動的に再対比を実行します (Claude 5〜10 分)。\n` +
+        `保存後、その ${n} 件で自動的に再対比を実行します (LLM 5〜10 分)。\n` +
         `[OK] = 保存 + 自動再対比 を実行 / [キャンセル] = 何もしない\n\n` +
         `(本セッション中はこの確認を再表示しません)`
       );
@@ -1504,7 +1537,7 @@ async function bookmarkHongan() {
       const ok = confirm(
         `本願 PDF を開きました。\n\n` +
         `分節編集と既存対比結果の間に不整合があります (${targetIds.length} 件)。\n` +
-        `Claude で再対比を実行しますか? (5〜10 分)\n\n` +
+        `LLM で再対比を実行しますか? (5〜10 分)\n\n` +
         `[OK] = 再対比を実行 / [キャンセル] = あとで Step 5 から実行`
       );
       window._segmentsAutoRecompareAcked = ok;
@@ -3153,7 +3186,7 @@ async function executeCompareUnanswered() {
     `モデル: ${model}\n` +
     `方式: ${mode}\n` +
     `Effort: ${effort}\n\n` +
-    `Claude 5〜10 分かかります (件数・モデル・effort 次第)。続行しますか?\n` +
+    `LLM処理は5〜10分かかることがあります (件数・モデル・effort 次第)。続行しますか?\n` +
     `完了後、結果反映のためページを自動リロードします。`
   )) return;
 
@@ -3161,7 +3194,7 @@ async function executeCompareUnanswered() {
   const status = document.getElementById('exec-compare-status');
   if (overlay) overlay.classList.add('show');
   if (status) status.textContent =
-    `Claude CLI(${model}/${mode}/effort=${effort})で未対比 ${targetIds.length} 件を対比分析中...`;
+    `LLM(${model}/${mode}/effort=${effort})で未対比 ${targetIds.length} 件を対比分析中...`;
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
@@ -3309,7 +3342,7 @@ function copyPrompt() {
   const text = document.getElementById('prompt-text').textContent;
   if (!text) { alert('先にプロンプトを生成してください'); return; }
   navigator.clipboard.writeText(text).then(() => {
-    alert('クリップボードにコピーしました。Claudeチャットに貼り付けてください。');
+    alert('クリップボードにコピーしました。選択したLLMのチャットに貼り付けてください。');
   });
 }
 
@@ -4226,7 +4259,7 @@ function srAnnotateNeedStep5() {
   alert(
     '注釈PDFを作るには、当該文献について Step 5（対比）の「回答をパース」まで完了している必要があります。\n\n' +
     '手順: 上のステップから「5 対比」を開く → 対象文献にチェック → プロンプト生成 → ' +
-    'Claude 等で実行 → 回答を貼り付け →「回答をパース」。\n\n' +
+    'LLM 等で実行 → 回答を貼り付け →「回答をパース」。\n\n' +
     '完了後にこの画面を再読み込みすると、注釈PDFボタンが有効になります。'
   );
 }
@@ -4472,10 +4505,10 @@ async function annotateAll() {
 }
 
 // ================================================================
-// Claude CLI 直接実行
+// LLM 直接実行
 // ================================================================
 
-// ページロード時にClaude CLI利用可能かチェック → ボタン表示
+// ページロード時に利用可能なLLMがあるかチェック → ボタン表示
 (async function checkClaudeAvailability() {
   try {
     const resp = await fetch('/api/claude-status');
@@ -4484,7 +4517,7 @@ async function annotateAll() {
       document.querySelectorAll('.btn-execute').forEach(btn => {
         btn.style.display = 'inline-block';
       });
-      // Web検索APIの状態表示
+      // Web検索の状態表示
       const apiStatus = document.getElementById('search-api-status');
       if (apiStatus) {
         if (data.search_available) {
@@ -4497,7 +4530,7 @@ async function annotateAll() {
         }
       }
     }
-  } catch(e) { /* Claude未対応環境ではボタン非表示のまま */ }
+  } catch(e) { /* LLM未対応環境ではボタン非表示のまま */ }
 })();
 
 // --- Step 3: 先行技術検索 直接実行 ---
@@ -4560,7 +4593,7 @@ async function executeCompare() {
   try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
   try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
   document.getElementById('exec-compare-status').textContent =
-    `Claude CLI(${model}/${mode}/effort=${effort})で${citIds.length}件の文献を対比分析中...`;
+    `LLM(${model}/${mode}/effort=${effort})で${citIds.length}件の文献を対比分析中...`;
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
@@ -4594,7 +4627,7 @@ async function executeCompare() {
       </div>`;
     } else if (!data.errors || data.errors.length === 0) {
       result.innerHTML = `<div style="padding:1rem; background:#450a0a; border-radius:8px; color:#fca5a5;">
-        パース失敗: Claudeの応答からJSONを抽出できませんでした。
+        パース失敗: LLMの応答からJSONを抽出できませんでした。
       </div>`;
     }
   } catch(e) {
@@ -5095,7 +5128,7 @@ async function stageExecuteStream() {
     progress.appendChild(msgLog);
   }
   msgLog.innerHTML = '';
-  addExecMsg(msgLog, 'Claude CLI 起動中...');
+  addExecMsg(msgLog, 'LLM 起動中...');
 
   try {
     const model = getPickerModel('search-stage', 'sonnet');
@@ -6566,7 +6599,7 @@ async function srAiScore() {
   if (!_srCurrentRun) return;
   const pending = (_srCurrentRun.hits || []).filter(h => h.ai_score == null).length;
   const model = getPickerModel('sr-aiscore', 'sonnet');
-  if (!confirm(`Claude(${model})を呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
+  if (!confirm(`LLM(${model})を呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
   const loading = document.getElementById('loading-sr-aiscore');
   loading.classList.add('show');
   try {

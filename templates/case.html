@@ -218,10 +218,10 @@
           1 表あたり 20-30 秒、サブスク消費は 1 案件 $0.3 前後の目安。
         </p>
         <div class="btn-row" style="align-items:center;">
-          <button id="btn-extract-hongan-tables" class="btn btn-outline" onclick="extractHonganTables()" title="Claude Vision で本願 PDF の表画像を JSON 化します (Max サブスク消費)">
+          <button id="btn-extract-hongan-tables" class="btn btn-outline" onclick="extractHonganTables()" title="Vision モデルで本願 PDF の表画像を JSON 化します">
             &#128202; 本願 実施例表を抽出
           </button>
-          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet"
+          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet" data-model-scope="vision"
                   title="表抽出 (Vision) のモデル"
                   style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-outline" onclick="loadHonganTables()" title="既に抽出済みの本願表データを表示します">
@@ -399,7 +399,7 @@
               Stage 1 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage1" onclick="stageCopyPrompt(1)" style="display:none;">コピー</button>
             <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
-            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet" data-model-scope="search"
                     style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage1-execute" onclick="stageExecute(1)" style="display:none;"
                     {% if not segments %}disabled{% endif %}>&#9889; 直接実行</button>
@@ -415,7 +415,7 @@
           <!-- 回答貼り付け -->
           <div style="margin-top:0.8rem;">
             <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
-            <textarea id="stage1-response" rows="6" placeholder="Stage 1のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <textarea id="stage1-response" rows="6" placeholder="Stage 1のLLM回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
             <button class="btn btn-primary" onclick="stageParse(1)" style="margin-top:0.3rem;">パース</button>
             <div class="loading-msg" id="loading-stage1-parse"><div class="spinner"></div><span>パース中...</span></div>
           </div>
@@ -433,7 +433,7 @@
             <button class="btn btn-primary" onclick="stageGeneratePrompt(2)">Stage 2 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage2" onclick="stageCopyPrompt(2)" style="display:none;">コピー</button>
             <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
-            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet" data-model-scope="search"
                     style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage2-execute" onclick="stageExecute(2)" style="display:none;">&#9889; 直接実行</button>
             <span id="stage2-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
@@ -447,7 +447,7 @@
 
           <div style="margin-top:0.8rem;">
             <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
-            <textarea id="stage2-response" rows="6" placeholder="Stage 2のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <textarea id="stage2-response" rows="6" placeholder="Stage 2のLLM回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
             <button class="btn btn-primary" onclick="stageParse(2)" style="margin-top:0.3rem;">パース</button>
             <div class="loading-msg" id="loading-stage2-parse"><div class="spinner"></div><span>パース中...</span></div>
           </div>
@@ -464,7 +464,7 @@
             <button class="btn btn-primary" onclick="stageGeneratePrompt(3)">Stage 3 プロンプト生成</button>
             <button class="btn btn-success" id="btn-copy-stage3" onclick="stageCopyPrompt(3)" style="display:none;">コピー</button>
             <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
-            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet"
+            <select class="model-picker" data-model-key="search-stage" data-model-default="sonnet" data-model-scope="search"
                     style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
             <button class="btn btn-execute" id="btn-stage3-execute" onclick="stageExecute(3)" style="display:none;">&#9889; 直接実行</button>
             <span id="stage3-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
@@ -478,7 +478,7 @@
 
           <div style="margin-top:0.8rem;">
             <label style="font-size:0.85rem; font-weight:600;">回答を貼り付け:</label>
-            <textarea id="stage3-response" rows="6" placeholder="Stage 3のClaude回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
+            <textarea id="stage3-response" rows="6" placeholder="Stage 3のLLM回答を貼り付け..." style="margin-top:0.3rem;"></textarea>
             <button class="btn btn-primary" onclick="stageParse(3)" style="margin-top:0.3rem;">パース</button>
             <div class="loading-msg" id="loading-stage3-parse"><div class="spinner"></div><span>パース中...</span></div>
           </div>
@@ -487,11 +487,11 @@
         </div>
       </div>
 
-      <!-- Claude先行技術検索セクション（簡易版・フォールバック） -->
+      <!-- LLM先行技術検索セクション（簡易版・フォールバック） -->
       <div class="search-section">
         <h3>簡易検索（1ステッ��）</h3>
         <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.8rem;">
-          分節+キーワードから検索プロンプトを生成し、Claudeに先行技術候補を提案させます。
+          分節+キーワードから検索プロンプトを生成し、LLMに先行技術候補を提案させます。
         </p>
 
         <!-- プロンプト生成 -->
@@ -501,7 +501,7 @@
             検索プロンプト生成</button>
           <button class="btn btn-success" id="btn-copy-search" onclick="copySearchPrompt()" style="display:none;">コピー</button>
           <label style="font-size:0.78rem; color:var(--text2); margin-left:0.4rem;">モデル:</label>
-          <select class="model-picker" data-model-key="search-simple" data-model-default="sonnet"
+          <select class="model-picker" data-model-key="search-simple" data-model-default="sonnet" data-model-scope="search"
                   style="padding:0.25rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <button class="btn btn-execute" id="btn-search-execute" onclick="executeSearch()" style="display:none;"
                   {% if not segments or not keywords %}disabled{% endif %}>&#9889; 直接実行</button>
@@ -516,7 +516,7 @@
         <div class="execute-progress" id="exec-search-progress">
           <div style="display:flex; align-items:center; gap:0.5rem;">
             <div class="spinner"></div>
-            <span>Claude CLIで先行技術を検索中...</span>
+            <span>LLMで先行技術を検索中...</span>
           </div>
           <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">処理に数分かかることがあります。</div>
           <div class="ep-bar"><div class="ep-bar-fill"></div></div>
@@ -524,8 +524,8 @@
 
         <!-- 回答貼り付け -->
         <div id="search-response-section" style="margin-top:1rem;">
-          <label style="font-size:0.9rem; font-weight:600;">Claude回答を貼り付け:</label>
-          <textarea id="search-response-text" rows="8" placeholder="Claudeから返された先行技術候補のJSONをここに貼り付けてください..."
+          <label style="font-size:0.9rem; font-weight:600;">LLM回答を貼り付け:</label>
+          <textarea id="search-response-text" rows="8" placeholder="LLMから返された先行技術候補のJSONをここに貼り付けてください..."
                     style="margin-top:0.4rem;"></textarea>
           <div class="btn-row">
             <button class="btn btn-primary" onclick="parseSearchResponse()">候補をパース</button>
@@ -835,7 +835,7 @@
 
         <div class="btn-row" style="margin-top:0; margin-bottom:0.6rem; flex-wrap:wrap;">
           <button class="btn btn-outline" onclick="srEnrich()" title="Google Patents から要約/請求項1を取得">要約/請求項1 を取得</button>
-          <button class="btn btn-outline" onclick="srAiScore()" title="Claudeで本願との関連度スコアを付与">AI関連度スコア</button>
+          <button class="btn btn-outline" onclick="srAiScore()" title="LLMで本願との関連度スコアを付与">AI関連度スコア</button>
           <select class="model-picker" data-model-key="sr-aiscore" data-model-default="sonnet"
                   title="関連度スコアのモデル (Sonnet 推奨)"
                   style="padding:0.2rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
@@ -850,8 +850,8 @@
           <button class="btn btn-outline" onclick="srFetchAllHitsFullText({force:true})" title="既に取得済みのものも含めて、全ヒットの全文を再取得（番号正規化変更後の更新等）">🔄 全部再取得</button>
           <span id="sr-pkm-bulk-status" style="font-size:0.8rem; color:var(--text2);"></span>
           <button class="btn btn-success" onclick="srDownloadStarred()" title="☆マークの候補を一括DL&amp;引用登録">☆をまとめてDL&amp;引用登録</button>
-          <button class="btn btn-outline" onclick="srExtractTablesBulk()" title="チェックを入れた引用文献(DL済み)の図表をClaude Visionで一括抽出。サブスク消費 約$0.3/件">📊 選択した引例の表を抽出</button>
-          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet"
+          <button class="btn btn-outline" onclick="srExtractTablesBulk()" title="チェックを入れた引用文献(DL済み)の図表をVisionモデルで一括抽出">📊 選択した引例の表を抽出</button>
+          <select class="model-picker" data-model-key="table-extract" data-model-default="sonnet" data-model-scope="vision"
                   title="表抽出 (Vision) のモデル — Step 1 と連動"
                   style="padding:0.2rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <span style="flex:1"></span>
@@ -893,7 +893,7 @@
       <div style="margin-top:1.4rem; padding-top:1rem; border-top:1px dashed var(--border);">
         <h3 style="margin:0 0 0.5rem 0; font-size:1rem; color:#cbd5e1;">💬 検索 chat (壁打ち)</h3>
         <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">
-          検索式の方針・キーワード設計・ノイズ除去を Claude と対話で詰めます。
+          検索式の方針・キーワード設計・ノイズ除去を LLM と対話で詰めます。
           スレッドは <code>cases/{{ case_id }}/analysis/chat/</code> に保存。
         </p>
         {% with chat_topic="search", chat_panel_id="search" %}
@@ -965,7 +965,7 @@
           <button class="btn btn-success" onclick="copyPrompt()">クリップボードにコピー</button>
           <label style="font-size:0.8rem; color:var(--text2); margin-left:0.5rem;">モデル:</label>
           <select class="model-picker" data-model-key="compare-step5" data-model-default="opus"
-                  title="直接実行/一括実行で使う Claude モデル（Opus=厳密判定 / Sonnet=2-3倍速・コスト1/5）"
+                  title="直接実行/一括実行で使う LLM モデル"
                   style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
           <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">方式:</label>
           <select id="compare-mode-picker"
@@ -976,7 +976,7 @@
           </select>
           <label style="font-size:0.8rem; color:var(--text2); margin-left:0.4rem;">Effort:</label>
           <select id="compare-effort-picker"
-                  title="Claude の thinking レベル。high=既定、xhigh/max=より深く考えるが時間とリミット消費が増える"
+                  title="LLM の reasoning/thinking レベル。high=既定、xhigh/max=より深く考えるが時間と消費が増える"
                   style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;">
             <option value="low">low</option>
             <option value="medium">medium</option>
@@ -991,18 +991,18 @@
         <div class="execute-progress" id="exec-compare-progress">
           <div style="display:flex; align-items:center; gap:0.5rem;">
             <div class="spinner"></div>
-            <span id="exec-compare-status">Claude CLIで対比分析中...</span>
+            <span id="exec-compare-status">LLMで対比分析中...</span>
           </div>
           <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">文献数によっては10分程度かかることがあります。</div>
           <div class="ep-bar"><div class="ep-bar-fill"></div></div>
         </div>
 
         <!-- 回答入力 -->
-        <h3 style="font-size:1rem; margin: 1.5rem 0 0.5rem;">Claude回答を貼り付け</h3>
+        <h3 style="font-size:1rem; margin: 1.5rem 0 0.5rem;">LLM回答を貼り付け</h3>
         <p style="font-size:0.85rem; color:var(--text2); margin-bottom:0.5rem;">
-          複数文献を選択した場合、Claudeは全文献分の結果をまとめて返します。自動で文献ごとに分割保存されます。
+          複数文献を選択した場合、LLMは全文献分の結果をまとめて返します。自動で文献ごとに分割保存されます。
         </p>
-        <textarea id="response-text" rows="12" placeholder="Claudeの回答をここに貼り付けてください..."></textarea>
+        <textarea id="response-text" rows="12" placeholder="LLMの回答をここに貼り付けてください..."></textarea>
         <div class="btn-row">
           <button class="btn btn-primary" onclick="parseResponse()">回答をパース</button>
         </div>
@@ -1098,7 +1098,7 @@
     <div class="card" style="margin-top:1rem;">
       <h2>進歩性判断（JPO審査基準ベース）</h2>
       <p style="color:var(--text2); font-size:0.85rem; margin-bottom:1rem;">
-        対比結果に基づき、JPO進歩性審査基準（第III部 第2章 第2節）に従った進歩性の論理付けをClaudeに分析させます。
+        対比結果に基づき、JPO進歩性審査基準（第III部 第2章 第2節）に従った進歩性の論理付けをLLMに分析させます。
       </p>
 
       <!-- プロンプト生成 -->
@@ -1107,7 +1107,7 @@
         <button class="btn btn-success" id="btn-copy-inv" onclick="copyInventiveStepPrompt()" style="display:none;">コピー</button>
         <label style="font-size:0.8rem; color:var(--text2); margin-left:0.5rem;">モデル:</label>
         <select class="model-picker" data-model-key="inventive-step" data-model-default="opus"
-                title="進歩性判断は厳密性が必要なため Opus 推奨"
+                title="進歩性判断は厳密性が必要なため高精度モデル推奨"
                 style="padding:0.3rem 0.4rem; font-size:0.8rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
         <button class="btn btn-execute" onclick="executeInventiveStep()" style="display:none;">&#9889; 直接実行</button>
         <span id="inv-prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
@@ -1120,7 +1120,7 @@
       <div class="execute-progress" id="exec-inv-progress">
         <div style="display:flex; align-items:center; gap:0.5rem;">
           <div class="spinner"></div>
-          <span>Claude CLIで進歩性判断中...</span>
+          <span>LLMで進歩性判断中...</span>
         </div>
         <div style="font-size:0.8rem; color:var(--text2); margin-top:0.3rem;">処理に数分かかることがあります。</div>
         <div class="ep-bar"><div class="ep-bar-fill"></div></div>
@@ -1128,8 +1128,8 @@
 
       <!-- 回答入力 -->
       <div style="margin-top:1rem;">
-        <label style="font-size:0.9rem; font-weight:600;">Claude回答を貼り付け:</label>
-        <textarea id="inv-response-text" rows="10" placeholder="Claudeの進歩性判断の回答をここに貼り付けてください..."
+        <label style="font-size:0.9rem; font-weight:600;">LLM回答を貼り付け:</label>
+        <textarea id="inv-response-text" rows="10" placeholder="LLMの進歩性判断の回答をここに貼り付けてください..."
                   style="margin-top:0.4rem;"></textarea>
         <div class="btn-row">
           <button class="btn btn-primary" onclick="parseInventiveStepResponse()">回答をパース</button>

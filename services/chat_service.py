@@ -482,7 +482,7 @@ def _build_chat_prompt(case_id: str, topic: str, history: list[dict],
 # ============================================================
 
 def append_message_and_reply(case_id: str, thread_id: str, user_msg: str,
-                             claude_timeout: int = 900):
+                             claude_timeout: int = 900, model: str | None = None):
     """ユーザーメッセージを追記し、LLM 応答を生成して同じスレッドに追記する。
 
     タイムアウト 15 分 (900 秒): chat は Read/Grep ツールで案件全データ
@@ -516,7 +516,7 @@ def append_message_and_reply(case_id: str, thread_id: str, user_msg: str,
     prompt = _build_chat_prompt(case_id, thread.get("topic", "free"),
                                 history_for_prompt, user_msg)
     try:
-        raw = call_claude(prompt, timeout=claude_timeout, model=_CLAUDE_MODEL)
+        raw = call_claude(prompt, timeout=claude_timeout, model=model or _CLAUDE_MODEL)
     except ClaudeClientError as e:
         # 失敗したらユーザーメッセージは追記済みでもエラー追記
         thread["messages"].append({

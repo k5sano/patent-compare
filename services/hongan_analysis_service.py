@@ -565,7 +565,8 @@ def load_existing_analysis(case_id: str):
 
 
 def run_analysis(case_id: str, version: str = "v0.1",
-                 skip_llm: bool = False, claude_timeout: int = 300):
+                 skip_llm: bool = False, claude_timeout: int = 300,
+                 model: str | None = None):
     """テンプレートを実行して分析結果を保存・返却する。
 
     skip_llm=True の場合は auto 項目だけ埋めて LLM はスキップ (テスト/プレビュー用)。
@@ -596,7 +597,11 @@ def run_analysis(case_id: str, version: str = "v0.1",
             llm_error = f"claude_client import 失敗: {e}"
         else:
             try:
-                raw = call_claude(prompt, timeout=claude_timeout, model=_CLAUDE_MODEL)
+                raw = call_claude(
+                    prompt,
+                    timeout=claude_timeout,
+                    model=model or _CLAUDE_MODEL,
+                )
                 llm_results = _extract_json_from_response(raw)
                 if not llm_results:
                     llm_error = "LLM 応答から JSON を抽出できませんでした"

@@ -977,11 +977,9 @@ def inventive_step_execute(case_id):
 
 @app.route("/api/claude-status")
 def claude_status():
-    from modules.claude_client import is_claude_available, _load_serpapi_key
-    return jsonify({
-        "available": is_claude_available(),
-        "search_available": bool(_load_serpapi_key()),
-    })
+    from modules.claude_client import llm_status
+    status = llm_status()
+    return jsonify(status)
 
 
 @app.route("/api/serpapi-key", methods=["POST"])
@@ -1827,7 +1825,9 @@ def chat_post_message(case_id, thread_id):
     data = request.get_json() or {}
     try:
         return _svc_response(
-            append_message_and_reply(case_id, thread_id, data.get("content", ""))
+            append_message_and_reply(
+                case_id, thread_id, data.get("content", ""), model=data.get("model"),
+            )
         )
     except Exception as e:
         app.logger.exception("chat_post_message failed")
@@ -1862,7 +1862,9 @@ def hongan_analysis_run(case_id):
     data = request.get_json() or {}
     version = data.get("version") or "v0.1"
     skip_llm = bool(data.get("skip_llm"))
-    return _svc_response(run_analysis(case_id, version=version, skip_llm=skip_llm))
+    return _svc_response(run_analysis(
+        case_id, version=version, skip_llm=skip_llm, model=data.get("model"),
+    ))
 
 
 @app.route("/case/<case_id>/hongan-analysis/item", methods=["POST"])

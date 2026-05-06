@@ -174,17 +174,23 @@ async function hanRunAnalysis(skipLlm) {
   const caseId = _hanCaseId();
   if (!caseId) return;
   if (!skipLlm) {
+    const model = (typeof getPickerModel === 'function')
+      ? getPickerModel('hongan-analysis', 'opus')
+      : 'opus';
     if (!confirm(
-      '本願分析を実行します。Claude (5〜10 分) を呼んで LLM 項目を埋めます。\n' +
+      `本願分析を実行します。LLM(${model}) (5〜10 分) を呼んで LLM 項目を埋めます。\n` +
       '続行しますか?\n\n(auto 項目だけが欲しいなら ⚡ ボタン側を使ってください)'
     )) return;
   }
-  _hanStatus(skipLlm ? '⏳ auto 項目を解決中...' : '⏳ Claude 実行中... (5〜10 分かかります)');
+  const model = (typeof getPickerModel === 'function')
+    ? getPickerModel('hongan-analysis', 'opus')
+    : 'opus';
+  _hanStatus(skipLlm ? '⏳ auto 項目を解決中...' : `⏳ LLM(${model}) 実行中... (5〜10 分かかります)`);
   try {
     const resp = await fetch(`/case/${caseId}/hongan-analysis/run`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({version: 'v0.1', skip_llm: !!skipLlm}),
+      body: JSON.stringify({version: 'v0.1', skip_llm: !!skipLlm, model}),
     });
     const d = await resp.json();
     if (!resp.ok || d.error) {

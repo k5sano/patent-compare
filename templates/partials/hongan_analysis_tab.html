@@ -6,15 +6,18 @@
 
   <p style="color:var(--text2); font-size:0.85rem; margin-bottom:0.8rem;">
     本願明細書をテンプレート (発明の本質 / 技術ストーリー / 請求項解析 / 検索設計 / 論点予測)
-    に沿って構造化します。auto 項目は既存データ、llm 項目は Claude (5〜10 分) が埋めます。
+    に沿って構造化します。auto 項目は既存データ、llm 項目は LLM (5〜10 分) が埋めます。
     結果は <code>cases/{{ case_id }}/analysis/hongan_analysis.json</code> に保存。
   </p>
 
   <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center; margin-bottom:0.8rem;">
     <button class="btn btn-primary" onclick="hanRunAnalysis(false)"
-            title="Claude を呼んで全項目を埋める (5〜10 分)">
+            title="LLM を呼んで全項目を埋める (5〜10 分)">
       🧠 本願分析を実行
     </button>
+    <select class="model-picker" data-model-key="hongan-analysis" data-model-default="opus"
+            title="本願分析に使う LLM モデル"
+            style="padding:0.3rem 0.4rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
     <button class="btn btn-outline" onclick="hanRunAnalysis(true)"
             title="LLM をスキップして auto 項目だけ埋める (即時)">
       ⚡ auto 項目だけ

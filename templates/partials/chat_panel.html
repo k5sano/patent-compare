@@ -31,6 +31,9 @@
     </div>
     <div id="chat-status-{{ chat_panel_id }}" style="font-size:0.78rem; color:var(--text2); min-height:1.2em; margin:0.3rem 0;"></div>
     <div style="display:flex; gap:0.4rem; align-items:flex-end;">
+      <select class="model-picker" data-model-key="chat-{{ chat_panel_id }}" data-model-default="sonnet"
+              title="このチャットで使う LLM モデル"
+              style="padding:0.4rem 0.45rem; font-size:0.78rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:6px; max-width:210px;"></select>
       <textarea id="chat-input-{{ chat_panel_id }}" rows="3"
                 placeholder="質問・相談を入力 (Ctrl+Enter で送信)"
                 style="flex:1; padding:0.4rem 0.6rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:6px; font-family:inherit; font-size:0.86rem; resize:vertical;"

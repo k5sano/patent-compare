@@ -249,13 +249,16 @@ async function chatSendMessage(panelId) {
   const sendBtn = document.getElementById('chat-send-' + panelId);
   sendBtn.disabled = true;
   ta.disabled = true;
-  _chatStatus(panelId, '⏳ LLM 応答待ち... (5〜30 秒)');
+  const model = (typeof getPickerModel === 'function')
+    ? getPickerModel('chat-' + panelId, 'sonnet')
+    : 'sonnet';
+  _chatStatus(panelId, `⏳ LLM(${model}) 応答待ち... (5〜30 秒)`);
   try {
     const caseId = _chatCaseId(panelId);
     const resp = await fetch(`/case/${caseId}/chat/threads/${encodeURIComponent(st.threadId)}/message`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({content}),
+      body: JSON.stringify({content, model}),
     });
     const d = await resp.json();
     if (d.thread) _chatRenderMessages(panelId, d.thread.messages || []);

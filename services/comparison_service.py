@@ -1363,7 +1363,12 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
     except ValueError:
         parallel_workers = 0
     model_l = (model or "").lower()
-    is_lightweight = ("sonnet" in model_l) or ("haiku" in model_l)
+    is_lightweight = (
+        ("sonnet" in model_l)
+        or ("haiku" in model_l)
+        or ("mini" in model_l)
+        or ("glm" in model_l)
+    )
     if parallel_workers >= 2 and is_lightweight and len(citations) >= 2:
         known_cit_ids = [c.get("id") for c in (meta or {}).get("citations", []) if c.get("id")]
         return _compare_execute_per_citation_parallel(
