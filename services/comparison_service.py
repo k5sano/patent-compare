@@ -38,6 +38,85 @@ def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citatio
         raise
 
 
+def _enrich_citation_with_hit_text(case_id, cit_id, citation):
+    """citation を search_runs/_hit_text/<id>.json で補完して返す。
+
+    Step 4.5 で「全文取得」した結果は search_runs/_hit_text に保存されるが、
+    citations/<id>.json には反映されないため、Step 5 のプロンプトには行きづらい。
+    本 helper で citation に hit_text の description/claims を取り込み、
+    キーワード (グアニルシステイン 等) が citation 本文に明記されているのに
+    対比結果で「未含有」と判定される silent miss を防ぐ。
+
+    マージ規則:
+      - paragraphs: 既存に含まれていない場合のみ末尾に「全文取得 (Step 4.5)」段落
+        として追加 (重複検出は冒頭 200 文字の含有チェック)
+      - claims: 既存が空のときのみ補完
+      - その他フィールド (patent_number, role, label) はそのまま維持
+    """
+    if not citation:
+        return citation
+    try:
+        from services.search_run_service import get_hit_text
+    except ImportError:
+        return citation
+    hit = get_hit_text(case_id, cit_id)
+    if not hit:
+        return citation
+
+    enriched = dict(citation)
+
+    # description を 1 段落として補完
+    desc = (hit.get("description") or "").strip()
+    if desc:
+        existing_paras = list(enriched.get("paragraphs") or [])
+        existing_text = " ".join(
+            (p.get("text") or "") for p in existing_paras
+        )
+        # 既存に description の冒頭 200 字が含まれていれば重複とみなす
+        head = desc[:200]
+        if not head or head not in existing_text:
+            existing_paras.append({
+                "id": "_hittext",
+                "page": 0,
+                "section": "全文取得 (Step 4.5)",
+                "text": desc,
+            })
+            enriched["paragraphs"] = existing_paras
+
+    # claims が citation 側で空のときのみ hit_text のもので補完
+    if not (enriched.get("claims") or []):
+        hit_claims = hit.get("claims") or []
+        if hit_claims:
+            normalized: list = []
+            for i, c in enumerate(hit_claims, start=1):
+                if isinstance(c, dict):
+                    normalized.append({
+                        "number": c.get("number") or i,
+                        "text": c.get("text") or "",
+                    })
+                else:
+                    normalized.append({"number": i, "text": str(c)})
+            enriched["claims"] = normalized
+
+    return enriched
+
+
+def _load_citation_for_prompt(case_id, cit_id, case_dir):
+    """citation を JSON から読み、hit_text で補完したオブジェクトを返す。
+
+    通常 citations/<id>.json を読むだけだが、Step 4.5 の全文取得結果
+    (search_runs/_hit_text/<id>.json) があれば本文を補完する。
+    存在しない場合は (None, error_msg) を返す。
+    """
+    cit_path = case_dir / "citations" / f"{cit_id}.json"
+    if not cit_path.exists():
+        return None, f"引用文献 '{cit_id}' が見つかりません"
+    with open(cit_path, "r", encoding="utf-8") as f:
+        citation = json.load(f)
+    citation = _enrich_citation_with_hit_text(case_id, cit_id, citation)
+    return citation, None
+
+
 def _annotate_worker(job):
     """プロセスプールのワーカー。ピックル可能にするためモジュールトップレベルに置く。
 
@@ -75,11 +154,9 @@ def generate_prompt_multi(case_id, citation_ids):
     citations = []
     empty_ids = []
     for cit_id in citation_ids:
-        cit_path = case_dir / "citations" / f"{cit_id}.json"
-        if not cit_path.exists():
-            return {"error": f"引用文献 '{cit_id}' が見つかりません"}, 404
-        with open(cit_path, "r", encoding="utf-8") as f:
-            cit = json.load(f)
+        cit, err = _load_citation_for_prompt(case_id, cit_id, case_dir)
+        if err:
+            return {"error": err}, 404
         if _is_empty_citation(cit):
             empty_ids.append((cit_id, cit))
         citations.append(cit)
@@ -124,17 +201,15 @@ def generate_prompt_single(case_id, citation_id):
 
     case_dir = get_case_dir(case_id)
     segments_path = case_dir / "segments.json"
-    citation_path = case_dir / "citations" / f"{citation_id}.json"
 
     if not segments_path.exists():
         return {"error": "分節データがありません"}, 400
-    if not citation_path.exists():
-        return {"error": f"引用文献 '{citation_id}' が見つかりません"}, 404
 
     with open(segments_path, "r", encoding="utf-8") as f:
         segs = json.load(f)
-    with open(citation_path, "r", encoding="utf-8") as f:
-        citation = json.load(f)
+    citation, err = _load_citation_for_prompt(case_id, citation_id, case_dir)
+    if err:
+        return {"error": err}, 404
 
     if _is_empty_citation(citation):
         return {
@@ -1240,11 +1315,9 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
     citations = []
     empty_ids = []
     for cit_id in citation_ids:
-        cit_path = case_dir / "citations" / f"{cit_id}.json"
-        if not cit_path.exists():
-            return {"error": f"引用文献 '{cit_id}' が見つかりません"}, 404
-        with open(cit_path, "r", encoding="utf-8") as f:
-            cit = json.load(f)
+        cit, err = _load_citation_for_prompt(case_id, cit_id, case_dir)
+        if err:
+            return {"error": err}, 404
         if _is_empty_citation(cit):
             empty_ids.append((cit_id, cit))
         citations.append(cit)

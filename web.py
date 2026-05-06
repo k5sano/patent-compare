@@ -1574,6 +1574,23 @@ def hit_full_text_view(case_id, patent_id):
     )
 
 
+@app.route("/case/<case_id>/search-run/hits/cached-full-texts", methods=["POST"])
+def list_cached_hit_full_texts(case_id):
+    """指定 patent_id 群 (省略時は全件) のキャッシュ済 full text を一括返却。
+
+    Step 4.5 の候補一覧描画時に呼び出して、`window._pkmFullTexts` をページロード時
+    から復元するためのエンドポイント。これでサーバ側ファイルキャッシュに保存
+    された全文取得結果が、ページ再読込後の候補カウント表示に反映される。
+    """
+    from services.search_run_service import list_cached_hit_texts
+    body = request.get_json(silent=True) or {}
+    pids = body.get("patent_ids")
+    if pids is not None and not isinstance(pids, list):
+        return jsonify({"error": "patent_ids は配列で指定してください"}), 400
+    texts = list_cached_hit_texts(case_id, pids)
+    return jsonify({"texts": texts, "count": len(texts)})
+
+
 @app.route("/case/<case_id>/search-run/hit/<path:patent_id>/fetch-text", methods=["POST"])
 def fetch_hit_full_text(case_id, patent_id):
     """ヒット全文を取得してキャッシュ。source='auto' / 'google' / 'jplatpat'。"""

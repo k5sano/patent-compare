@@ -5759,9 +5759,31 @@ async function srOpenRun(runId) {
     if (typeof srLoadTableExtractStatus === 'function') {
       await srLoadTableExtractStatus();
     }
+    // サーバ側にキャッシュ済の全文 (search_runs/_hit_text/) を bulk 取得して
+    // window._pkmFullTexts を hydrate。これでページリロード後もキーワード
+    // 出現数カウントが 0 にリセットされない。
+    await _srHydrateFullTextCache();
     renderSrHits();
     document.getElementById('sr-hits-panel').scrollIntoView({behavior: 'smooth', block: 'start'});
   } catch (e) { alert('エラー: ' + e.message); }
+}
+
+async function _srHydrateFullTextCache() {
+  if (!_srCurrentRun) return;
+  const hits = _srCurrentRun.hits || [];
+  const pids = hits.map(h => h.patent_id).filter(Boolean);
+  if (!pids.length) return;
+  try {
+    const r = await fetch(`/case/${CASE_ID}/search-run/hits/cached-full-texts`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patent_ids: pids}),
+    });
+    if (!r.ok) return;
+    const data = await r.json();
+    window._pkmFullTexts = window._pkmFullTexts || {};
+    Object.assign(window._pkmFullTexts, data.texts || {});
+  } catch (_) { /* ignore: 失敗してもカウント 0 のまま動作する (退化的) */ }
 }
 
 async function srRenderDiffSummary() {
@@ -6389,23 +6411,94 @@ function _pkmEsc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// OCR ゆれ吸収用の正規化マップ (Python 側 search_run_service._KATAKANA_* と完全に一致させる)
+const _PKM_KATAKANA_SMALL_TO_BIG = {
+  'ァ':'ア','ィ':'イ','ゥ':'ウ','ェ':'エ','ォ':'オ',
+  'ャ':'ヤ','ュ':'ユ','ョ':'ヨ','ヮ':'ワ',
+};
+const _PKM_KATAKANA_DIGRAPH_MAP = {
+  'ティ':'テイ','ディ':'デイ',
+  'ファ':'フア','フィ':'フイ','フェ':'フエ','フォ':'フオ',
+  'ウィ':'ウイ','ウェ':'ウエ','ウォ':'ウオ',
+  'シェ':'シエ','ジェ':'ジエ','チェ':'チエ',
+  'ヴァ':'ヴア','ヴィ':'ヴイ','ヴェ':'ヴエ','ヴォ':'ヴオ',
+};
+// 全角英数 → 半角 + 全角/特殊ハイフン → 半角ハイフン (Python 側と完全に一致させる)
+const _PKM_FULLWIDTH_TO_HALF = (() => {
+  const m = {};
+  for (let i = 0; i < 10; i++) m[String.fromCharCode(0xFF10 + i)] = String(i);
+  for (let i = 0; i < 26; i++) {
+    m[String.fromCharCode(0xFF21 + i)] = String.fromCharCode(0x41 + i);
+    m[String.fromCharCode(0xFF41 + i)] = String.fromCharCode(0x61 + i);
+  }
+  m['－'] = '-';  // FULLWIDTH HYPHEN-MINUS
+  m['−'] = '-';  // MINUS SIGN
+  m['‐'] = '-';  // HYPHEN
+  m['—'] = '-';  // EM DASH
+  m['–'] = '-';  // EN DASH
+  // ー (U+30FC) は意味ある音符記号なので残す
+  return m;
+})();
+function _pkmFwToHalf(s) {
+  return s.replace(/[０-９Ａ-Ｚａ-ｚ－−‐—–]/g,
+                    ch => _PKM_FULLWIDTH_TO_HALF[ch] || ch);
+}
+
+// 原文を正規化したテキストと、原文への位置マップを返す。
+// idxMap[i] は normalized[i] の元位置 (空白除去済の原文上のインデックス)。
+function _pkmNormalizeForMatch(text) {
+  if (!text) return { norm: '', idxMap: [] };
+  const src = _pkmFwToHalf(String(text));
+  const out = [];
+  const idx = [];
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    if (i + 1 < n) {
+      const two = src[i] + src[i + 1];
+      const repl = _PKM_KATAKANA_DIGRAPH_MAP[two];
+      if (repl) {
+        for (let j = 0; j < repl.length; j++) {
+          out.push(repl[j].toLowerCase());
+          idx.push(i + Math.min(j, 1));
+        }
+        i += 2;
+        continue;
+      }
+    }
+    const ch = src[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    const mapped = _PKM_KATAKANA_SMALL_TO_BIG[ch] || ch;
+    out.push(mapped.toLowerCase());
+    idx.push(i);
+    i++;
+  }
+  return { norm: out.join(''), idxMap: idx };
+}
+
 function pkmHighlight(text, index) {
   const t = String(text || '');
   if (!t || !index || !index.length) return { html: _pkmEsc(t), counts: {} };
-  const tLower = t.toLowerCase();
+  const { norm: normText, idxMap } = _pkmNormalizeForMatch(t);
   const positions = [];
   for (const item of index) {
     const term = item.term;
-    const tlow = term.toLowerCase();
-    if (!tlow) continue;
+    if (!term) continue;
+    const normTerm = _pkmNormalizeForMatch(term).norm;
+    if (!normTerm) continue;
+    const L = normTerm.length;
     let pos = 0;
-    while ((pos = tLower.indexOf(tlow, pos)) >= 0) {
+    while ((pos = normText.indexOf(normTerm, pos)) >= 0) {
+      // 原文位置への逆引き (空白除去ぶん範囲が広がる場合あり)
+      const start = idxMap[pos];
+      const end = idxMap[pos + L - 1] + 1;
+      const length = end - start;
       const overlap = positions.some(p =>
-        !(pos + term.length <= p.start || pos >= p.start + p.length));
+        !(end <= p.start || start >= p.start + p.length));
       if (!overlap) {
-        positions.push({ start: pos, length: term.length, gid: item.gid, color: item.color });
+        positions.push({ start, length, gid: item.gid, color: item.color });
       }
-      pos += term.length;
+      pos += L;
     }
   }
   positions.sort((a, b) => a.start - b.start);

@@ -81,6 +81,36 @@ def get_hit_text(case_id: str, patent_id: str) -> Optional[dict]:
         return None
 
 
+def list_cached_hit_texts(case_id: str, patent_ids=None) -> dict:
+    """指定された patent_id 群 (または全件) のキャッシュ済 full text を一括返却。
+
+    UI のページロード時に `window._pkmFullTexts` を復元するための bulk API。
+    各クライアントが個別 GET するよりも server round-trip を 1 回に集約する。
+
+    Returns:
+        {patent_id: hit_text_data, ...} (キャッシュが無い patent_id はキー欠落)
+    """
+    out: dict = {}
+    if patent_ids is None:
+        # ディレクトリ全件
+        d = _hit_text_dir(case_id)
+        for p in d.glob("*.json"):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # 元の patent_id は data["patent_id"] か filename stem から復元
+                pid = data.get("patent_id") or p.stem
+                out[pid] = data
+            except (OSError, json.JSONDecodeError):
+                continue
+        return out
+    for pid in patent_ids:
+        data = get_hit_text(case_id, pid)
+        if data is not None:
+            out[pid] = data
+    return out
+
+
 def _default_text_source(patent_id: str) -> str:
     """patent_id から最適な取得元を決める。
 
@@ -128,33 +158,131 @@ def pkm_build_index(keywords_data) -> list:
     return items
 
 
+# ----------------------------------------------------------------
+# OCR ゆれ吸収用の正規化
+# ----------------------------------------------------------------
+# 化粧品/化学分野の用語は OCR で以下のような揺れが頻出する:
+#   - 小書きカタカナへの変化:   グアニル → グァニル (ア → ァ)
+#   - 拗音表記 / 直音表記の混在: システイン ↔ システィン (テイ ↔ ティ)
+#   - 空白の挿入:                グ アニル シ ステイン (空白で寸断)
+#   - 全角英数 ↔ 半角英数 の混在
+# pkm_highlight_python と JS 側の pkmHighlight ではこれらを吸収する正規化を
+# かけてから検索する。原文の位置情報も idx_map で復元してハイライト範囲を維持する。
+
+_KATAKANA_SMALL_TO_BIG = {
+    "ァ": "ア", "ィ": "イ", "ゥ": "ウ", "ェ": "エ", "ォ": "オ",
+    "ャ": "ヤ", "ュ": "ユ", "ョ": "ヨ", "ヮ": "ワ",
+}
+
+# 拗音表記 → 直音表記。2 文字 → 2 文字なので位置 mapping を保てる。
+# 「ティ」「ディ」「ファ」等は文字数を維持したまま「テイ」「デイ」「フア」に
+# 揃えることで、OCR の表記ゆれを吸収する。
+_KATAKANA_DIGRAPH_RULES = [
+    ("ティ", "テイ"), ("ディ", "デイ"),
+    ("ファ", "フア"), ("フィ", "フイ"), ("フェ", "フエ"), ("フォ", "フオ"),
+    ("ウィ", "ウイ"), ("ウェ", "ウエ"), ("ウォ", "ウオ"),
+    ("シェ", "シエ"), ("ジェ", "ジエ"), ("チェ", "チエ"),
+    ("ヴァ", "ヴア"), ("ヴィ", "ヴイ"), ("ヴェ", "ヴエ"), ("ヴォ", "ヴオ"),
+]
+_KATAKANA_DIGRAPH_MAP = dict(_KATAKANA_DIGRAPH_RULES)
+
+# 全角数字・英字 → 半角 + 全角/特殊ハイフン類 → 半角ハイフン
+_FULLWIDTH_TO_HALF = str.maketrans({
+    **{chr(0xFF10 + i): str(i) for i in range(10)},        # ０〜９
+    **{chr(0xFF21 + i): chr(ord("A") + i) for i in range(26)},  # Ａ〜Ｚ
+    **{chr(0xFF41 + i): chr(ord("a") + i) for i in range(26)},  # ａ〜ｚ
+    "－": "-",  # FULLWIDTH HYPHEN-MINUS (U+FF0D)
+    "−": "-",  # MINUS SIGN (U+2212)
+    "‐": "-",  # HYPHEN (U+2010)
+    "—": "-",  # EM DASH (U+2014)
+    "–": "-",  # EN DASH (U+2013)
+    # KATAKANA-HIRAGANA PROLONGED SOUND MARK (U+30FC, ー) は意味ある音符のため残す
+})
+
+
+def _normalize_text_for_match(text: str):
+    """OCR ゆれ吸収のための正規化。原文位置とのマッピングも返す。
+
+    Returns:
+        (normalized: str, idx_map: list[int])
+        normalized[i] は原文 text[idx_map[i]] (空白除去済) に対応する。
+        ハイライト時は normalized 上の検索結果を idx_map で原文位置に戻す。
+    """
+    if not text:
+        return "", []
+    # 全角数字/英字 → 半角 (1:1)
+    src = text.translate(_FULLWIDTH_TO_HALF)
+    out_chars: list = []
+    out_idx: list = []
+    i = 0
+    n = len(src)
+    while i < n:
+        # digraph (2 文字 → 2 文字) を最優先で照合
+        if i + 1 < n:
+            two = src[i] + src[i + 1]
+            replacement = _KATAKANA_DIGRAPH_MAP.get(two)
+            if replacement:
+                # replacement の各文字を out に追加 (元位置は i, i+1)
+                for j, dch in enumerate(replacement):
+                    out_chars.append(dch.lower())
+                    out_idx.append(i + min(j, 1))
+                i += 2
+                continue
+        ch = src[i]
+        if ch.isspace():
+            i += 1
+            continue
+        # 小書き → 大書き
+        ch = _KATAKANA_SMALL_TO_BIG.get(ch, ch)
+        out_chars.append(ch.lower())
+        out_idx.append(i)
+        i += 1
+    return "".join(out_chars), out_idx
+
+
 def pkm_highlight_python(text: str, index: list) -> dict:
-    """JS の pkmHighlight() と同じロジックの Python 版。
+    """JS の pkmHighlight() と同じロジックの Python 版。OCR ゆれを正規化吸収する。
+
+    検索手順:
+      1. 原文と各 term を `_normalize_text_for_match` で正規化
+         (全角→半角 / 小書き→大書き / 拗音→直音 / 空白除去 / lower)
+      2. 正規化テキスト上で term を検索
+      3. ヒット位置を idx_map で原文位置に逆引きして <mark> でハイライト
+      4. counts は normalized 上の検出回数 (重複は overlap 判定で除外)
+
     Returns: {"html": <escaped HTML with <mark>>, "counts": {gid: n}}
     """
     import html as _html
     t = text or ""
     if not t or not index:
         return {"html": _html.escape(t), "counts": {}}
-    t_lower = t.lower()
+
+    norm_text, idx_map = _normalize_text_for_match(t)
     positions = []
     for item in index:
-        term = item["term"]
-        tlow = term.lower()
-        if not tlow:
+        term = item.get("term") or ""
+        if not term:
             continue
+        norm_term, _ = _normalize_text_for_match(term)
+        if not norm_term:
+            continue
+        L = len(norm_term)
         pos = 0
-        L = len(term)
         while True:
-            pos = t_lower.find(tlow, pos)
+            pos = norm_text.find(norm_term, pos)
             if pos < 0:
                 break
+            # 原文位置に逆引き (空白除去のため範囲が広がる)
+            start = idx_map[pos]
+            end = idx_map[pos + L - 1] + 1
+            length = end - start
             overlap = any(
-                not (pos + L <= p["start"] or pos >= p["start"] + p["length"])
+                not (end <= p["start"] or start >= p["start"] + p["length"])
                 for p in positions
             )
             if not overlap:
-                positions.append({"start": pos, "length": L, "gid": item["gid"]})
+                positions.append({"start": start, "length": length,
+                                  "gid": item["gid"]})
             pos += L
     positions.sort(key=lambda p: p["start"])
     counts = {}
