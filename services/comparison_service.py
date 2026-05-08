@@ -5,6 +5,7 @@
 import os
 import re
 import json
+import hashlib
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -14,6 +15,18 @@ from services.case_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_prompt_filename(label, suffix="_prompt.txt", max_stem_chars=80):
+    """Windows-safe prompt filename with hash fallback for long citation lists."""
+    raw = str(label or "prompt")
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", raw).strip(" ._")
+    if not safe:
+        safe = "prompt"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    if len(safe) > max_stem_chars:
+        safe = f"{safe[:max_stem_chars]}_{digest}"
+    return f"{safe}{suffix}"
 
 
 def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citation_data, keywords):
@@ -187,7 +200,7 @@ def generate_prompt_multi(case_id, citation_ids):
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
 
     ids_label = "_".join(citation_ids)
-    prompt_path = case_dir / "prompts" / f"{ids_label}_prompt.txt"
+    prompt_path = case_dir / "prompts" / _safe_prompt_filename(ids_label)
     with open(prompt_path, "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
@@ -234,7 +247,7 @@ def generate_prompt_single(case_id, citation_id):
             hongan = json.load(f)
     prompt_text = _gen(segs, citation, keywords, hongan=hongan)
 
-    prompt_path = case_dir / "prompts" / f"{citation_id}_prompt.txt"
+    prompt_path = case_dir / "prompts" / _safe_prompt_filename(citation_id)
     with open(prompt_path, "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
@@ -1203,7 +1216,7 @@ def _compare_execute_per_citation_parallel(
                     "error": f"prompt生成失敗: {e}", "char_count": 0, "response_length": 0}
 
         try:
-            with open(prompts_dir / f"compare_prompt_{safe_label}.txt", "w", encoding="utf-8") as f:
+            with open(prompts_dir / _safe_prompt_filename(safe_label, suffix=".txt"), "w", encoding="utf-8") as f:
                 f.write(prompt_text)
         except OSError:
             pass
@@ -1409,7 +1422,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
     ids_label = "_".join(citation_ids)
     prompts_dir = case_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    with open(prompts_dir / f"{ids_label}_prompt.txt", "w", encoding="utf-8") as f:
+    with open(prompts_dir / _safe_prompt_filename(ids_label), "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
     provider = model_provider(model)
