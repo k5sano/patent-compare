@@ -23,6 +23,48 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DEFAULT_TIMEOUT = 600  # 10分
 
 
+def _load_windows_registered_env(*keys):
+    """Windows のユーザー/システム環境変数を直接読む。
+
+    `setx` やシステム設定で追加した環境変数は、既に起動済みの親プロセスには
+    反映されない。Codex から Flask を再起動した場合でも API キーを拾えるよう、
+    レジストリ側をフォールバックとして参照する。
+    """
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+    except Exception:
+        return ""
+
+    wanted = {str(k).lower() for k in keys if k}
+    locations = (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    )
+    for root, subkey in locations:
+        try:
+            with winreg.OpenKey(root, subkey) as hkey:
+                idx = 0
+                while True:
+                    try:
+                        name, value, _typ = winreg.EnumValue(hkey, idx)
+                    except OSError:
+                        break
+                    idx += 1
+                    if str(name).lower() in wanted and value:
+                        return os.path.expandvars(str(value))
+        except OSError:
+            continue
+        except Exception:
+            logger.debug("Windows 環境変数レジストリの読み取りに失敗", exc_info=True)
+            return ""
+    return ""
+
+
 class ClaudeClientError(Exception):
     """Claude CLI エラーの基底クラス"""
     pass
@@ -49,6 +91,9 @@ def _load_config_value(*keys):
         val = os.environ.get(key, "")
         if val:
             return val
+    val = _load_windows_registered_env(*keys)
+    if val:
+        return val
     config_path = PROJECT_ROOT / "config.yaml"
     if config_path.exists():
         try:
@@ -212,6 +257,42 @@ def llm_status():
     }
 
 
+def provider_setup_hint(provider):
+    if provider == "glm":
+        return (
+            "z.ai の API キーが必要です。Windows/User 環境変数 ZAI_API_KEY、"
+            "または config.yaml に設定してから Flask を再起動してください。"
+        )
+    if provider == "codex":
+        return (
+            "Codex CLI と ChatGPT ログインが必要です。"
+            "`codex --version` と `codex login` を確認してください。"
+        )
+    return (
+        "Claude Code CLI と Claude ログインが必要です。"
+        "`claude --version` で確認してください。"
+    )
+
+
+def execution_error_hint(provider, error_text):
+    et = (error_text or "").lower()
+    if "model" in et and (
+        "not found" in et or "not_found" in et or "does not exist" in et or "404" in et
+    ):
+        return "モデル名がプロバイダで提供されていない可能性があります。モデル選択を変えて再実行してください。"
+    if "rate" in et or "429" in et or "too many requests" in et:
+        return "レート制限に到達した可能性があります。数分待つか、軽いモデルで再実行してください。"
+    if "401" in et or "unauthorized" in et or "invalid api key" in et:
+        if provider == "glm":
+            return "ZAI_API_KEY が無効、または期限切れの可能性があります。"
+        return "ログインまたは認証情報が無効な可能性があります。"
+    if "context" in et or "token" in et or "too long" in et:
+        return "プロンプトが長すぎる可能性があります。文献数を減らすか、legacy ではなく requirement_first を試してください。"
+    if "timeout" in et or "タイムアウト" in et:
+        return "処理時間が長すぎます。軽いモデル、低い effort、または少ない文献数で再実行してください。"
+    return ""
+
+
 # --effort のデフォルト値。ユーザ設定 (settings.json) で xhigh/max になっている
 # 場合があるが、本プロジェクトの対比/検索/キーワードでは high で十分。
 # レートリミット消費を抑える目的で明示的に指定する。
@@ -231,7 +312,12 @@ def _call_codex_exec(prompt_text, timeout, use_search, model, effort,
     out_path = Path(out_file.name)
     out_file.close()
 
-    cmd = ["codex"]
+    # VS Code bundled Codex CLI can try to sync ChatGPT plugins on startup.
+    # In a browser-authenticated desktop session that endpoint may return 403
+    # (Cloudflare / plugin API), which aborts otherwise normal `codex exec`.
+    # patent-compare only needs plain model execution, so disable Codex plugins
+    # for these non-interactive calls.
+    cmd = ["codex", "--disable", "plugins"]
     if use_search:
         cmd.append("--search")
     cmd.extend([
@@ -322,8 +408,22 @@ def _call_glm_chat(prompt_text, timeout, use_search, model, effort):
         raise ClaudeTimeoutError(f"GLM API がタイムアウトしました（{timeout}秒）。") from e
     except requests.RequestException as e:
         raise ClaudeExecutionError(f"GLM API 呼び出しに失敗しました: {e}") from e
+    resp_text = resp.text or ""
+    resp_l = resp_text.lower()
+    if resp.status_code == 401:
+        raise ClaudeNotFoundError(f"GLM API キーが無効です (401): {resp_text[:200]}")
+    if (
+        resp.status_code == 404
+        or "model_not_found" in resp_l
+        or ("model" in resp_l and "not found" in resp_l)
+    ):
+        raise ClaudeExecutionError(
+            f"GLM モデル '{model}' が見つかりません: {resp_text[:300]}"
+        )
+    if resp.status_code == 429:
+        raise ClaudeExecutionError(f"GLM レート制限 (429): {resp_text[:300]}")
     if resp.status_code >= 400:
-        raise ClaudeExecutionError(f"GLM API エラー {resp.status_code}: {resp.text[:500]}")
+        raise ClaudeExecutionError(f"GLM API エラー {resp.status_code}: {resp_text[:500]}")
     data = resp.json()
     try:
         response_text = data["choices"][0]["message"]["content"]

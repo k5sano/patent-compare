@@ -7,7 +7,7 @@ LLM 不要なので 1 秒で式が出る。
     AND: ` * `
     OR : `+`
     NOT: `-` (※ キーワード文字列内では半角 - を全角ーに変換)
-    フィールド指定: `語/TX` `コード/FI` `コード/FT` `出願人/AP`
+    フィールド指定: `語/TX` `コード/FI` `コード/FT` `テーマ/FC` `出願人/AP`
 
 戦略レベル:
     L0: 出願人 × FI (× メイン F-term)  — 出願人ポートフォリオ確認 (X 文献はここで出る事も)
@@ -54,8 +54,12 @@ def field(code: str, tag: str) -> str:
 # 分類コード正規化 / 検証
 _FI_CODE_RE = re.compile(r"^[A-Z]\d{2}[A-Z]\s*\d+/\d+(?:[A-Z]\d*)?$", re.IGNORECASE)
 # 例: A61K 8/36, A61K8/36, A61Q5/02C
-_FTERM_CODE_RE = re.compile(r"^\d[A-Z]\d{3}[A-Z]{2}\d+$", re.IGNORECASE)
-# 例: 4C083AB032 (テーマ4桁 + 観点2字 + 数字)
+_FTERM_FULL_RE = re.compile(r"^(\d[A-Z]\d{3})([A-Z]{2})(\d{2,3})([A-Z])?$", re.IGNORECASE)
+_FTERM_SHORT_RE = re.compile(r"^([A-Z]{2})(\d{2,3})([A-Z])?(?:\.([12]?))?$", re.IGNORECASE)
+_THEME_CODE_RE = re.compile(r"^\d[A-Z]\d{3}$", re.IGNORECASE)
+# 例: 4C083AB172 → theme=4C083, query_code=AB17.2
+# 例: 4C083AD05 → theme=4C083, query_code=AD05.
+# 例: 4F100AK01B → theme=4F100, query_code=AK01B
 
 
 def normalize_fi_code(s: str) -> str:
@@ -65,7 +69,16 @@ def normalize_fi_code(s: str) -> str:
 
 
 def normalize_fterm_code(s: str) -> str:
-    """F-term コードを論理式に貼れる形に。空白とコロン (区切り慣習) を除去。"""
+    """F-term コードを正規化。
+
+    J-PlatPat 検索式ではテーマコード付き `4C083AC172/FT` は使わず、
+    テーマコード `4C083/FC` を別途 AND し、Fタームは `AC17.2/FT` とする。
+    4C083 の末尾 1/2 は付加コードなので、短縮コード側では `.1` / `.2` に変換する。
+    4C083 の付加コード未指定の 2 桁コードは、`.1` / `.2` を拾うため末尾 `.` を付ける。
+    """
+    parsed = parse_fterm_code(s)
+    if parsed:
+        return parsed["query_code"]
     s = re.sub(r"\s+", "", (s or "").strip())
     return s.replace(":", "").replace("：", "")
 
@@ -75,7 +88,94 @@ def is_valid_fi(code: str) -> bool:
 
 
 def is_valid_fterm(code: str) -> bool:
-    return bool(_FTERM_CODE_RE.match(normalize_fterm_code(code)))
+    return parse_fterm_code(code) is not None
+
+
+def is_valid_theme_code(code: str) -> bool:
+    return bool(_THEME_CODE_RE.match(re.sub(r"\s+", "", (code or "").strip())))
+
+
+def parse_fterm_code(s: str) -> dict | None:
+    """Fタームを検索式用コードへ分解する。
+
+    Returns:
+        {"raw": "4C083AC172", "theme": "4C083", "query_code": "AC17.2"}
+        {"raw": "4C083AD05", "theme": "4C083", "query_code": "AD05."}
+        {"raw": "4F100AK01B", "theme": "4F100", "query_code": "AK01B"}
+        短縮形 `AC17.2` の場合 theme は ""。
+    """
+    raw = re.sub(r"\s+", "", (s or "").strip())
+    raw = raw.replace(":", "").replace("：", "")
+    if not raw:
+        return None
+    m = _FTERM_FULL_RE.match(raw)
+    if m:
+        theme = m.group(1).upper()
+        axis = m.group(2).upper()
+        number = m.group(3)
+        layer_suffix = (m.group(4) or "").upper()
+        addon = (
+            number[-1]
+            if theme == "4C083" and len(number) == 3 and number[-1] in ("1", "2")
+            else ""
+        )
+        if addon:
+            # 4C083 の付加コード 1/2 は検索式ではドット付きにする。
+            base_number = number[:-1]
+            query_code = f"{axis}{base_number}.{addon}{layer_suffix}"
+        elif theme == "4C083" and len(number) == 2 and not layer_suffix:
+            # 4C083AD05/FT では AD05.1/AD05.2 がヒットしないため AD05./FT にする。
+            query_code = f"{axis}{number}."
+        else:
+            query_code = f"{axis}{number}{layer_suffix}"
+        return {"raw": raw, "theme": theme, "query_code": query_code}
+    m = _FTERM_SHORT_RE.match(raw)
+    if m:
+        query_code = f"{m.group(1).upper()}{m.group(2)}{(m.group(3) or '').upper()}"
+        if m.group(4) is not None:
+            query_code += f".{m.group(4)}"
+        return {"raw": raw, "theme": "", "query_code": query_code}
+    return None
+
+
+def fterm_formula_parts(codes: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Fタームコード列から J-PlatPat 検索式 parts を生成する。
+
+    テーマごとに `(4C083/FC * (AC17.2+AB08.2)/FT)` の形で返す。
+    テーマ不明の短縮形は `AC17.2/FT` として返す。
+
+    Returns:
+        (parts, skipped_invalid, normalized_query_codes)
+    """
+    by_theme: dict[str, list[str]] = {}
+    no_theme: list[str] = []
+    skipped: list[str] = []
+    normalized: list[str] = []
+    seen_per_theme: set[tuple[str, str]] = set()
+    for raw in codes:
+        parsed = parse_fterm_code(raw)
+        if not parsed:
+            skipped.append(raw)
+            continue
+        theme = parsed["theme"]
+        q = parsed["query_code"]
+        key = (theme, q)
+        if key in seen_per_theme:
+            continue
+        seen_per_theme.add(key)
+        normalized.append(q if not theme else f"{theme}:{q}")
+        if theme:
+            by_theme.setdefault(theme, []).append(q)
+        else:
+            no_theme.append(q)
+
+    parts: list[str] = []
+    for theme, qs in by_theme.items():
+        ft = field(qs[0], "FT") if len(qs) == 1 else f"({'+'.join(qs)})/FT"
+        parts.append(f"({field(theme, 'FC')} * {ft})")
+    for q in no_theme:
+        parts.append(field(q, "FT"))
+    return parts, skipped, normalized
 
 
 def or_bundle(items: list[str], tag: str, normalize=None, validate=None) -> tuple[str, list[str]]:
@@ -263,17 +363,14 @@ def build_l0(case_id: str, include_main_fterm: bool = False) -> tuple[dict, int]
     main_fterm_codes_used = []
     if include_main_fterm:
         main_fterms = _collect_main_fterms(case_id)
-        ft_part, ft_skipped = or_bundle(
-            [c["code"] for c in main_fterms], "FT",
-            normalize=normalize_fterm_code, validate=is_valid_fterm,
+        ft_parts, ft_skipped, main_fterm_codes_used = fterm_formula_parts(
+            [c["code"] for c in main_fterms]
         )
-        if ft_part:
-            parts.append(ft_part)
-            main_fterm_codes_used = [normalize_fterm_code(c["code"]) for c in main_fterms
-                                      if is_valid_fterm(c["code"])]
+        if ft_parts:
+            parts.extend(ft_parts)
         if ft_skipped:
             warnings.append(f"F-term として不正な形式の語をスキップしました: {ft_skipped}")
-        if not ft_part:
+        if not ft_parts:
             warnings.append("第一請求項メイン構成 (segment_ids 1A/1B/...) のグループに有効な F-term が無いため、F-term は省略しました。")
 
     formula = and_join(parts)

@@ -61,7 +61,16 @@ def test_call_claude_routes_codex_to_cli(monkeypatch):
 
     assert out == "{\"ok\": true}"
     cmd, stdin_bytes, timeout = calls[0]
-    assert cmd[:5] == ["codex", "--search", "exec", "--model", "gpt-5.4"]
+    assert cmd[:7] == [
+        "codex",
+        "--disable",
+        "plugins",
+        "--search",
+        "exec",
+        "--model",
+        "gpt-5.4",
+    ]
+    assert cmd[cmd.index("--disable") + 1] == "plugins"
     assert "--search" in cmd
     assert "--sandbox" in cmd
     assert cmd[cmd.index("--output-last-message") + 1] != "-"
@@ -88,6 +97,30 @@ def test_call_claude_routes_glm_to_zai(monkeypatch):
     assert payload["model"] == "glm-5.1"
     assert "thinking" not in payload
     assert timeout == 9
+
+
+@pytest.mark.parametrize(
+    ("status_code", "body", "exc_type", "needle"),
+    [
+        (401, '{"error":"unauthorized"}', cc.ClaudeNotFoundError, "GLM API キーが無効"),
+        (429, '{"error":"rate limit"}', cc.ClaudeExecutionError, "GLM レート制限"),
+        (404, '{"error":"model not found"}', cc.ClaudeExecutionError, "GLM モデル"),
+    ],
+)
+def test_call_claude_glm_http_errors_are_classified(
+    monkeypatch, status_code, body, exc_type, needle
+):
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test")
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        return _Resp({}, status_code=status_code, text=body)
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    with pytest.raises(exc_type) as ei:
+        cc.call_claude("hello", model="glm-sonnet", effort="low", timeout=9)
+
+    assert needle in str(ei.value)
 
 
 def test_call_claude_codex_missing_cli_errors(monkeypatch):

@@ -449,11 +449,26 @@ def test_validate_formula_no_warn_hyphen_between_brackets():
     assert not any("ハイフン" in w for w in r["warnings"])
 
 
+def test_validate_formula_warns_full_fterm_code():
+    r = srs.validate_formula("4C083AC172/FT")
+    assert any("4C083/FC*AC17.2/FT" in w for w in r["warnings"])
+
+
+def test_validate_formula_warns_cosmetics_base_fterm_with_trailing_dot_hint():
+    r = srs.validate_formula("4C083AD05/FT")
+    assert any("4C083/FC*AD05./FT" in w for w in r["warnings"])
+
+
+def test_validate_formula_warns_laminate_full_fterm_layer_suffix():
+    r = srs.validate_formula("4F100AK01B/FT")
+    assert any("4F100/FC*AK01B/FT" in w for w in r["warnings"])
+
+
 # ===== get_keyword_snippets のテスト =====
 
 def test_get_keyword_snippets_empty(case_dir):
     snip = srs.get_keyword_snippets("TEST-CASE")
-    assert snip == {"groups": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
+    assert snip == {"groups": [], "ipc_codes": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
 
 
 def test_get_keyword_snippets_theme_codes_extracted(case_dir):
@@ -467,6 +482,16 @@ def test_get_keyword_snippets_theme_codes_extracted(case_dir):
     assert snip["theme_codes"] == ["4C083", "4F100"]
 
 
+def test_get_keyword_snippets_theme_codes_extracted_with_additional_code(case_dir):
+    search_dir = case_dir / "search"
+    search_dir.mkdir()
+    (search_dir / "keyword_dictionary.json").write_text(json.dumps({
+        "fterm_codes": ["4C083AC172"],
+    }, ensure_ascii=False), encoding="utf-8")
+    snip = srs.get_keyword_snippets("TEST-CASE")
+    assert snip["theme_codes"] == ["4C083"]
+
+
 def test_get_keyword_snippets_merges_classification_json(case_dir):
     """classification.json に格納された fterm (構造化) もテーマコード抽出対象"""
     search_dir = case_dir / "search"
@@ -475,10 +500,12 @@ def test_get_keyword_snippets_merges_classification_json(case_dir):
         "keyword_groups": [],
     }, ensure_ascii=False), encoding="utf-8")
     (search_dir / "classification.json").write_text(json.dumps({
+        "ipc": [{"code": "A61K 8/00"}],
         "fi": [{"code": "A61K 8/02"}, {"code": "A61K 8/06"}],
         "fterm": [{"code": "4C083AB13"}, {"code": "4C083AC01"}, {"code": "5H050CA99"}],
     }, ensure_ascii=False), encoding="utf-8")
     snip = srs.get_keyword_snippets("TEST-CASE")
+    assert "A61K 8/00" in snip["ipc_codes"]
     assert "A61K 8/02" in snip["fi_codes"]
     assert "4C083AB13" in snip["fterm_codes"]
     assert sorted(snip["theme_codes"]) == ["4C083", "5H050"]
@@ -489,7 +516,15 @@ def test_get_keyword_snippets_groups(case_dir):
     search_dir.mkdir()
     (search_dir / "keyword_dictionary.json").write_text(json.dumps({
         "keyword_groups": [
-            {"label": "化粧料", "terms": ["化粧料", "メイクアップ", "ファンデーション"]},
+            {
+                "label": "化粧料",
+                "terms": ["化粧料", "メイクアップ", "ファンデーション"],
+                "classifications": {
+                    "ipc": ["A61K 8/00"],
+                    "fi": ["A61K 8/06"],
+                    "fterm": ["4C083AD05"],
+                },
+            },
             {"label": "シリコーン", "synonyms": ["シリコーン", "silicone"]},
         ],
         "fi_codes": ["A61K 8/06", "A61Q 1/12"],
@@ -503,6 +538,10 @@ def test_get_keyword_snippets_groups(case_dir):
     assert g0["jplatpat_group"] == "(化粧料+メイクアップ+ファンデーション)/TX"
     assert g0["jplatpat_group_raw"] == "(化粧料+メイクアップ+ファンデーション)"
     assert g0["terms_sanitized"] == ["化粧料", "メイクアップ", "ファンデーション"]
+    assert g0["ipc_codes"] == ["A61K 8/00"]
+    assert g0["fi_codes"] == ["A61K 8/06"]
+    assert g0["fterm_codes"] == ["4C083AD05"]
+    assert "A61K 8/00" in snip["ipc_codes"]
 
 
 def test_get_keyword_snippets_sanitizes_hyphen(case_dir):
@@ -521,6 +560,31 @@ def test_get_keyword_snippets_sanitizes_hyphen(case_dir):
     assert g["jplatpat_group"] == "(SUS－304+フィルム－電池)/TX"
 
 
+def test_get_keyword_snippets_fallback_keywords_preserves_group_codes(case_dir):
+    (case_dir / "keywords.json").write_text(json.dumps([
+        {
+            "group_id": 1,
+            "label": "成分A",
+            "keywords": [{"term": "グアニルシステイン"}],
+            "search_codes": {
+                "ipc": [{"code": "A61K 8/00"}],
+                "fi": [{"code": "A61K 8/898"}],
+                "fterm": [{"code": "4C083AC172"}],
+            },
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    snip = srs.get_keyword_snippets("TEST-CASE")
+
+    g = snip["groups"][0]
+    assert g["label"] == "成分A"
+    assert g["ipc_codes"] == ["A61K 8/00"]
+    assert g["fi_codes"] == ["A61K 8/898"]
+    assert g["fterm_codes"] == ["4C083AC172"]
+    assert snip["ipc_codes"] == ["A61K 8/00"]
+    assert snip["theme_codes"] == ["4C083"]
+
+
 def test_merge_runs_preserves_found_in_runs_order(case_dir):
     """既存のマージロジックに対する影響がないこと確認"""
     d1 = srs.create_run_from_hits(
@@ -534,3 +598,32 @@ def test_merge_runs_preserves_found_in_runs_order(case_dir):
     merged = srs.merge_runs("TEST-CASE", [d1["run_id"], d2["run_id"]])
     assert len(merged) == 1
     assert merged[0]["found_in_runs"] == [d1["run_id"], d2["run_id"]]
+
+
+def test_ai_score_run_stream_yields_each_scored_hit(case_dir, monkeypatch):
+    run = srs.create_run_from_hits(
+        "TEST-CASE",
+        formula="a",
+        formula_level="narrow",
+        hits=[_make_hit("JP1"), _make_hit("JP2")],
+    )
+
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append(prompt)
+        return '{"score": 80, "reason": "近い"}'
+
+    monkeypatch.setattr("modules.claude_client.call_claude", fake_call)
+
+    events = list(srs.ai_score_run_stream("TEST-CASE", run["run_id"], model="sonnet"))
+
+    assert events[0] == {"type": "start", "total": 2, "run_id": run["run_id"]}
+    score_events = [e for e in events if e["type"] == "score"]
+    assert [e["patent_id"] for e in score_events] == ["JP1", "JP2"]
+    assert all(e["hit"]["ai_score"] == 80 for e in score_events)
+    assert events[-1]["type"] == "done"
+    assert events[-1]["scored"] == 2
+    saved = srs.load_run("TEST-CASE", run["run_id"])
+    assert [h["ai_score"] for h in saved["hits"]] == [80, 80]
+    assert len(calls) == 2

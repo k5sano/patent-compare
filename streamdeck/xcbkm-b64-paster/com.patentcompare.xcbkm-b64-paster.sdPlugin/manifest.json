@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Author": "PatentCompare",
+  "Name": "XCBKM B64 Paster",
+  "Description": "Convert a PDF-XChange bookmark export to Base64 and paste it by keyboard emulation.",
+  "Category": "PatentCompare",
+  "CategoryIcon": "images/categoryIcon",
+  "Icon": "images/pluginIcon",
+  "Version": "0.2.9.0",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.7"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "CodePathWin": "bin/XcbkmB64Paster.exe",
+  "UUID": "com.patentcompare.xcbkm-b64-paster",
+  "Actions": [
+    {
+      "UUID": "com.patentcompare.xcbkm-b64-paster.paste",
+      "Name": "Paste XCBKM B64",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Icon": "images/actionIcon",
+      "Tooltip": "Paste the stored Base64 bookmark export using keyboard emulation.",
+      "PropertyInspectorPath": "pi.html",
+      "DisableCaching": true,
+      "SupportedInMultiActions": true,
+      "VisibleInActionsList": true,
+      "UserTitleEnabled": false,
+      "States": [
+        {
+          "Image": "images/actionDefault",
+          "Title": "DROP\nFILE",
+          "TitleAlignment": "middle",
+          "FontSize": 15,
+          "ShowTitle": true
+        }
+      ]
+    }
+  ]
+}

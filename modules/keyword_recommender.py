@@ -41,6 +41,13 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 
+
+def _use_anthropic_api() -> bool:
+    """従量APIを明示許可した場合だけ Anthropic SDK 経路を使う。"""
+    return (os.environ.get("PATENT_COMPARE_USE_ANTHROPIC_API") or "").lower() in (
+        "1", "true", "yes", "on",
+    )
+
 # ============================================================
 # 辞書キャッシュ
 # ============================================================
@@ -139,9 +146,9 @@ def _ai_find_related_in_spec(seg_keywords, spec_text, field="cosmetics"):
         [{"seg":"1A", "term":"スクワラン",
           "related":["流動パラフィン","イソドデカン"], "para":"0025"}, ...]
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") if _use_anthropic_api() else ""
     if not api_key:
-        logger.info("ANTHROPIC_API_KEY 未設定 — Step 2 スキップ")
+        logger.info("Anthropic API 未使用 — Step 2 スキップ")
         return None
 
     if not spec_text.strip():
@@ -243,9 +250,9 @@ def _ai_find_related_in_dicts(all_keywords, field):
         [{"term":"スクワラン", "synonyms_key":"スクワラン",
           "upper_key":"スクワラン", "inci_key":"スクワラン"}, ...]
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") if _use_anthropic_api() else ""
     if not api_key:
-        logger.info("ANTHROPIC_API_KEY 未設定 — Step 3 スキップ")
+        logger.info("Anthropic API 未使用 — Step 3 スキップ")
         return None
 
     # 辞書キー一覧を取得
@@ -589,7 +596,8 @@ def recommend_regex(segments, hongan, field):
     Step 2: AI で明細書から関連語を拾う（1回）
     Step 3: AI で辞書キーを照合→Python が辞書展開（1回）
 
-    ANTHROPIC_API_KEY 未設定時は Claude CLI フォールバックで Steps 2+3 を実行。
+    通常は Claude Max/OAuth 等の共通LLMクライアントで Steps 2+3 を実行。
+    Anthropic 従量APIは PATENT_COMPARE_USE_ANTHROPIC_API=1 の明示時のみ使う。
     各 Step でエラーが発生してもスキップして次へ進む。
 
     Parameters:
@@ -621,7 +629,7 @@ def recommend_regex(segments, hongan, field):
     # === 明細書テキスト準備 ===
     spec_text = _build_spec_excerpt(hongan, max_chars=12000)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") if _use_anthropic_api() else ""
     if api_key:
         # === 既存 API パス (Steps 2+3) ===
         if spec_text:
@@ -633,7 +641,7 @@ def recommend_regex(segments, hongan, field):
             _merge_step3_results(results, ai_dict, field)
     else:
         # === Claude CLI フォールバック (Steps 2+3 一括) ===
-        logger.info("ANTHROPIC_API_KEY 未設定 — Claude CLI フォールバックで enrichment 実行")
+        logger.info("共通LLMクライアントで enrichment 実行")
         _cli_enrich_keywords(results, spec_text, field)
 
     # === 最終重複除去 ===
@@ -801,8 +809,8 @@ def _extract_json_object(raw_text):
 def _call_ai_tech_analysis(prompt, field, model=None):
     """AIを呼び出してtech_analysisを取得。
 
-    API key → anthropic SDK
-    API keyなし → Claude CLI (call_claude)
+    通常 → 共通 LLM クライアント (Claude CLI / Codex CLI / GLM)
+    PATENT_COMPARE_USE_ANTHROPIC_API=1 かつ API keyあり → anthropic SDK
     どちらも失敗 → AIResult(success=False)
 
     Parameters:
@@ -815,8 +823,8 @@ def _call_ai_tech_analysis(prompt, field, model=None):
     full_model = resolve_model(model) or "claude-opus-4-6"
     provider = model_provider(model)
 
-    # 方法1: Anthropic API (API key あり)
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    # 方法1: Anthropic API (明示許可 + API key あり)
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "") if _use_anthropic_api() else ""
     if api_key and provider == "claude":
         try:
             import anthropic

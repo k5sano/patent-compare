@@ -12,7 +12,10 @@ from pathlib import Path
 import pytest
 
 from services import case_service
-from services.keyword_service import rebuild_keywords_from_tech_analysis
+from services.keyword_service import (
+    rebuild_keywords_from_tech_analysis,
+    reassign_keywords_to_tech_analysis,
+)
 
 
 @pytest.fixture
@@ -160,6 +163,16 @@ class TestRebuild:
         assert len(saved) == 2
         assert saved[0]["group_id"] == 1
         assert saved[1]["group_id"] == 2
+
+    def test_reassign_endpoint_is_rebuild_compat_alias(self, case_with_tech_analysis):
+        """旧 reassign API から呼ばれても Step 4 要素単位の再構築になる。"""
+        case_id, _ = case_with_tech_analysis
+        result, code = reassign_keywords_to_tech_analysis(case_id)
+        assert code == 200
+        assert result["success"] is True
+        assert result["mode"] == "rebuilt"
+        assert [g["label"] for g in result["groups"]] == ["化粧料の形態", "油性成分"]
+        assert result["groups"][0]["segment_ids"] == ["1A", "1K"]
 
 
 class TestErrors:

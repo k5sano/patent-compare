@@ -905,17 +905,20 @@ def parse_classifications_from_raw(raw_text: str) -> dict:
     ipc = list(dict.fromkeys(re.findall(_IPC_RE, ipc_section)))
     # FI は付加情報 (例: A61K 8/44 1) や括弧書きが混ざる
     fi_raw = re.findall(_IPC_RE, fi_section)
-    # 各コードの直後 1 文字 (展開記号 A/B/C/D/H/Z 等) を保持
+    # 各コードの直後 1 文字 (展開記号 A/B/C/D/H/Z 等) を保持。
+    # `\s*([A-Z])?` だと改行後の次コード先頭 (A61Q など) を展開記号として
+    # 吸収するため、行ごとに見て水平空白だけを許容する。
     fi_with_ext = []
-    for m in re.finditer(r"([A-H]\d{2}[A-Z]\s*\d+/\d+)\s*([A-Z])?", fi_section):
-        code = re.sub(r"\s+", " ", m.group(1).strip())
-        if m.group(2):
-            code = code + " " + m.group(2)
-        fi_with_ext.append(code)
+    for line in fi_section.splitlines():
+        for m in re.finditer(r"([A-H]\d{2}[A-Z]\s*\d+/\d+)[ \t]*([A-Z])?(?![A-Za-z0-9])", line):
+            code = re.sub(r"\s+", " ", m.group(1).strip())
+            if m.group(2):
+                code = code + " " + m.group(2)
+            fi_with_ext.append(code)
     fi = list(dict.fromkeys(fi_with_ext or fi_raw))
 
-    # Fターム: <1 数字><英字><3 数字> + <AA-FF 等 2 英字> + <2-3 数字>
-    # 例: 4C083AB032, 4H003AB05
+    # Fターム: <1 数字><英字><3 数字> + <AA-FF 等 2 英字> + <2-3 数字> + 任意の英字付加コード
+    # 例: 4C083AB032, 4H003AB05, 4F100AK01B
     #
     # J-PlatPat 詳細ページでは複数の Fターム コードがスペースなしで連結された
     # 文字列として現れる ("4C083AB0324C083AC122...4H003AB034H003AB05...")。
@@ -923,10 +926,10 @@ def parse_classifications_from_raw(raw_text: str) -> dict:
     # lookahead で「次が新コード先頭 (\d[A-Z]\d{3}) または 非英数字 / 行末」
     # である場合のみマッチを確定させる。
     _FT_RE_SIMPLE = re.compile(
-        r"\d[A-Z]\d{3}[A-Z]{2}\d{2,3}(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
+        r"\d[A-Z]\d{3}[A-Z]{2}\d{2,3}[A-Z]?(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
     )
     _FT_RE_STRICT = re.compile(
-        r"(?<![A-Za-z0-9])\d[A-Z]\d{3}[A-Z]{2}\d{2,3}(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
+        r"(?<![A-Za-z0-9])\d[A-Z]\d{3}[A-Z]{2}\d{2,3}[A-Z]?(?=[^A-Za-z0-9]|$|\d[A-Z]\d{3})"
     )
     fterm_section = _section("Fターム") + " " + _section("Fターム")
     fterm = list(dict.fromkeys(re.findall(_FT_RE_SIMPLE, fterm_section)))

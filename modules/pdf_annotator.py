@@ -65,8 +65,15 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
     # 2. 段落横の分節ラベル
     label_count = _draw_segment_labels(doc, response, para_page_map, claims_page)
 
-    # 3. ブックマーク (本願 PDF と同じスタイル: simple form + ページ先頭 /XYZ)
-    toc = _build_toc(response, para_page_map, claims_page)
+    # 3. ブックマーク: 段落番号の y 座標まで飛ぶ詳細 dest を作る。
+    #    この時点では元 PDF のページ番号で解決し、後でサマリーページ分だけ +1 する。
+    toc_entries = _build_toc_entries(response, doc, para_page_map, claims_page)
+
+    # 4. 先頭に注釈サマリーを挿入
+    _insert_summary_page(doc, response, citation)
+
+    # 5. TOC。先頭サマリーページを 1 ページ目にしたので、元 PDF 側は +1。
+    toc = _build_toc(response, toc_entries, page_offset=1)
     doc.set_toc(toc)
 
     doc.save(str(output_path))
@@ -80,6 +87,172 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
 
 
 # ========== 内部関数 ==========
+
+def _category_label(category):
+    c = (category or "").strip().upper()[:1]
+    labels = {
+        "X": "X: 単独で拒絶理由を構成し得る文献",
+        "Y": "Y: 他文献との組合せで拒絶理由を構成し得る文献",
+        "A": "A: 参考文献",
+    }
+    return labels.get(c, c or "未分類")
+
+
+def _wrap_text(text, max_chars):
+    """PDF サマリー用の簡易折り返し。日本語も概ね max_chars で折る。"""
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not text:
+        return []
+    lines = []
+    cur = ""
+    for token in re.split(r"([、。・,.;:])", text):
+        if not token:
+            continue
+        if len(cur) + len(token) <= max_chars:
+            cur += token
+            continue
+        if cur:
+            lines.append(cur)
+        while len(token) > max_chars:
+            lines.append(token[:max_chars])
+            token = token[max_chars:]
+        cur = token
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _draw_textbox(page, rect, text, *, fontsize=10, color=(0.08, 0.1, 0.14),
+                  align=fitz.TEXT_ALIGN_LEFT, bold=False):
+    """日本語フォントで text box を描く。環境差があるので helv にフォールバック。"""
+    fontnames = ("japan", "japan-s", "helv")
+    for fontname in fontnames:
+        try:
+            rc = page.insert_textbox(
+                rect,
+                text,
+                fontsize=fontsize,
+                fontname=fontname,
+                color=color,
+                align=align,
+            )
+            if rc >= 0:
+                return rc
+        except Exception:
+            continue
+    return -1
+
+
+def _draw_line_text(page, point, text, *, fontsize=10, color=(0.08, 0.1, 0.14)):
+    for fontname in ("japan", "japan-s", "helv"):
+        try:
+            page.insert_text(point, text, fontsize=fontsize, fontname=fontname, color=color)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _summary_missing_items(response):
+    items = []
+    for comp in response.get("comparisons", []) or []:
+        judgment = str(comp.get("judgment") or "").strip()
+        if judgment not in ("×", "△"):
+            continue
+        rid = comp.get("requirement_id") or "?"
+        reason = comp.get("judgment_reason") or comp.get("reason") or ""
+        loc = comp.get("cited_location") or ""
+        text = f"{rid} {judgment}"
+        if loc:
+            text += f" / {loc}"
+        if reason:
+            text += f": {reason}"
+        items.append(text)
+    return items
+
+
+def _insert_summary_page(doc, response, citation):
+    """注釈 PDF の 1 ページ目に文献概要・カテゴリ・未充足構成を挿入。"""
+    first = doc[0] if doc.page_count else None
+    width = first.rect.width if first else 595
+    height = first.rect.height if first else 842
+    page = doc.new_page(pno=0, width=width, height=height)
+
+    margin = 42
+    y = 42
+    title_color = (0.1, 0.18, 0.32)
+    muted = (0.35, 0.39, 0.46)
+    line_color = (0.78, 0.82, 0.88)
+
+    doc_id = response.get("document_id") or citation.get("patent_number") or citation.get("id") or "引用文献"
+    title = citation.get("patent_title") or citation.get("title") or citation.get("invention_title") or ""
+    applicant = citation.get("applicant") or citation.get("assignee") or ""
+    category = _category_label(response.get("category_suggestion", ""))
+    summary = response.get("overall_summary") or citation.get("abstract") or ""
+    relevance = response.get("rejection_relevance") or ""
+    missing = _summary_missing_items(response)
+
+    _draw_line_text(page, fitz.Point(margin, y + 18),
+                    "注釈PDFサマリー", fontsize=18, color=title_color)
+    y += 34
+    _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + 22),
+                  str(doc_id), fontsize=12, color=muted)
+    y += 28
+    page.draw_line(fitz.Point(margin, y), fitz.Point(width - margin, y), color=line_color, width=0.8)
+    y += 18
+
+    rows = [
+        ("カテゴリ", category),
+        ("文献名", title),
+        ("出願人", applicant),
+    ]
+    for label, value in rows:
+        if not value:
+            continue
+        _draw_textbox(page, fitz.Rect(margin, y, margin + 80, y + 18),
+                      label, fontsize=9, color=muted)
+        _draw_textbox(page, fitz.Rect(margin + 84, y, width - margin, y + 22),
+                      str(value), fontsize=10, color=(0.08, 0.1, 0.14))
+        y += 24
+
+    y += 6
+    _draw_line_text(page, fitz.Point(margin, y + 13),
+                    "この文献の概要", fontsize=12, color=title_color)
+    y += 20
+    summary_lines = _wrap_text(summary or "概要情報がありません。", 44)
+    if relevance:
+        summary_lines += ["", "拒絶理由との関連性:"] + _wrap_text(relevance, 44)
+    for line in summary_lines[:12]:
+        h = 14 if line else 8
+        _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + h + 4),
+                      line, fontsize=9.5, color=(0.1, 0.12, 0.16))
+        y += h
+
+    y += 14
+    _draw_line_text(page, fitz.Point(margin, y + 13),
+                    "本願請求項で埋まっていない構成", fontsize=12, color=title_color)
+    y += 20
+    if missing:
+        for item in missing[:14]:
+            for i, line in enumerate(_wrap_text(item, 47)[:3]):
+                prefix = "・" if i == 0 else "  "
+                _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + 14),
+                              prefix + line, fontsize=8.8, color=(0.12, 0.14, 0.18))
+                y += 13
+            if y > height - 70:
+                remaining = len(missing) - missing.index(item) - 1
+                if remaining > 0:
+                    _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + 16),
+                                  f"・ほか {remaining} 件", fontsize=8.8, color=muted)
+                break
+    else:
+        _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + 16),
+                      "× または △ の構成要件はありません。", fontsize=9, color=muted)
+
+    footer = "以降のページに元PDFと注釈があります。ブックマークから該当段落番号の位置へ移動できます。"
+    _draw_textbox(page, fitz.Rect(margin, height - 42, width - margin, height - 24),
+                  footer, fontsize=8, color=muted)
+    return page
 
 def _build_para_page_map(citation):
     """段落ID(半角)→ページ番号マップ"""
@@ -311,37 +484,47 @@ def _draw_keyword_highlights(doc, keywords):
     return count
 
 
-def _build_toc(response, para_page_map, claims_page):
-    """ブックマーク（目次）を構築。
+def _toc_dest(page_1based, y=0):
+    page_1based = max(1, int(page_1based or 1))
+    y = max(0, float(y or 0) - 18)
+    return {
+        "kind": fitz.LINK_GOTO,
+        "page": page_1based - 1,
+        "to": fitz.Point(0, y),
+        "zoom": 0,
+    }
 
-    本願 PDF 側 (services.case_service.create_bookmarked_hongan + apply_toc) と
-    同じスタイルで simple form `[level, title, page]` を使う。set_toc が
-    生成する /XYZ (page top) のままで OK — 本願はこれで動作している。
-    精密 y 計算 / /FitH 変換 はやらない (両者を試したが PDF-XChange 等で挙動が
-    不安定だった)。
+
+def _build_toc_entries(response, doc, para_page_map, claims_page):
+    """ブックマーク対象を構築。ページだけでなく段落番号の y 座標も保持する。
 
     タイトル形式: `<requirement_id> <judgment> 【<para>】 (p.<page>)` または
                   `<requirement_id> <judgment> 請求項`
     """
-    doc_id = response.get("document_id", "引用文献")
-    toc = [[1, f"対比結果: {doc_id}", 1]]
+    entries = []
 
     def _emit(label_prefix, judgment, cited_loc):
         paras = _parse_cited_paragraphs(cited_loc)
         emitted = False
         for para_id in paras:
+            pn = rect = None
             if para_id == "__claims__":
-                page = claims_page
+                pn, rect = _resolve_paragraph_location(
+                    doc, para_id, cited_loc, para_page_map, claims_page)
+                page = (pn + 1) if pn is not None else claims_page
                 title = f"{label_prefix} {judgment} 請求項 (p.{page})"
             else:
-                page = para_page_map.get(para_id, 1)
+                pn, rect = _resolve_paragraph_location(
+                    doc, para_id, cited_loc, para_page_map, claims_page)
+                page = (pn + 1) if pn is not None else para_page_map.get(para_id, 1)
                 title = f"{label_prefix} {judgment} 【{para_id}】 (p.{page})"
-            toc.append([2, title, page])
+            y = rect.y0 if rect is not None else 0
+            entries.append({"level": 2, "title": title, "page": page, "y": y})
             emitted = True
         if not emitted:
             # cited_location があれば生のままタイトルに残し、ページは 1 にフォールバック
             label = cited_loc.strip() if cited_loc else "(不明)"
-            toc.append([2, f"{label_prefix} {judgment} {label}", 1])
+            entries.append({"level": 2, "title": f"{label_prefix} {judgment} {label}", "page": 1, "y": 0})
 
     for comp in response.get("comparisons", []):
         _emit(comp["requirement_id"], comp["judgment"], comp.get("cited_location", ""))
@@ -349,9 +532,23 @@ def _build_toc(response, para_page_map, claims_page):
     for sub in response.get("sub_claims", []):
         _emit(f"請求項{sub['claim_number']}", sub["judgment"], sub.get("cited_location", ""))
 
+    return entries
+
+
+def _build_toc(response, toc_entries, page_offset=0):
+    doc_id = response.get("document_id", "引用文献")
+    toc = [[1, f"注釈サマリー: {doc_id}", 1, _toc_dest(1, 0)]]
+    toc.append([1, f"対比結果: {doc_id}", 2, _toc_dest(2, 0)])
+    for entry in toc_entries:
+        page = int(entry.get("page") or 1) + page_offset
+        toc.append([
+            int(entry.get("level") or 2),
+            str(entry.get("title") or "")[:200],
+            page,
+            _toc_dest(page, entry.get("y") or 0),
+        ])
     return toc
 
 
-# 過去に /XYZ → /FitH 変換 (_convert_outlines_to_fith) と精密 y 計算を試したが、
-# 本願 PDF と同じく simple form の /XYZ (page top) で安定動作するため撤去。
-# 履歴: ce474a3 (精密 y), 34bd00e (/FitH 変換) → 7e306d3, 7908576 経て本パッチで撤回。
+# set_toc の detailed form で /XYZ の `to` を段落番号の y 座標にする。
+# PDF-XChange 等ではページ先頭だけでなく、この座標が表示冒頭付近になる。

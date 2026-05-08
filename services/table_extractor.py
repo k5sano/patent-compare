@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import time
@@ -254,10 +255,43 @@ def _parse_claude_result(raw_stdout: str) -> tuple[Optional[dict], dict]:
     if not lines:
         return None, {"error": "empty stdout"}
 
+    raw_text = raw_stdout.strip()
+
+    def _load_payload_text(text: str) -> tuple[Optional[dict], Optional[str]]:
+        if not text:
+            return None, "empty JSON body"
+        try:
+            payload = json.loads(text)
+            return payload, None
+        except json.JSONDecodeError:
+            body_clean = re.sub(r",(\s*[\]\}])", r"\1", text)
+            try:
+                payload = json.loads(body_clean)
+                return payload, None
+            except json.JSONDecodeError as e:
+                return None, str(e)
+
+    # Codex / API 経路では Claude CLI の envelope ではなく、表 JSON 本体が
+    # pretty print された複数行 stdout として返ることがある。
+    payload, err = _load_payload_text(raw_text)
+    if isinstance(payload, dict) and "is_table" in payload:
+        return payload, {}
+
     # 最後の行が --output-format json の最終 result オブジェクト
     try:
         envelope = json.loads(lines[-1])
     except json.JSONDecodeError as e:
+        # envelope でも素の JSON でもない場合、stdout 全体から JSON 本体を拾う。
+        m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
+        body = m.group(1) if m else None
+        if body is None:
+            m2 = re.search(r"(\{.*\})", raw_text, re.DOTALL)
+            body = m2.group(1) if m2 else None
+        if body:
+            payload, body_err = _load_payload_text(body)
+            if isinstance(payload, dict) and "is_table" in payload:
+                return payload, {}
+            return None, {"error": f"body parse error: {body_err}"}
         return None, {"error": f"envelope parse error: {e}"}
 
     # API 呼び出しでは Claude CLI の envelope ではなく、表JSON本体だけが
@@ -288,16 +322,10 @@ def _parse_claude_result(raw_stdout: str) -> tuple[Optional[dict], dict]:
     if not body:
         meta["error"] = "no JSON object in result"
         return None, meta
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        # LLM が稀に trailing comma 付きで返すので strip して再試行
-        body_clean = re.sub(r",(\s*[\]\}])", r"\1", body)
-        try:
-            payload = json.loads(body_clean)
-        except json.JSONDecodeError as e2:
-            meta["error"] = f"body parse error: {e2}"
-            return None, meta
+    payload, body_err = _load_payload_text(body)
+    if payload is None:
+        meta["error"] = f"body parse error: {body_err}"
+        return None, meta
     return payload, meta
 
 
@@ -380,11 +408,14 @@ def extract_table_via_claude(image_path: Path, *, model: str = DEFAULT_MODEL,
         "--allowedTools", "Read",
         "--effort", effort,
     ]
+    env = os.environ.copy()
+    env.pop("CLAUDECODE", None)
+    env.pop("ANTHROPIC_API_KEY", None)
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
             cmd, capture_output=True, timeout=timeout,
-            check=False,
+            check=False, env=env,
         )
     except subprocess.TimeoutExpired:
         return ExtractedTable(

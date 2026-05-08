@@ -1,0 +1,5 @@
+publish/
+src/bin/
+src/obj/
+com.patentcompare.xcbkm-b64-paster.sdPlugin/bin/XcbkmB64Paster.exe
+*.streamDeckPlugin

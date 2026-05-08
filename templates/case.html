@@ -273,8 +273,8 @@
                 title="Step 4 Stage 1 の技術構造化から候補語を一覧表示し、選んだものだけ既存グループに追加します (全消ししない)">
           📋 Step 4 候補から追加
         </button>
-        <button class="btn btn-outline" onclick="reassignKeywordsToTechAnalysis()"
-                title="既存キーワードを Step 4 element の語彙と照合し、一致する element のグループへ移動 (混入を整理)">
+        <button class="btn btn-outline" onclick="rebuildGroupsFromTechAnalysis()"
+                title="Step 4 Stage 1 の技術構造化項目ごとに Step 3 グループを作り直します">
           🔁 Step 4 構造に再配置
         </button>
         <button class="btn btn-outline" onclick="pruneKeywordSegmentIds()"
@@ -715,6 +715,7 @@
           <button class="sr-tool-btn" onclick="srInsertProximity()" title="近傍検索 (A,5C,B/TX) C=語順あり N=語順なし">近傍</button>
           <button class="sr-tool-btn" onclick="srAutoFixFormula()" title="NOT演算子の / → -、キーワード括弧に /TX を付与、全角記号→半角 など">🔧 式を自動修正</button>
           <button class="sr-tool-btn" onclick="srToggleKwHelper()" title="キーワード辞書から挿入">＋ 語を挿入</button>
+          <button class="sr-tool-btn sr-tool-build" onclick="srToggleStructureBuilder()" title="Step 4 Stage 1 の技術構造ごとに、キーワード・分類・Fタームを選んで式を組み立て">構造ビルダー</button>
           <button class="sr-tool-btn sr-tool-build" onclick="srBuildFormulaFromKeywords()" title="Step 3 のキーワードグループから検索式を自動組立 (各グループ AND, グループ内 OR, 末尾に FI/Fターム)">🛠 KW から式を組立</button>
           <span class="sr-tool-sep"></span>
           <button class="sr-tool-btn sr-tool-build" onclick="srBuildL0(false)" title="L0: 出願人 × FI。出願人ポートフォリオから X 文献を狙う最初の式 (狭い)">🏢 L0 出願人×FI</button>
@@ -725,6 +726,47 @@
         <textarea id="sr-formula" rows="6" placeholder="例: (化粧料+メイクアップ+ファンデーション)/CL*(シリコーン+silicone)/CL"
                   style="width:100%; font-family:monospace; font-size:0.9rem; line-height:1.4;"
                   oninput="srOnFormulaChange()"></textarea>
+
+        <!-- 技術構造ベースの検索式ビルダー -->
+        <div id="sr-structure-builder" class="sr-structure-builder">
+          <div class="sr-struct-head">
+            <div>
+              <strong>技術構造から式を組み立て</strong>
+              <span class="sr-struct-sub">各構造行の中は OR、構造行どうしは下の結合方法で連結します</span>
+            </div>
+            <button class="sr-tool-btn" onclick="srToggleStructureBuilder()">閉じる</button>
+          </div>
+          <div class="sr-struct-controls">
+            <label>構造間:
+              <select id="sr-struct-join" onchange="srStructurePreview()">
+                <option value="*" selected>AND (*)</option>
+                <option value="+">OR (+)</option>
+              </select>
+            </label>
+            <label>キーワードタグ:
+              <select id="sr-struct-kw-tag" onchange="srStructurePreview()">
+                <option value="/CL" selected>/CL</option>
+                <option value="/TX">/TX</option>
+                <option value="/AB">/AB</option>
+                <option value="/TI">/TI</option>
+              </select>
+            </label>
+            <button class="sr-tool-btn" onclick="srStructurePreset('keyword')">キーワードのみ</button>
+            <button class="sr-tool-btn" onclick="srStructurePreset('fterm')">Fタームのみ</button>
+            <button class="sr-tool-btn" onclick="srStructurePreset('all')">全部</button>
+            <span id="sr-struct-status" class="sr-struct-status"></span>
+          </div>
+          <div id="sr-structure-builder-body" class="sr-struct-body">
+            Step 3 / Step 4 の構造データを読み込み中...
+          </div>
+          <div class="sr-struct-footer">
+            <code id="sr-struct-preview" class="sr-struct-preview"></code>
+            <div class="sr-struct-actions">
+              <button class="sr-tool-btn sr-tool-build" onclick="srStructureApply(false)">式に反映</button>
+              <button class="sr-tool-btn" onclick="srStructureApply(true)">末尾に追加</button>
+            </div>
+          </div>
+        </div>
 
         <!-- キーワードヘルパー (折りたたみ式) -->
         <div id="sr-kw-helper" class="sr-kw-helper" style="display:none;">

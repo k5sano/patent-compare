@@ -18,6 +18,8 @@
   .topbar a { color:#93c5fd; text-decoration:none; padding:2px 8px;
     border:1px solid var(--border); border-radius:6px; font-size:0.78rem; }
   .topbar a:hover { border-color:var(--accent); color:#bfdbfe; }
+  .topbar a.nav-disabled { opacity:0.35; pointer-events:none; }
+  .nav-pos { color:var(--text2); font-size:0.78rem; padding:0 0.25rem; }
   .badge-src { padding:2px 8px; border-radius:8px; font-size:0.72rem; font-weight:600;
     border:1px solid currentColor; }
   .src-jplatpat { background:rgba(168,85,247,0.15); color:#c084fc; }
@@ -50,7 +52,43 @@
   body.filter-active .legend-clear { background:#7f1d1d; color:#fecaca;
     border-color:#ef4444; }
 
-  .content { max-width:980px; margin:0 auto; padding:1.5rem 2rem; }
+  .viewer-card { display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;
+    padding:0.55rem 1.5rem; background:#111827; border-bottom:1px solid var(--border); }
+  .viewer-screen-actions { display:flex; gap:0.28rem; align-items:center; }
+  .viewer-screen-btn { width:30px; height:28px; border:1px solid var(--border);
+    border-radius:6px; background:var(--surface); color:#cbd5e1; cursor:pointer;
+    font-weight:700; line-height:1; }
+  .viewer-screen-btn:hover { border-color:var(--accent); color:#bfdbfe; }
+  .viewer-screen-btn.active { color:#fff; border-color:currentColor; box-shadow:0 0 0 2px rgba(255,255,255,0.12); }
+  .viewer-screen-btn[data-screening="star"].active { background:#854d0e; color:#fde68a; }
+  .viewer-screen-btn[data-screening="triangle"].active { background:#075985; color:#bae6fd; }
+  .viewer-screen-btn[data-screening="pending"].active { background:#374151; color:#e5e7eb; }
+  .viewer-screen-btn[data-screening="hold"].active { background:#4c1d95; color:#ddd6fe; }
+  .viewer-screen-btn[data-screening="reject"].active { background:#7f1d1d; color:#fecaca; }
+  .viewer-card-main { min-width:18rem; flex:1; display:flex; flex-direction:column; gap:0.15rem; }
+  .viewer-card-title { font-size:0.9rem; font-weight:700; color:var(--text); white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; }
+  .viewer-card-meta { display:flex; gap:0.6rem; flex-wrap:wrap; font-size:0.76rem; color:var(--text2); }
+  .viewer-card-chip { padding:1px 7px; border-radius:999px; background:var(--surface);
+    border:1px solid var(--border); color:#cbd5e1; }
+  .viewer-card-ai { color:#fbbf24; }
+  .viewer-card-saved { color:#86efac; }
+  .viewer-card-status { font-size:0.75rem; color:var(--text2); min-width:4.5rem; text-align:right; }
+
+  .content { max-width:none; margin:0; padding:0; }
+  .viewer-grid { display:grid; grid-template-columns:minmax(420px, 1fr) minmax(360px, 0.92fr);
+    gap:1px; height:calc(100vh - 158px); min-height:420px; background:var(--border); }
+  .pane { min-width:0; overflow:auto; background:var(--bg); padding:1.2rem 1.4rem; }
+  .text-pane { scroll-behavior:smooth; }
+  .visual-pane { scroll-behavior:smooth; }
+  .pane-title { display:flex; align-items:center; justify-content:space-between;
+    gap:0.75rem; margin-bottom:0.8rem; color:var(--text2); font-size:0.78rem; }
+  .pane-title strong { color:var(--text); font-size:0.95rem; }
+  .pane-title-tools { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; justify-content:flex-end; }
+  .kbd-help { color:var(--text2); font-size:0.75rem; white-space:nowrap; }
+  .pane-tool-btn { padding:3px 9px; border:1px solid var(--border); border-radius:6px;
+    background:var(--surface); color:#cbd5e1; cursor:pointer; font-size:0.76rem; }
+  .pane-tool-btn:hover { border-color:var(--accent); color:#bfdbfe; }
   .content h2 { font-size:1.05rem; margin:1.4rem 0 0.5rem;
     padding-bottom:0.3rem; border-bottom:2px solid var(--accent);
     display:flex; align-items:center; gap:0.5rem; }
@@ -63,6 +101,8 @@
   .filter-unit { padding:0.45rem 0.7rem; margin:0.15rem 0; border-radius:5px;
     transition:background 0.12s; }
   .filter-unit:hover { background:var(--surface2); }
+  .filter-unit.nav-focus { outline:2px solid #60a5fa; outline-offset:2px;
+    background:rgba(96,165,250,0.12); }
   .filter-unit-text { white-space:pre-wrap; word-break:break-word; font-size:0.92rem; }
   .para-num { color:#93c5fd; font-weight:700; margin-right:0.5rem; font-family:monospace; }
   .filter-unit.is-claim { background:var(--surface2); border-left:3px solid var(--accent);
@@ -86,12 +126,24 @@
   .empty { color:var(--text2); font-style:italic; padding:0.5rem 0; }
 
   .figures-section { display:flex; flex-direction:column; gap:1rem; padding:0.7rem 0.5rem; }
+  .standalone-table { background:var(--bg); border:1px solid var(--border); border-radius:6px;
+    padding:0.65rem; }
+  .standalone-table h3 { font-size:0.9rem; color:#fb923c; margin-bottom:0.5rem; }
   .patent-fig { background:var(--bg); border:1px solid var(--border); border-radius:6px;
     padding:0.6rem; text-align:center; }
-  .patent-fig a { display:block; }
-  .patent-fig img { max-width:100%; height:auto; background:#fff; border-radius:4px;
+  .fig-img-toolbar { display:flex; justify-content:flex-end; gap:0.35rem; margin-bottom:0.35rem; }
+  .fig-rotate-btn { width:28px; height:28px; display:inline-flex; align-items:center;
+    justify-content:center; border:1px solid var(--border); border-radius:6px;
+    background:var(--surface); color:#cbd5e1; cursor:pointer; font-size:1rem; line-height:1; }
+  .fig-rotate-btn:hover { border-color:var(--accent); color:#bfdbfe; }
+  .patent-fig a.fig-img-link { display:block; overflow:hidden; }
+  .fig-img-frame { display:flex; align-items:center; justify-content:center; width:100%;
+    overflow:hidden; background:#fff; border-radius:4px; min-height:90px; }
+  .fig-img-frame.is-rotated { height:var(--rot-frame-h, 70vh); }
+  .patent-fig img.patent-img { max-width:100%; height:auto; background:#fff; border-radius:4px;
     cursor:zoom-in; transition:transform 0.15s; }
-  .patent-fig:hover img { transform:scale(1.005); box-shadow:0 4px 16px rgba(0,0,0,0.4); }
+  .fig-img-frame.is-rotated img.patent-img { max-width:none; width:var(--rot-img-w, auto); }
+  .patent-fig:hover .fig-img-frame { box-shadow:0 4px 16px rgba(0,0,0,0.4); }
   .patent-fig figcaption { margin-top:0.5rem; font-size:0.82rem; color:var(--text2);
     text-align:left; line-height:1.5; padding:0 0.4rem; }
   .patent-fig figcaption strong { color:var(--accent); margin-right:0.3rem; }
@@ -106,6 +158,13 @@
     font-weight:600; text-align:left; vertical-align:top; white-space:nowrap; color:#cbd5e1; }
   .fig-table td { padding:4px 8px; border:1px solid #334155; vertical-align:top;
     color:var(--text); }
+  .fig-vertical-blocks { display:flex; flex-direction:column; gap:0.65rem; margin-top:0.5rem; }
+  .fig-vblock { border:1px solid #334155; border-radius:6px; overflow:hidden;
+    background:rgba(15,23,42,0.65); text-align:left; }
+  .fig-vblock h4 { margin:0; padding:0.35rem 0.55rem; font-size:0.82rem;
+    color:#fdba74; background:var(--surface); border-bottom:1px solid #334155; }
+  .fig-vtable th { width:42%; white-space:normal; color:#cbd5e1; }
+  .fig-vtable td { width:58%; word-break:break-word; }
   /* 図表セクションも絞込対象 (キーワードフィルタで該当しない図表は隠す) */
   body.filter-active .figures-section .filter-unit:not(.unit-match) { display:none; }
   body.filter-active .figures-section .filter-unit.unit-match { background:rgba(251,146,60,0.04); }
@@ -114,6 +173,10 @@
     .topbar a, .legend-clear { display:none; }
     body { background:#fff; color:#000; }
     .legend { background:#eee; }
+  }
+  @media (max-width: 1100px) {
+    .viewer-grid { grid-template-columns:1fr; height:auto; }
+    .pane { overflow:visible; }
   }
 </style>
 </head>
@@ -125,6 +188,11 @@
     {% if source_url %}<a href="{{ source_url }}" target="_blank" rel="noopener">{{ source_label }} で開く</a>{% endif %}
     {% if google_url %}<a href="{{ google_url }}" target="_blank" rel="noopener">Google Patents</a>{% endif %}
     {% if jplatpat_url %}<a href="{{ jplatpat_url }}" target="_blank" rel="noopener">J-PlatPat</a>{% endif %}
+    <span class="nav-pos">{{ nav.position if nav else '' }}</span>
+    <a id="nav-prev-doc" class="{{ '' if nav and nav.prev_url else 'nav-disabled' }}"
+       href="{{ nav.prev_url if nav else '' }}" title="← 前の文献">← 前</a>
+    <a id="nav-next-doc" class="{{ '' if nav and nav.next_url else 'nav-disabled' }}"
+       href="{{ nav.next_url if nav else '' }}" title="→ 次の文献">次 →</a>
     <a href="javascript:window.close()">閉じる</a>
   </div>
 </div>
@@ -147,7 +215,49 @@
   {% endif %}
 </div>
 
-<div class="content">
+{% if hit_card %}
+<div class="viewer-card"
+     data-case-id="{{ case_id }}"
+     data-run-id="{{ hit_card.run_id }}"
+     data-patent-id="{{ hit_card.patent_id }}"
+     data-screening="{{ hit_card.screening }}">
+  <div class="viewer-screen-actions" aria-label="スクリーニング">
+    {% for s, label in [('star','★'), ('triangle','△'), ('pending','—'), ('hold','…'), ('reject','×')] %}
+      <button type="button"
+              class="viewer-screen-btn {{ 'active' if hit_card.screening == s else '' }}"
+              data-screening="{{ s }}"
+              title="{{ s }}"
+              onclick="setViewerScreening('{{ s }}')">{{ label }}</button>
+    {% endfor %}
+  </div>
+  <div class="viewer-card-main">
+    <div class="viewer-card-title">{{ hit_card.title or title or patent_id }}</div>
+    <div class="viewer-card-meta">
+      <span>{{ hit_card.patent_id }}</span>
+      {% if hit_card.publication_date %}<span>{{ hit_card.publication_date }}</span>{% endif %}
+      {% if hit_card.applicant %}<span>{{ hit_card.applicant }}</span>{% endif %}
+      {% if hit_card.ipc %}<span class="viewer-card-chip">IPC {{ hit_card.ipc[:3]|join(' ') }}</span>{% endif %}
+      {% if hit_card.fi %}<span class="viewer-card-chip">FI {{ hit_card.fi[:2]|join(' ') }}</span>{% endif %}
+      {% if hit_card.ai_score is not none %}<span class="viewer-card-ai">AI {{ hit_card.ai_score }}</span>{% endif %}
+      {% if hit_card.downloaded_as_citation %}<span class="viewer-card-saved">引用登録済</span>{% endif %}
+      <span class="viewer-card-chip">{{ hit_card.run_label or 'run' }} / {{ hit_card.run_source or '-' }}</span>
+    </div>
+    {% if hit_card.ai_reason %}
+      <div class="viewer-card-meta viewer-card-ai">AI: {{ hit_card.ai_reason }}</div>
+    {% endif %}
+  </div>
+  <div class="viewer-card-status" id="viewer-card-status">保存済</div>
+</div>
+{% endif %}
+
+<div class="content viewer-grid"
+     data-prev-url="{{ nav.prev_url if nav else '' }}"
+     data-next-url="{{ nav.next_url if nav else '' }}">
+  <main class="pane text-pane" id="text-pane">
+  <div class="pane-title">
+    <strong>テキスト</strong>
+    <span class="kbd-help">←/→ 文献移動　↑/↓ 段落移動</span>
+  </div>
   {% if abstract_unit %}
   <h2>要約 <span class="sec-count" id="sec-count-abs"></span></h2>
   <div class="section">
@@ -156,43 +266,6 @@
       <div class="filter-unit-text">{{ abstract_unit.html|safe }}</div>
     </div>
     <div class="empty-section">この絞込条件に合致する内容なし。</div>
-  </div>
-  {% endif %}
-
-  {% if images %}
-  <h2>図表 <span class="sec-count">({{ images|length }} 件)</span></h2>
-  <div class="section figures-section">
-    {% for im in images %}
-      <figure class="patent-fig filter-unit {{ 'unit-no-match' if not (im.extracted and im.extracted.groups) else '' }}"
-              data-groups="{{ (im.extracted.groups if im.extracted else [])|join(' ') }}">
-        <a href="{{ im.src }}" target="_blank" rel="noopener" title="クリックで原寸表示">
-          <img src="{{ im.src }}" alt="{{ im.alt|default('') }}" loading="lazy">
-        </a>
-        <figcaption>
-          {% if im.label %}<strong>{{ im.label }}</strong> — {% endif %}
-          {{ im.context|default('', true) }}
-        </figcaption>
-        {% if im.extracted %}
-          <details class="fig-extracted" open>
-            <summary>📊 抽出データ ({{ im.extracted.n_rows }} 行)</summary>
-            <div class="fig-table-wrap">
-              <table class="fig-table">
-                {% if im.extracted.headers_html %}
-                <thead><tr>
-                  {% for h in im.extracted.headers_html %}<th>{{ h|safe }}</th>{% endfor %}
-                </tr></thead>
-                {% endif %}
-                <tbody>
-                  {% for row in im.extracted.rows_html %}
-                    <tr>{% for c in row %}<td>{{ c|safe }}</td>{% endfor %}</tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </details>
-        {% endif %}
-      </figure>
-    {% endfor %}
   </div>
   {% endif %}
 
@@ -226,22 +299,142 @@
   {% if not abstract_unit and not claims_units and not para_units %}
   <div class="empty">本文データがありません。{{ patent_id }} の全文取得に失敗した可能性があります。</div>
   {% endif %}
+  </main>
+
+  <aside class="pane visual-pane" id="visual-pane">
+  <div class="pane-title">
+    <strong>図・表</strong>
+    <span class="pane-title-tools">
+      <button type="button" class="pane-tool-btn" onclick="rotateAllPatentImages()" title="表示中の画像をまとめて90度回転し、次の文献にも既定回転として引き継ぐ">一括↻</button>
+      <span class="kbd-help">画像クリックで原寸表示</span>
+    </span>
+  </div>
+  {% if images or standalone_tables %}
+  <div class="section figures-section">
+    {% for im in images %}
+      <figure class="patent-fig filter-unit {{ 'unit-no-match' if not (im.extracted and im.extracted.groups) else '' }}"
+              data-groups="{{ (im.extracted.groups if im.extracted else [])|join(' ') }}">
+        {% set im_label = im.label|default('', true) %}
+        {% set im_context = im.context|default('', true) %}
+        <div class="fig-img-toolbar">
+          <button type="button" class="fig-rotate-btn" title="画像を90度回転" onclick="rotatePatentImage(this)">↻</button>
+        </div>
+        <a class="fig-img-link" href="{{ im.src }}" target="_blank" rel="noopener" title="クリックで原寸表示">
+          <span class="fig-img-frame"
+                data-tableish="{{ '1' if ('表' in im_label or '表' in im_context or im.extracted) else '0' }}">
+            <img class="patent-img" src="{{ im.src }}" alt="{{ im.alt|default('') }}"
+                 loading="lazy" onload="initPatentImageRotation(this)">
+          </span>
+        </a>
+        <figcaption>
+          {% if im.label %}<strong>{{ im.label }}</strong> — {% endif %}
+          {{ im.context|default('', true) }}
+        </figcaption>
+        {% if im.extracted %}
+          <details class="fig-extracted" open>
+            <summary>抽出データ ({{ im.extracted.n_rows }} 行{% if im.extracted.mode == 'vertical' %}・縦表示{% endif %})</summary>
+            {% if im.extracted.mode == 'vertical' %}
+              <div class="fig-vertical-blocks">
+                {% for b in im.extracted.vertical_blocks %}
+                  <div class="fig-vblock">
+                    <h4>{{ b.title|safe }}</h4>
+                    <table class="fig-table fig-vtable"><tbody>
+                      {% for p in b.pairs %}
+                        <tr><th>{{ p.label|safe }}</th><td>{{ p.value|safe }}</td></tr>
+                      {% endfor %}
+                    </tbody></table>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="fig-table-wrap">
+                <table class="fig-table">
+                  {% if im.extracted.headers_html %}
+                  <thead><tr>
+                    {% for h in im.extracted.headers_html %}<th>{{ h|safe }}</th>{% endfor %}
+                  </tr></thead>
+                  {% endif %}
+                  <tbody>
+                    {% for row in im.extracted.rows_html %}
+                      <tr>{% for c in row %}<td>{{ c|safe }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
+            {% endif %}
+          </details>
+        {% endif %}
+      </figure>
+    {% endfor %}
+
+    {% for t in standalone_tables %}
+      <div class="standalone-table filter-unit {{ 'unit-no-match' if not t.groups else '' }}"
+           data-groups="{{ t.groups|join(' ') }}">
+        <h3>{{ t.title }} <span class="sec-count">({{ t.n_rows }} 行{% if t.mode == 'vertical' %}・縦表示{% endif %})</span></h3>
+        {% if t.mode == 'vertical' %}
+          <div class="fig-vertical-blocks">
+            {% for b in t.vertical_blocks %}
+              <div class="fig-vblock">
+                <h4>{{ b.title|safe }}</h4>
+                <table class="fig-table fig-vtable"><tbody>
+                  {% for p in b.pairs %}
+                    <tr><th>{{ p.label|safe }}</th><td>{{ p.value|safe }}</td></tr>
+                  {% endfor %}
+                </tbody></table>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="fig-table-wrap">
+            <table class="fig-table">
+              {% if t.headers_html %}
+              <thead><tr>{% for h in t.headers_html %}<th>{{ h|safe }}</th>{% endfor %}</tr></thead>
+              {% endif %}
+              <tbody>
+                {% for row in t.rows_html %}
+                  <tr>{% for c in row %}<td>{{ c|safe }}</td>{% endfor %}</tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+    <div class="empty">この文献には表示できる図・抽出表がありません。</div>
+  {% endif %}
+  </aside>
 </div>
 
 <script>
+const VIEW_CASE_ID = {{ case_id|tojson }};
+const FILTER_KEY = `pc-hit-filter:${VIEW_CASE_ID}`;
+const ROT_KEY_PREFIX = `pc-hit-rotation:${VIEW_CASE_ID}:`;
+const ROT_DEFAULT_KEY = `pc-hit-rotation-default:${VIEW_CASE_ID}`;
 let _activeFilter = null;
 function toggleFilter(gid) {
+  const gidStr = gid === null ? null : String(gid);
   // null をクリックすると解除。同じ gid を再度クリックしても解除。
-  if (gid === null || _activeFilter === gid) {
+  if (gidStr === null || _activeFilter === gidStr) {
     _activeFilter = null;
+    try { localStorage.removeItem(FILTER_KEY); } catch (_) { /* ignore */ }
   } else {
-    _activeFilter = gid;
+    _activeFilter = gidStr;
+    try { localStorage.setItem(FILTER_KEY, gidStr); } catch (_) { /* ignore */ }
   }
   applyFilter();
 }
 
 function applyFilter() {
   const body = document.body;
+  if (_activeFilter !== null) {
+    const chip = document.querySelector(`.legend-chip[data-gid="${CSS.escape(String(_activeFilter))}"]`);
+    if (!chip || chip.disabled) {
+      _activeFilter = null;
+      try { localStorage.removeItem(FILTER_KEY); } catch (_) { /* ignore */ }
+    }
+  }
   body.classList.toggle('filter-active', _activeFilter !== null);
   // legend chip の active 状態
   document.querySelectorAll('.legend-chip').forEach(c => {
@@ -277,6 +470,225 @@ function applyFilter() {
     }
   });
 }
+
+function restoreViewerFilter() {
+  try {
+    const stored = localStorage.getItem(FILTER_KEY);
+    if (!stored) return;
+    const chip = document.querySelector(`.legend-chip[data-gid="${CSS.escape(stored)}"]`);
+    if (!chip || chip.disabled) {
+      localStorage.removeItem(FILTER_KEY);
+      return;
+    }
+    _activeFilter = stored;
+    applyFilter();
+  } catch (_) {
+    _activeFilter = null;
+  }
+}
+
+async function setViewerScreening(screening) {
+  const card = document.querySelector('.viewer-card');
+  if (!card) return;
+  const caseId = card.dataset.caseId || '';
+  const runId = card.dataset.runId || '';
+  const patentId = card.dataset.patentId || '';
+  const status = document.getElementById('viewer-card-status');
+  const prev = card.dataset.screening || 'pending';
+  if (!caseId || !runId || !patentId) {
+    if (status) status.textContent = 'runなし';
+    return;
+  }
+
+  card.dataset.screening = screening;
+  document.querySelectorAll('.viewer-screen-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.screening === screening);
+  });
+  if (status) status.textContent = '保存中...';
+
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(caseId)}/search-run/${encodeURIComponent(runId)}/screening`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patent_id: patentId, screening}),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    if (status) status.textContent = '保存済';
+  } catch (e) {
+    card.dataset.screening = prev;
+    document.querySelectorAll('.viewer-screen-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.screening === prev);
+    });
+    if (status) status.textContent = '保存失敗';
+    console.warn('viewer screening save error', e);
+  }
+}
+
+let _navUnitIndex = -1;
+
+function _visibleTextUnits() {
+  return Array.from(document.querySelectorAll('#text-pane .filter-unit'))
+    .filter(u => getComputedStyle(u).display !== 'none');
+}
+
+function focusTextUnit(delta) {
+  const units = _visibleTextUnits();
+  if (!units.length) return;
+  units.forEach(u => u.classList.remove('nav-focus'));
+  if (_navUnitIndex < 0) {
+    const pane = document.getElementById('text-pane');
+    const paneTop = pane ? pane.getBoundingClientRect().top : 0;
+    _navUnitIndex = Math.max(0, units.findIndex(u => u.getBoundingClientRect().bottom > paneTop + 16));
+  }
+  _navUnitIndex = Math.max(0, Math.min(units.length - 1, _navUnitIndex + delta));
+  const target = units[_navUnitIndex];
+  target.classList.add('nav-focus');
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function _rotationKeyForImage(img) {
+  return ROT_KEY_PREFIX + (img.currentSrc || img.src || '');
+}
+
+function _readStoredRotation(img) {
+  try {
+    const v = localStorage.getItem(_rotationKeyForImage(img));
+    if (v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? (((n % 4) + 4) % 4) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _writeStoredRotation(img, rotation) {
+  try {
+    localStorage.setItem(_rotationKeyForImage(img), String((((rotation % 4) + 4) % 4)));
+  } catch (_) { /* ignore */ }
+}
+
+function _readDefaultRotation() {
+  try {
+    const v = localStorage.getItem(ROT_DEFAULT_KEY);
+    if (v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? (((n % 4) + 4) % 4) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _writeDefaultRotation(rotation) {
+  try {
+    localStorage.setItem(ROT_DEFAULT_KEY, String((((rotation % 4) + 4) % 4)));
+  } catch (_) { /* ignore */ }
+}
+
+function _setPatentImageRotation(img, rotation, persist = false) {
+  if (!img || !img.naturalWidth || !img.naturalHeight) return;
+  const frame = img.closest('.fig-img-frame');
+  if (!frame) return;
+  const q = ((rotation % 4) + 4) % 4;
+  img.dataset.rotation = String(q);
+  img.style.transform = `rotate(${q * 90}deg)`;
+  if (persist) _writeStoredRotation(img, q);
+
+  if (q % 2 === 1) {
+    const pane = img.closest('.visual-pane') || frame.parentElement;
+    const frameWidth = Math.max(240, (pane ? pane.clientWidth : frame.clientWidth) - 36);
+    const maxFrameHeight = Math.max(360, window.innerHeight * 0.82);
+    const scale = Math.min(frameWidth / img.naturalHeight, maxFrameHeight / img.naturalWidth);
+    const imgWidth = Math.max(120, Math.floor(img.naturalWidth * scale));
+    frame.classList.add('is-rotated');
+    frame.style.setProperty('--rot-frame-h', `${Math.ceil(imgWidth) + 12}px`);
+    frame.style.setProperty('--rot-img-w', `${imgWidth}px`);
+  } else {
+    frame.classList.remove('is-rotated');
+    frame.style.removeProperty('--rot-frame-h');
+    frame.style.removeProperty('--rot-img-w');
+  }
+}
+
+function initPatentImageRotation(img) {
+  if (!img || img.dataset.rotationInitialized === '1') return;
+  img.dataset.rotationInitialized = '1';
+  const frame = img.closest('.fig-img-frame');
+  const tableish = frame && frame.dataset.tableish === '1';
+  const ratio = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+  const stored = _readStoredRotation(img);
+  if (stored !== null) {
+    _setPatentImageRotation(img, stored);
+    return;
+  }
+  const defaultRotation = _readDefaultRotation();
+  if (tableish && defaultRotation !== null) {
+    _setPatentImageRotation(img, defaultRotation);
+    return;
+  }
+  // Google Patents の表画像は、表だけ横向きに切り出されることが多い。
+  // 表ラベル付きで極端に縦長でない画像は、初期表示だけ左回転で読みやすくする。
+  const shouldAutoRotate = tableish && ratio > 0.72;
+  _setPatentImageRotation(img, shouldAutoRotate ? 3 : 0);
+}
+
+function rotatePatentImage(btn) {
+  const fig = btn && btn.closest('.patent-fig');
+  const img = fig && fig.querySelector('img.patent-img');
+  if (!img) return;
+  const current = Number(img.dataset.rotation || 0);
+  _setPatentImageRotation(img, current + 1, true);
+}
+
+function rotateAllPatentImages() {
+  const imgs = Array.from(document.querySelectorAll('img.patent-img'))
+    .filter(img => img.naturalWidth && img.naturalHeight);
+  if (!imgs.length) return;
+  const nextForDefault = (Number(imgs[0].dataset.rotation || 0) + 1) % 4;
+  imgs.forEach(img => {
+    const current = Number(img.dataset.rotation || 0);
+    _setPatentImageRotation(img, current + 1, true);
+  });
+  _writeDefaultRotation(nextForDefault);
+}
+
+let _resizeTimer = null;
+window.addEventListener('resize', () => {
+  window.clearTimeout(_resizeTimer);
+  _resizeTimer = window.setTimeout(() => {
+    document.querySelectorAll('img.patent-img[data-rotation]').forEach(img => {
+      _setPatentImageRotation(img, Number(img.dataset.rotation || 0));
+    });
+  }, 120);
+});
+
+restoreViewerFilter();
+
+document.addEventListener('keydown', (e) => {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+  if (['input', 'textarea', 'select'].includes(tag)) return;
+  const grid = document.querySelector('.viewer-grid');
+  if (!grid) return;
+  if (e.key === 'ArrowLeft') {
+    const url = grid.dataset.prevUrl || '';
+    if (url) {
+      e.preventDefault();
+      location.href = url;
+    }
+  } else if (e.key === 'ArrowRight') {
+    const url = grid.dataset.nextUrl || '';
+    if (url) {
+      e.preventDefault();
+      location.href = url;
+    }
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    focusTextUnit(1);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    focusTextUnit(-1);
+  }
+});
 </script>
 </body>
 </html>

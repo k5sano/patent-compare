@@ -443,7 +443,7 @@ def add_from_tech_analysis_route(case_id):
 
 @app.route("/case/<case_id>/keywords/reassign-to-tech-analysis", methods=["POST"])
 def reassign_keywords_to_tech_analysis_route(case_id):
-    """既存キーワードを各 element の terms と一致するグループへ移動 (混入の救済)。"""
+    """旧API互換: Step 4 技術構造化項目を正として keywords.json を再構築する。"""
     from services.keyword_service import reassign_keywords_to_tech_analysis
     return _svc_response(reassign_keywords_to_tech_analysis(case_id))
 
@@ -492,6 +492,12 @@ def fterm_candidates(case_id):
     return _svc_response(fterm_candidates(case_id))
 
 
+@app.route("/case/<case_id>/keywords/fi/candidates", methods=["GET"])
+def fi_candidates(case_id):
+    from services.keyword_service import fi_candidates
+    return _svc_response(fi_candidates(case_id))
+
+
 @app.route("/case/<case_id>/hongan/classification/fetch", methods=["POST"])
 def fetch_hongan_classification(case_id):
     """本願の公開番号で J-PlatPat に問い合わせて書誌情報 (IPC/FI/Fターム/テーマ) を取得・保存"""
@@ -511,6 +517,20 @@ def delete_fterm(case_id):
     from services.keyword_service import delete_fterm
     data = request.get_json() or {}
     return _svc_response(delete_fterm(case_id, data.get("group_id"), data.get("code")))
+
+
+@app.route("/case/<case_id>/keywords/fi/add", methods=["POST"])
+def add_fi(case_id):
+    from services.keyword_service import add_fi
+    data = request.get_json() or {}
+    return _svc_response(add_fi(case_id, data.get("group_id"), data.get("code"), data.get("desc", "")))
+
+
+@app.route("/case/<case_id>/keywords/fi/delete", methods=["POST"])
+def delete_fi(case_id):
+    from services.keyword_service import delete_fi
+    data = request.get_json() or {}
+    return _svc_response(delete_fi(case_id, data.get("group_id"), data.get("code")))
 
 
 @app.route("/case/<case_id>/keywords/segments", methods=["GET"])
@@ -1370,8 +1390,68 @@ def hit_full_text_view(case_id, patent_id):
     """
     from services.search_run_service import (
         get_hit_text, _default_text_source,
-        pkm_build_index, pkm_highlight_python, pkm_group_color,
+        list_runs, load_run, pkm_build_index, pkm_highlight_python, pkm_group_color,
     )
+    run_id = request.args.get("run_id") or ""
+    nav = {"prev_url": "", "next_url": "", "position": ""}
+    hit_card = None
+
+    def _set_nav_from_run(run_data, rid):
+        nonlocal hit_card
+        hit_ids = [
+            h.get("patent_id") for h in (run_data.get("hits") or [])
+            if h.get("patent_id")
+        ]
+        if patent_id not in hit_ids:
+            return False
+        pos = hit_ids.index(patent_id)
+        current = (run_data.get("hits") or [])[pos] or {}
+        hit_card = {
+            "run_id": rid,
+            "run_label": run_data.get("formula_level") or "",
+            "run_source": run_data.get("source") or "",
+            "patent_id": current.get("patent_id") or patent_id,
+            "title": current.get("title") or "",
+            "applicant": current.get("applicant") or "",
+            "publication_date": current.get("publication_date") or "",
+            "ipc": current.get("ipc") or [],
+            "fi": current.get("fi") or [],
+            "ai_score": current.get("ai_score"),
+            "ai_reason": current.get("ai_reason") or "",
+            "screening": current.get("screening") or "pending",
+            "downloaded_as_citation": bool(current.get("downloaded_as_citation")),
+        }
+        nav["position"] = f"{pos + 1} / {len(hit_ids)}"
+        nav["prev_url"] = ""
+        nav["next_url"] = ""
+        if pos > 0:
+            nav["prev_url"] = url_for(
+                "hit_full_text_view",
+                case_id=case_id,
+                patent_id=hit_ids[pos - 1],
+                run_id=rid,
+            )
+        if pos + 1 < len(hit_ids):
+            nav["next_url"] = url_for(
+                "hit_full_text_view",
+                case_id=case_id,
+                patent_id=hit_ids[pos + 1],
+                run_id=rid,
+            )
+        return True
+
+    try:
+        if run_id:
+            _set_nav_from_run(load_run(case_id, run_id) or {}, run_id)
+        if not nav["position"]:
+            # 古いタブや直接URLで run_id が無い場合でも、最新の検索runから前後移動を復元する。
+            for r in list_runs(case_id):
+                rid = r.get("run_id")
+                if rid and _set_nav_from_run(load_run(case_id, rid) or {}, rid):
+                    break
+    except Exception:
+        nav = {"prev_url": "", "next_url": "", "position": ""}
+
     hit = get_hit_text(case_id, patent_id)
     if not hit:
         # キャッシュ無し: 即座に取得中ローダーページを返し、ブラウザ側で fetch → reload
@@ -1387,6 +1467,7 @@ def hit_full_text_view(case_id, patent_id):
     if "error" in hit and not hit.get("description") and not hit.get("claims"):
         return render_template(
             "hit_view.html",
+            case_id=case_id,
             patent_id=patent_id,
             title="（取得失敗）",
             source="google",
@@ -1398,6 +1479,10 @@ def hit_full_text_view(case_id, patent_id):
             abstract_unit={"html": f'<div class="empty">エラー: {hit.get("error","")}</div>', "groups": []},
             claims_units=[],
             para_units=[],
+            images=[],
+            standalone_tables=[],
+            nav=nav,
+            hit_card=hit_card,
             total_hits=0,
             total_chars=0,
         )
@@ -1495,6 +1580,7 @@ def hit_full_text_view(case_id, patent_id):
     # 抽出済みの表データを image src で対応付ける (image_records ベース抽出時のみ)
     extracted_tables_by_src: dict = {}
     extracted_tables_by_label: dict = {}
+    extracted_tables_all: list = []
     try:
         from services.case_service import get_citation_tables
         ct_res, ct_code = get_citation_tables(case_id, patent_id)
@@ -1502,6 +1588,7 @@ def hit_full_text_view(case_id, patent_id):
             for t in (ct_res.get("data", {}).get("tables") or []):
                 if not t.get("is_table"):
                     continue
+                extracted_tables_all.append(t)
                 src_url = t.get("src")
                 if src_url:
                     extracted_tables_by_src[src_url] = t
@@ -1512,8 +1599,41 @@ def hit_full_text_view(case_id, patent_id):
     except Exception:
         pass
 
+    def _build_table_display(headers_h, rows_h):
+        """右ペインで読みやすい表示形に整える。横に広い表は列単位の縦表示へ変換。"""
+        headers_h = list(headers_h or [])
+        rows_h = [list(r or []) for r in (rows_h or [])]
+        ncols = max([len(headers_h)] + [len(r) for r in rows_h] + [0])
+        if ncols < 7:
+            return {
+                "mode": "table",
+                "headers_html": headers_h,
+                "rows_html": rows_h,
+                "vertical_blocks": [],
+            }
+
+        blocks = []
+        for ci in range(1, ncols):
+            title = headers_h[ci] if ci < len(headers_h) and headers_h[ci] else f"列{ci + 1}"
+            pairs = []
+            for ri, row in enumerate(rows_h):
+                label = row[0] if row and row[0] else f"行{ri + 1}"
+                value = row[ci] if ci < len(row) else ""
+                if label or value:
+                    pairs.append({"label": label, "value": value})
+            if pairs:
+                blocks.append({"title": title, "pairs": pairs})
+
+        return {
+            "mode": "vertical",
+            "headers_html": headers_h,
+            "rows_html": rows_h,
+            "vertical_blocks": blocks,
+        }
+
     # images に表抽出結果を埋め込む (テンプレート側で参照)。
     # 各セルにも PKM ハイライトを適用してハイライト数を全体カウントに合算。
+    matched_table_ids: set[int] = set()
     for im in images:
         src_url = im.get("src")
         match = extracted_tables_by_src.get(src_url) if src_url else None
@@ -1524,6 +1644,7 @@ def hit_full_text_view(case_id, patent_id):
                 match = extracted_tables_by_label.get(lbl)
         if not match:
             continue
+        matched_table_ids.add(id(match))
         headers = match.get("headers") or []
         rows = match.get("rows") or []
         # ヘッダ・各セルにハイライト適用
@@ -1545,16 +1666,52 @@ def hit_full_text_view(case_id, patent_id):
                         unit_groups.add(int(g))
                 cells_h.append(ch["html"])
             rows_h.append(cells_h)
+        display = _build_table_display(headers_h, rows_h)
         im["extracted"] = {
             "title": match.get("title") or im.get("label"),
-            "headers_html": headers_h,
-            "rows_html": rows_h,
             "n_rows": len(rows),
             "groups": sorted(unit_groups),
+            **display,
         }
+
+    standalone_tables = []
+    for t in extracted_tables_all:
+        if id(t) in matched_table_ids:
+            continue
+        headers = t.get("headers") or []
+        rows = t.get("rows") or []
+        headers_h = []
+        unit_groups: set = set()
+        for h in headers:
+            hh = pkm_highlight_python(str(h), index)
+            _accum(hh["counts"])
+            for g in hh["counts"].keys():
+                if g is not None:
+                    unit_groups.add(int(g))
+            headers_h.append(hh["html"])
+        rows_h = []
+        for row in rows:
+            cells = row.get("cells") or []
+            cells_h = []
+            for c in cells:
+                ch = pkm_highlight_python(str(c), index)
+                _accum(ch["counts"])
+                for g in ch["counts"].keys():
+                    if g is not None:
+                        unit_groups.add(int(g))
+                cells_h.append(ch["html"])
+            rows_h.append(cells_h)
+        display = _build_table_display(headers_h, rows_h)
+        standalone_tables.append({
+            "title": t.get("title") or t.get("caption_label") or "抽出表",
+            "n_rows": len(rows),
+            "groups": sorted(unit_groups),
+            **display,
+        })
 
     return render_template(
         "hit_view.html",
+        case_id=case_id,
         patent_id=patent_id,
         title=hit.get("title") or "",
         source=src,
@@ -1567,6 +1724,9 @@ def hit_full_text_view(case_id, patent_id):
         claims_units=claims_units,
         para_units=para_units,
         images=images,
+        standalone_tables=standalone_tables,
+        nav=nav,
+        hit_card=hit_card,
         total_hits=sum(counts_total.values()),
         total_chars=total_chars,
     )
@@ -1699,6 +1859,22 @@ def search_run_ai_score(case_id, run_id):
     if not data:
         return jsonify({"error": "検索ランが見つかりません"}), 404
     return jsonify({"success": True, "run": data})
+
+
+@app.route("/case/<case_id>/search-run/<run_id>/ai-score-stream", methods=["POST"])
+def search_run_ai_score_stream(case_id, run_id):
+    """AI関連度スコアを 1 件ずつ返す NDJSON ストリーム。"""
+    from services.search_run_service import ai_score_run_stream
+    body = request.get_json(silent=True) or {}
+    raw_limit = body.get("limit")
+    limit = int(raw_limit) if raw_limit not in (None, "", 0) else None
+    model = body.get("model")
+
+    def generate():
+        for event in ai_score_run_stream(case_id, run_id, limit=limit, model=model):
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 @app.route("/case/<case_id>/search-run/feedback/not-terms", methods=["GET"])
@@ -2001,6 +2177,17 @@ if __name__ == "__main__":
     (PROJECT_ROOT / "templates").mkdir(exist_ok=True)
     print("PatentCompare Web GUI")
     print(f"http://{_app_cfg.host}:{_app_cfg.port}  (debug={_app_cfg.debug})")
+    try:
+        from modules.claude_client import llm_status as _llm_status
+        _st = _llm_status()
+        print(
+            "LLM status: "
+            f"claude={_st.get('claude_available')} "
+            f"codex={_st.get('codex_available')} "
+            f"glm={_st.get('glm_available')}"
+        )
+    except Exception as e:
+        print(f"LLM status: unavailable ({e})")
     if _app_cfg.host == "0.0.0.0":
         print(f"   LAN access: 他端末からは http://<このPCのLAN IP>:{_app_cfg.port}")
         if _app_cfg.lan_password:

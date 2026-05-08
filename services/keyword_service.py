@@ -344,104 +344,18 @@ def add_tech_analysis_keywords(case_id, selections):
 
 
 def reassign_keywords_to_tech_analysis(case_id):
-    """既存の keywords.json を Step 4 element の terms と照合し、
-    各キーワードを **語彙が一致する element のグループ** へ移動する。
+    """旧 API 互換。
 
-    - element ごとに label 一致グループを確保 (なければ新規作成)
-    - 全グループの keywords を集めて、term が含まれる element のグループへ移動
-    - どの element にも含まれない term は元のグループに残す
-    - search_codes (F-term) は移動しない (グループの位置情報なのでそのまま)
-    - 結果としてキーワードは消えず、所属だけが整理される
+    以前は「語彙一致したキーワードだけを既存グループ間で移動」していたが、
+    ユーザー意図は Step 4 Stage 1 の技術構造化項目そのものを Step 3
+    グループの単位にすることなので、現在は再構築処理へ委譲する。
     """
-    from services.case_service import get_case_dir as _gcd
-    case_dir = _gcd(case_id)
-    if not load_case_meta(case_id):
-        return {"error": "案件が見つかりません"}, 404
-
-    ta_path = case_dir / "search" / "tech_analysis.json"
-    if not ta_path.exists():
-        return {"error": "Step 4 Stage 1 の技術構造化が未実行です。"}, 400
-    try:
-        with open(ta_path, "r", encoding="utf-8") as f:
-            ta = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        return {"error": f"tech_analysis.json 読み込みエラー: {e}"}, 500
-    elements = ta.get("elements") or {}
-    if not elements:
-        return {"error": "tech_analysis.json に elements がありません"}, 400
-
-    existing, kw_path = _load_keywords(case_id)
-    existing = list(existing or [])
-    if kw_path is None:
-        kw_path = case_dir / "keywords.json"
-
-    # element ラベル -> 候補語の正規化集合 (大文字小文字無視)
-    def _norm(s):
-        return (s or "").strip().lower()
-
-    elem_term_index = []  # [(elem_label, seg_ids, normalized_term_set)]
-    for key, elem in elements.items():
-        elem_label = (elem.get("label") or key).strip() or key
-        seg_ids = list(elem.get("segment_ids") or [])
-        term_set = {_norm(c["term"]) for c in _collect_terms_from_element(elem)}
-        elem_term_index.append((elem_label, seg_ids, term_set))
-
-    # element ごとに「ラベル一致グループ」を確保 (なければ末尾に新規追加)
-    next_id = max((g.get("group_id", 0) for g in existing), default=0) + 1
-    elem_target = {}  # elem_label -> group dict
-    for elem_label, seg_ids, _ in elem_term_index:
-        target = None
-        for g in existing:
-            if (g.get("label") or "").strip() == elem_label:
-                target = g
-                break
-        if target is None:
-            target = {
-                "group_id": next_id,
-                "label": elem_label,
-                "segment_ids": seg_ids,
-                "keywords": [],
-                "search_codes": {},
-            }
-            existing.append(target)
-            next_id += 1
-        elem_target[elem_label] = target
-
-    # 全 keywords を走査し、term が含まれる element の target へ移動
-    moved = 0
-    kept = 0
-    for src in existing:
-        kept_kws = []
-        for kw in list(src.get("keywords") or []):
-            term_n = _norm(kw.get("term"))
-            if not term_n:
-                continue
-            # 一致 element 検索 (最初に見つかったものを採用)
-            dest = None
-            for elem_label, _, term_set in elem_term_index:
-                if term_n in term_set:
-                    dest = elem_target[elem_label]
-                    break
-            if dest is None or dest is src:
-                kept_kws.append(kw)
-                if dest is None:
-                    kept += 1
-            else:
-                # 移動 (重複チェック)
-                dest_terms = {_norm(k.get("term"))
-                              for k in (dest.get("keywords") or [])}
-                if term_n not in dest_terms:
-                    dest.setdefault("keywords", []).append(kw)
-                    moved += 1
-        src["keywords"] = kept_kws
-
-    _save_keywords(kw_path, existing)
-    return {
-        "success": True,
-        "moved": moved,
-        "kept_unmatched": kept,
-        "groups": existing,
-    }, 200
+    result, code = rebuild_keywords_from_tech_analysis(case_id)
+    if code == 200 and isinstance(result, dict):
+        result["mode"] = "rebuilt"
+        result.setdefault("moved", 0)
+        result.setdefault("kept_unmatched", 0)
+    return result, code
 
 
 def rebuild_keywords_from_tech_analysis(case_id):
@@ -691,7 +605,7 @@ def _fterm_short_code(code: str) -> str:
     テーマ ID 直後の英字から末尾までを返す。マッチしない場合は元のコードを返す。
     """
     import re
-    m = re.match(r"^\d{1,2}[A-Z]\d{3}([A-Z]{2}\d{2,3})$", code or "")
+    m = re.match(r"^\d[A-Z]\d{3}([A-Z]{2}\d{2,3}[A-Z]?)$", code or "")
     return m.group(1) if m else (code or "")
 
 
@@ -824,6 +738,115 @@ def fterm_candidates(case_id):
             })
 
     return candidates, 200
+
+
+def fi_candidates(case_id):
+    """本願に付与された FI / 既存グループ FI を Step 3 追加候補として返す。"""
+    case_dir = get_case_dir(case_id)
+    candidates = []
+    seen = set()
+
+    def _add(code: str, label: str = "", source: str = "本願分類"):
+        code = (code or "").strip()
+        if not code or code in seen:
+            return
+        seen.add(code)
+        candidates.append({
+            "code": code,
+            "label": (label or "").strip(),
+            "source": source,
+        })
+
+    def _iter_codes(val):
+        if isinstance(val, list):
+            for item in val:
+                if isinstance(item, dict):
+                    yield item.get("code") or item.get("id") or "", item.get("label") or item.get("desc") or ""
+                elif isinstance(item, str):
+                    yield item, ""
+        elif isinstance(val, str):
+            yield val, ""
+
+    cls_path = case_dir / "search" / "classification.json"
+    if cls_path.exists():
+        try:
+            with open(cls_path, "r", encoding="utf-8") as f:
+                cls_data = json.load(f)
+            for code, label in _iter_codes(cls_data.get("fi")):
+                _add(code, label, "本願分類")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        try:
+            with open(hongan_path, "r", encoding="utf-8") as f:
+                hongan = json.load(f)
+            for code, label in _iter_codes(hongan.get("fi")):
+                _add(code, label, "本願分類")
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    kw_path = case_dir / "keywords.json"
+    if kw_path.exists():
+        try:
+            with open(kw_path, "r", encoding="utf-8") as f:
+                groups = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            groups = []
+        for g in groups or []:
+            for code, label in _iter_codes((g.get("search_codes") or {}).get("fi")):
+                _add(code, label, "既存グループ")
+
+    return candidates, 200
+
+
+def add_fi(case_id, group_id, code, desc=""):
+    groups, kw_path = _load_keywords(case_id)
+    if groups is None:
+        return {"error": "キーワードデータがありません"}, 404
+
+    code = (code or "").strip()
+    if not code:
+        return {"error": "FIコードを入力してください"}, 400
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            group.setdefault("search_codes", {})
+            group["search_codes"].setdefault("fi", [])
+            existing = [
+                fi.get("code") if isinstance(fi, dict) else str(fi)
+                for fi in group["search_codes"]["fi"]
+            ]
+            if code in existing:
+                return {"error": f"FI「{code}」は既に存在します"}, 400
+            group["search_codes"]["fi"].append({"code": code, "desc": desc})
+            break
+    else:
+        return {"error": f"グループ{group_id}が見つかりません"}, 404
+
+    _save_keywords(kw_path, groups)
+    return {"success": True, "code": code, "desc": desc}, 200
+
+
+def delete_fi(case_id, group_id, code):
+    groups, kw_path = _load_keywords(case_id)
+    if groups is None:
+        return {"error": "キーワードデータがありません"}, 404
+
+    for group in groups:
+        if group["group_id"] == group_id:
+            if "search_codes" in group and "fi" in group["search_codes"]:
+                group["search_codes"]["fi"] = [
+                    fi for fi in group["search_codes"]["fi"]
+                    if (fi.get("code") if isinstance(fi, dict) else str(fi)) != code
+                ]
+            break
+    else:
+        return {"error": f"グループ{group_id}が見つかりません"}, 404
+
+    _save_keywords(kw_path, groups)
+    return {"success": True}, 200
 
 
 def add_fterm(case_id, group_id, code, desc=""):

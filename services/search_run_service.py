@@ -854,6 +854,79 @@ def ai_score_run(case_id: str, run_id: str, limit: Optional[int] = None,
     return data
 
 
+def ai_score_run_stream(case_id: str, run_id: str, limit: Optional[int] = None,
+                        model: Optional[str] = None):
+    """AI 関連度スコアを 1 件ずつ計算し、完了ごとに dict を yield する。
+
+    画面側で「全件完了まで待つ」のではなく、計算できた hit からカードを更新する
+    ためのストリーミング版。各 hit の処理後に run JSON を保存する。
+    """
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    data = load_run(case_id, run_id)
+    if not data:
+        yield {"type": "error", "error": "検索ランが見つかりません"}
+        return
+
+    case_dir = get_case_dir(case_id)
+    hongan_summary = _build_hongan_summary(case_dir)
+    hits = data.get("hits", [])
+    targets = [
+        (i, h) for i, h in enumerate(hits)
+        if h.get("ai_score") is None and not str(h.get("ai_reason") or "").startswith("scoring error:")
+    ]
+    if limit is not None:
+        targets = targets[:max(0, int(limit))]
+
+    total = len(targets)
+    yield {"type": "start", "total": total, "run_id": run_id}
+
+    done = 0
+    scored = 0
+    failed = 0
+    for idx, h in targets:
+        prompt = _build_scoring_prompt(hongan_summary, h)
+        ok = False
+        try:
+            raw = call_claude(prompt, timeout=120, use_search=False, model=model)
+            score, reason = _parse_scoring_response(raw)
+            if score is not None:
+                h["ai_score"] = score
+                h["ai_reason"] = reason
+                ok = True
+                scored += 1
+            else:
+                h["ai_reason"] = f"parse error: {reason}"
+                failed += 1
+        except (ClaudeClientError, Exception) as e:
+            h["ai_reason"] = f"scoring error: {e}"
+            failed += 1
+
+        done += 1
+        save_run(case_id, data)
+        yield {
+            "type": "score",
+            "ok": ok,
+            "index": idx,
+            "patent_id": h.get("patent_id", ""),
+            "hit": h,
+            "done": done,
+            "total": total,
+            "scored": scored,
+            "failed": failed,
+        }
+
+    yield {
+        "type": "done",
+        "success": True,
+        "run": data,
+        "done": done,
+        "total": total,
+        "scored": scored,
+        "failed": failed,
+    }
+
+
 def _build_hongan_summary(case_dir: Path) -> dict:
     """本願の title + claim1 + summary を集約。"""
     summary = {"title": "", "claim1": "", "summary": ""}
@@ -1112,6 +1185,25 @@ def validate_formula(formula: str) -> dict:
             "→ (キーワード)/AB+(キーワード)/CL の形に書き直すか、片方 (例: /CL) のみにしてください"
         )
 
+    # Fタームのフルコード直指定は J-PlatPat の論理式でエラーになりやすい。
+    # 例: 4C083AC172/FT → 4C083/FC*AC17.2/FT
+    # 例: 4F100AK01B/FT → 4F100/FC*AK01B/FT
+    full_ft_matches = re.findall(r'\b\d[A-Z]\d{3}[A-Z]{2}\d{2,3}[A-Z]?/FT\b', s, flags=re.I)
+    if full_ft_matches:
+        hints = []
+        try:
+            from services.search_formula_builder import parse_fterm_code
+            for m in sorted(set(full_ft_matches))[:5]:
+                parsed = parse_fterm_code(m[:-3])
+                if parsed and parsed.get("theme"):
+                    hints.append(f"{m} → {parsed['theme']}/FC*{parsed['query_code']}/FT")
+        except Exception:
+            pass
+        msg = "Fタームはテーマコードと分けて指定してください。フルコードのまま /FT に入れるとエラーになります。"
+        if hints:
+            msg += " 例: " + " / ".join(hints)
+        warnings.append(msg)
+
     return {
         "ok": not errors,
         "errors": errors,
@@ -1159,7 +1251,13 @@ def get_keyword_snippets(case_id: str) -> dict:
         }
     """
     case_dir = get_case_dir(case_id)
-    snippets: dict = {"groups": [], "fi_codes": [], "fterm_codes": [], "theme_codes": []}
+    snippets: dict = {
+        "groups": [],
+        "ipc_codes": [],
+        "fi_codes": [],
+        "fterm_codes": [],
+        "theme_codes": [],
+    }
 
     # 優先: Stage 3 が生成した keyword_dictionary.json (より洗練された語彙)
     # フォールバック: Step 3 の keywords.json (ユーザーが Step 3 で直接編集したもの)
@@ -1191,9 +1289,15 @@ def get_keyword_snippets(case_id: str) -> dict:
                                 for kw in (g.get("keywords") or [])
                                 if isinstance(kw, dict) and kw.get("term")
                             ],
+                            "search_codes": g.get("search_codes") or {},
                         }
                         for g in kw_groups
                         if isinstance(g, dict)
+                    ],
+                    "ipc": [
+                        c
+                        for g in kw_groups
+                        for c in ((g.get("search_codes") or {}).get("ipc") or [])
                     ],
                     "fi": [
                         c
@@ -1223,28 +1327,6 @@ def get_keyword_snippets(case_id: str) -> dict:
             t = pattern.sub(r'\1－\2', t)
         return t
 
-    groups_raw = data.get("keyword_groups") or data.get("groups") or []
-    for g in groups_raw:
-        if not isinstance(g, dict):
-            continue
-        label = g.get("label") or g.get("name") or g.get("category") or ""
-        terms = g.get("terms") or g.get("synonyms") or g.get("keywords") or []
-        terms = [str(t).strip() for t in terms if str(t).strip()]
-        if not terms:
-            continue
-        # キーワード内 '-' を '－' に
-        sanitized = [_sanitize_keyword(t) for t in terms]
-        raw = "(" + "+".join(sanitized) + ")"
-        snippets["groups"].append({
-            "label": label,
-            "terms": terms,  # 表示用は元のまま
-            "terms_sanitized": sanitized,
-            # 構造タグなし (他の式に組み込む用途)
-            "jplatpat_group_raw": raw,
-            # 既定は全文検索タグ付き (J-PlatPat 論理式入力で有効な形)
-            "jplatpat_group": raw + "/TX",
-        })
-
     def _collect_codes(val):
         """入力が list[str] / list[{code:..}] / str のいずれでもコード文字列一覧を返す。"""
         out: list[str] = []
@@ -1263,8 +1345,55 @@ def get_keyword_snippets(case_id: str) -> dict:
             out.append(val.strip())
         return out
 
-    fi_codes = _collect_codes(data.get("fi") or data.get("fi_codes"))
-    fterm_codes = _collect_codes(data.get("fterm") or data.get("fterm_codes"))
+    group_ipc_codes: list[str] = []
+    group_fi_codes: list[str] = []
+    group_fterm_codes: list[str] = []
+    groups_raw = data.get("keyword_groups") or data.get("groups") or []
+    for g in groups_raw:
+        if not isinstance(g, dict):
+            continue
+        label = g.get("label") or g.get("name") or g.get("category") or ""
+        terms = g.get("terms") or g.get("synonyms") or g.get("keywords") or []
+        clean_terms = []
+        for t in terms:
+            if isinstance(t, dict):
+                term = t.get("term") or t.get("text") or t.get("label") or ""
+            else:
+                term = t
+            term = str(term).strip()
+            if term:
+                clean_terms.append(term)
+        terms = clean_terms
+
+        code_src = g.get("search_codes") or g.get("classifications") or {}
+        grp_ipc = _collect_codes(code_src.get("ipc") or g.get("ipc") or g.get("ipc_codes"))
+        grp_fi = _collect_codes(code_src.get("fi") or g.get("fi") or g.get("fi_codes"))
+        grp_ft = _collect_codes(code_src.get("fterm") or g.get("fterm") or g.get("fterm_codes"))
+        group_ipc_codes += grp_ipc
+        group_fi_codes += grp_fi
+        group_fterm_codes += grp_ft
+
+        if not terms and not (grp_ipc or grp_fi or grp_ft):
+            continue
+        # キーワード内 '-' を '－' に
+        sanitized = [_sanitize_keyword(t) for t in terms]
+        raw = "(" + "+".join(sanitized) + ")" if sanitized else ""
+        snippets["groups"].append({
+            "label": label,
+            "terms": terms,  # 表示用は元のまま
+            "terms_sanitized": sanitized,
+            # 構造タグなし (他の式に組み込む用途)
+            "jplatpat_group_raw": raw,
+            # 既定は全文検索タグ付き (J-PlatPat 論理式入力で有効な形)
+            "jplatpat_group": raw + "/TX" if raw else "",
+            "ipc_codes": grp_ipc,
+            "fi_codes": grp_fi,
+            "fterm_codes": grp_ft,
+        })
+
+    ipc_codes = _collect_codes(data.get("ipc") or data.get("ipc_codes")) + group_ipc_codes
+    fi_codes = _collect_codes(data.get("fi") or data.get("fi_codes")) + group_fi_codes
+    fterm_codes = _collect_codes(data.get("fterm") or data.get("fterm_codes")) + group_fterm_codes
 
     # Stage 3 の classification.json もマージ (fi/fterm が構造化され別ファイルの場合)
     cl = case_dir / "search" / "classification.json"
@@ -1272,6 +1401,7 @@ def get_keyword_snippets(case_id: str) -> dict:
         try:
             with open(cl, "r", encoding="utf-8") as f:
                 cdata = json.load(f)
+            ipc_codes += _collect_codes(cdata.get("ipc"))
             fi_codes += _collect_codes(cdata.get("fi"))
             fterm_codes += _collect_codes(cdata.get("fterm"))
         except Exception:
@@ -1287,17 +1417,21 @@ def get_keyword_snippets(case_id: str) -> dict:
                 out.append(x)
         return out
 
+    snippets["ipc_codes"] = _uniq(ipc_codes)
     snippets["fi_codes"] = _uniq(fi_codes)
     snippets["fterm_codes"] = _uniq(fterm_codes)
 
     # テーマコード (F-term コード先頭 5 文字のユニーク集合, 例: "4C083AB13" → "4C083")
-    theme_pat = re.compile(r"^([0-9][A-Z][0-9]{3})")
     theme_set: list[str] = []
     seen: set[str] = set()
+    try:
+        from services.search_formula_builder import parse_fterm_code
+    except Exception:
+        parse_fterm_code = None
     for code in snippets["fterm_codes"]:
-        m = theme_pat.match(code.replace(" ", ""))
-        if m:
-            th = m.group(1)
+        parsed = parse_fterm_code(code) if parse_fterm_code else None
+        if parsed and parsed.get("theme"):
+            th = parsed["theme"]
             if th not in seen:
                 seen.add(th)
                 theme_set.append(th)

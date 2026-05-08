@@ -49,6 +49,10 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 
 def _open_recording_session(start_url: str, out_path: Path, *, headless: bool = False) -> int:
     """Playwright を起動し、start_url を開いて全 HTTP 通信を NDJSON 出力。
@@ -162,6 +166,126 @@ def _open_recording_session(start_url: str, out_path: Path, *, headless: bool = 
     elapsed = time.time() - start_ts
     print(f"\n記録完了: {request_count} request / {elapsed:.1f} 秒")
     print(f"サマリ:")
+    _print_summary(out_path)
+    return rc
+
+
+def _record_jplatpat_bibliography_session(patent_id: str, out_path: Path, *, headless: bool = True) -> int:
+    """J-PlatPat 番号照会 → 公報詳細表示までを自動実行して通信を記録する。"""
+    try:
+        from playwright.sync_api import sync_playwright
+        from modules.jplatpat_pdf_downloader import (
+            normalize_jp_patent_number,
+            _launch_chromium,
+            _dismiss_dialogs,
+            _pick_search_result,
+            _open_document_page,
+        )
+    except ImportError as e:
+        print(f"[NG] 必要モジュールを import できません: {e}", file=sys.stderr)
+        return 1
+
+    target = normalize_jp_patent_number(patent_id)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fp = out_path.open("w", encoding="utf-8")
+    start_ts = time.time()
+    request_count = 0
+
+    def _write(entry):
+        fp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        fp.flush()
+
+    def _on_request(request):
+        nonlocal request_count
+        try:
+            entry = {
+                "ts": time.time() - start_ts,
+                "kind": "request",
+                "method": request.method,
+                "url": request.url,
+                "resource_type": request.resource_type,
+                "headers": dict(request.headers),
+                "post_data": request.post_data,
+            }
+            _write(entry)
+            request_count += 1
+        except Exception as e:
+            print(f"[警告] request 記録失敗: {e}", file=sys.stderr)
+
+    def _on_response(response):
+        try:
+            req = response.request
+            entry = {
+                "ts": time.time() - start_ts,
+                "kind": "response",
+                "method": req.method,
+                "url": response.url,
+                "status": response.status,
+                "headers": dict(response.headers),
+                "resource_type": req.resource_type,
+            }
+            ct = (response.headers.get("content-type") or "").lower()
+            if any(t in ct for t in ("json", "javascript", "xml", "text")):
+                try:
+                    body = response.text()
+                    entry["body_sample"] = body[:20000]
+                    entry["body_size"] = len(body or "")
+                    if len(body or "") > 20000:
+                        entry["body_sample_truncated"] = True
+                except Exception:
+                    pass
+            _write(entry)
+        except Exception as e:
+            print(f"[警告] response 記録失敗: {e}", file=sys.stderr)
+
+    print("=== J-PlatPat 書誌情報 偵察セッション開始 ===")
+    print(f"対象番号: {patent_id} -> {target.display_number}")
+    print(f"開始 URL: {target.fixed_url}")
+    print(f"出力: {out_path}")
+
+    rc = 0
+    with sync_playwright() as p:
+        browser = _launch_chromium(p, headless=headless)
+        context = browser.new_context(locale="ja-JP", viewport={"width": 1280, "height": 900})
+        page = context.new_page()
+        page.on("request", _on_request)
+        page.on("response", _on_response)
+        try:
+            with page.expect_response(
+                lambda r: "/web/patnumber/wsp0102" in r.url and r.request.method == "POST",
+                timeout=60000,
+            ) as response_info:
+                page.goto(target.fixed_url, wait_until="load", timeout=60000)
+            search_payload = response_info.value.json()
+            result = _pick_search_result(search_payload, target)
+            _dismiss_dialogs(page)
+            doc_page = _open_document_page(page, result, target, timeout_ms=60000)
+            if doc_page is not page:
+                doc_page.on("request", _on_request)
+                doc_page.on("response", _on_response)
+            try:
+                doc_page.wait_for_load_state("networkidle", timeout=30000)
+            except Exception:
+                doc_page.wait_for_timeout(5000)
+            doc_page.wait_for_timeout(2000)
+            print(f"詳細ページ: {doc_page.url}")
+        except Exception as e:
+            print(f"[警告] 自動偵察中に例外: {e}")
+            rc = 3
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
+            fp.close()
+
+    elapsed = time.time() - start_ts
+    print(f"\n記録完了: {request_count} request / {elapsed:.1f} 秒")
+    print("サマリ:")
     _print_summary(out_path)
     return rc
 
@@ -283,6 +407,8 @@ def main():
                         help="既存 NDJSON のサマリだけを出す (target に NDJSON パスを指定)")
     parser.add_argument("--headless", action="store_true",
                         help="ヘッドレスで起動 (通常は手動操作のため非推奨)")
+    parser.add_argument("--jplatpat-biblio", metavar="NUMBER",
+                        help="J-PlatPat の番号照会→公報詳細表示を自動実行して書誌 API を偵察")
     args = parser.parse_args()
 
     if args.summarize:
@@ -294,6 +420,16 @@ def main():
             return 4
         _print_summary(ndjson_path)
         return 0
+
+    if args.jplatpat_biblio:
+        if args.out:
+            out_path = Path(args.out)
+        else:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = Path("docs/recon") / f"jplatpat_bibliography_{ts}.ndjson"
+        return _record_jplatpat_bibliography_session(
+            args.jplatpat_biblio, out_path, headless=True if not args.headless else args.headless
+        )
 
     if not args.target:
         parser.print_help()

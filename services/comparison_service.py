@@ -5,12 +5,15 @@
 import os
 import re
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 
 from services.case_service import (
     get_case_dir, load_case_meta, save_case_meta, find_citation_pdf,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citation_data, keywords):
@@ -1168,7 +1171,16 @@ def _compare_execute_per_citation_parallel(
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from modules.prompt_generator import generate_prompt as _gen
     from modules.response_parser import parse_response, split_multi_response
-    from modules.claude_client import call_claude, ClaudeClientError
+    from modules.claude_client import (
+        call_claude,
+        ClaudeClientError,
+        ClaudeExecutionError,
+        ClaudeNotFoundError,
+        ClaudeTimeoutError,
+        execution_error_hint,
+        model_provider,
+        provider_setup_hint,
+    )
 
     case_dir = get_case_dir(case_id)
     responses_dir = case_dir / "responses"
@@ -1294,7 +1306,16 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         generate_prompt_requirement_first as _gen_reqfirst,
     )
     from modules.response_parser import parse_response, split_multi_response
-    from modules.claude_client import call_claude, ClaudeClientError
+    from modules.claude_client import (
+        call_claude,
+        ClaudeClientError,
+        ClaudeExecutionError,
+        ClaudeNotFoundError,
+        ClaudeTimeoutError,
+        execution_error_hint,
+        model_provider,
+        provider_setup_hint,
+    )
 
     # mode に応じて prompt 生成関数を切替
     _gen = _gen_reqfirst if mode == "requirement_first" else _gen_legacy
@@ -1386,14 +1407,58 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
     with open(prompts_dir / f"{ids_label}_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
-    timeout = 600 if len(citations) <= 2 else 900
+    provider = model_provider(model)
+    if provider == "glm":
+        timeout = 1200 if len(citations) <= 2 else 1500
+    elif provider == "codex":
+        timeout = 900 if len(citations) <= 2 else 1200
+    else:
+        timeout = 600 if len(citations) <= 2 else 900
     call_kwargs = {"timeout": timeout, "model": model}
     if effort is not None:
         call_kwargs["effort"] = effort
     try:
         raw_response = call_claude(prompt_text, **call_kwargs)
+    except ClaudeNotFoundError as e:
+        logger.warning("Step5 LLM not available provider=%s model=%s: %s", provider, model, e)
+        return {
+            "error": str(e),
+            "phase": "llm_not_available",
+            "provider": provider,
+            "model": model,
+            "hint": provider_setup_hint(provider),
+        }, 502
+    except ClaudeTimeoutError as e:
+        logger.warning(
+            "Step5 LLM timeout provider=%s model=%s timeout=%s prompt_chars=%s",
+            provider, model, timeout, len(prompt_text),
+        )
+        return {
+            "error": str(e),
+            "phase": "llm_timeout",
+            "provider": provider,
+            "model": model,
+            "timeout_sec": timeout,
+            "prompt_chars": len(prompt_text),
+            "hint": execution_error_hint(provider, str(e)),
+        }, 504
+    except ClaudeExecutionError as e:
+        logger.warning("Step5 LLM execution error provider=%s model=%s: %s", provider, model, e)
+        return {
+            "error": str(e),
+            "phase": "llm_execution",
+            "provider": provider,
+            "model": model,
+            "hint": execution_error_hint(provider, str(e)),
+        }, 502
     except ClaudeClientError as e:
-        return {"error": str(e), "phase": "claude_call"}, 502
+        logger.warning("Step5 LLM unknown error provider=%s model=%s: %s", provider, model, e)
+        return {
+            "error": str(e),
+            "phase": "llm_unknown",
+            "provider": provider,
+            "model": model,
+        }, 502
 
     all_segment_ids = _get_all_segment_ids(segs)
 
@@ -1403,6 +1468,25 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         f.write(raw_response)
 
     result, errors = parse_response(raw_response, all_segment_ids)
+    if not result:
+        logger.warning(
+            "Step5 parse failed provider=%s model=%s response_chars=%s errors=%s",
+            provider, model, len(raw_response), errors,
+        )
+        try:
+            rel_raw_path = str(raw_path.relative_to(Path(__file__).parent.parent.resolve()))
+        except ValueError:
+            rel_raw_path = str(raw_path)
+        return {
+            "error": "LLM 応答が対比JSONとして解釈できませんでした",
+            "phase": "parse_failed",
+            "provider": provider,
+            "model": model,
+            "errors": errors,
+            "raw_preview": raw_response[:300],
+            "raw_path": rel_raw_path,
+            "hint": "responses/_last_raw_response.txt を確認するか、別モデル/低い effort で再実行してください。",
+        }, 502
 
     # case.yaml の citations から既知 ID を取得し、LLM 応答の document_id を
     # _resolve_doc_id で吸着 (例: 'JP5214138B2' → 'JP5214138')。

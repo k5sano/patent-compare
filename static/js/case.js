@@ -30,11 +30,44 @@ const _MODEL_OPTIONS = [
   { group: 'GLM', value: 'glm-haiku', label: 'GLM-4.5-Air (最軽量)', scopes: ['text'] },
 ];
 
+let _LLM_STATUS = null;
+
 function _modelStorageKey(key) { return `pc-model:${key}`; }
+
+function _modelProvider(value) {
+  if (!value) return 'claude';
+  if (value.startsWith('codex-') || value.startsWith('openai-')) return 'codex';
+  if (value.startsWith('glm-')) return 'glm';
+  return 'claude';
+}
+
+function _modelProviderAvailable(provider) {
+  if (!_LLM_STATUS) return true;
+  if (provider === 'codex') return !!_LLM_STATUS.codex_available;
+  if (provider === 'glm') return !!_LLM_STATUS.glm_available;
+  return !!_LLM_STATUS.claude_available;
+}
+
+function _modelUnavailableSuffix(provider) {
+  if (!_LLM_STATUS || _modelProviderAvailable(provider)) return '';
+  if (provider === 'glm') return '（ZAI_API_KEY未読込）';
+  if (provider === 'codex') return '（Codex未利用）';
+  return '（Claude未利用）';
+}
 
 function _modelOptionsForScope(scope) {
   scope = scope || 'text';
-  return _MODEL_OPTIONS.filter(o => (o.scopes || ['text']).includes(scope));
+  return _MODEL_OPTIONS
+    .filter(o => (o.scopes || ['text']).includes(scope))
+    .map(o => {
+      const provider = _modelProvider(o.value);
+      return {
+        ...o,
+        provider,
+        disabled: !_modelProviderAvailable(provider),
+        labelSuffix: _modelUnavailableSuffix(provider),
+      };
+    });
 }
 
 function _renderModelOptions(options, selected) {
@@ -49,41 +82,58 @@ function _renderModelOptions(options, selected) {
   });
   return groups.map(g => {
     const inner = g.options.map(o =>
-      `<option value="${o.value}"${o.value === selected ? ' selected' : ''}>${o.label}</option>`
+      `<option value="${o.value}"${o.disabled ? ' disabled' : ''}${o.value === selected ? ' selected' : ''}>${o.label}${o.labelSuffix || ''}</option>`
     ).join('');
     return `<optgroup label="${g.label}">${inner}</optgroup>`;
   }).join('');
 }
 
-function initModelPickers() {
+function initModelPickers(opts = {}) {
+  const force = !!opts.force;
   document.querySelectorAll('select.model-picker').forEach(sel => {
-    if (sel.dataset._inited) return;
+    if (sel.dataset._inited && !force) return;
     sel.dataset._inited = '1';
     const key = sel.dataset.modelKey || '';
     const def = sel.dataset.modelDefault || 'sonnet';
     const scope = sel.dataset.modelScope || 'text';
     const options = _modelOptionsForScope(scope);
-    const optionValues = new Set(options.map(o => o.value));
+    const enabledOptions = options.filter(o => !o.disabled);
+    const enabledValues = new Set(enabledOptions.map(o => o.value));
     let saved = def;
     if (key) {
       try { saved = localStorage.getItem(_modelStorageKey(key)) || def; }
       catch (_) { /* noop */ }
     }
-    if (!optionValues.has(saved)) saved = optionValues.has(def) ? def : (options[0]?.value || '');
+    if (!enabledValues.has(saved)) {
+      saved = enabledValues.has(def) ? def : (enabledOptions[0]?.value || options[0]?.value || '');
+      if (key && enabledValues.has(saved)) {
+        try { localStorage.setItem(_modelStorageKey(key), saved); }
+        catch (_) { /* noop */ }
+      }
+    }
     sel.innerHTML = _renderModelOptions(options, saved);
-    sel.addEventListener('change', () => {
+    sel.onchange = () => {
       if (!key) return;
       try { localStorage.setItem(_modelStorageKey(key), sel.value); }
       catch (_) { /* noop */ }
-    });
+    };
   });
 }
 
 /** 同じ data-model-key を持つピッカーの選択値を返す */
 function getPickerModel(key, fallback = 'sonnet') {
   const sel = document.querySelector(`select.model-picker[data-model-key="${key}"]`);
-  if (!sel) return fallback;
+  if (!sel) return _firstEnabledModelForScope('text', fallback);
+  const dynamicFallback = _firstEnabledModelForScope(sel.dataset.modelScope || 'text', fallback);
+  if (sel.selectedOptions && sel.selectedOptions[0]?.disabled) return dynamicFallback;
   return sel.value || fallback;
+}
+
+function _firstEnabledModelForScope(scope, fallback = 'sonnet') {
+  const options = _modelOptionsForScope(scope || 'text');
+  const enabled = options.filter(o => !o.disabled);
+  if (enabled.some(o => o.value === fallback)) return fallback;
+  return enabled[0]?.value || fallback;
 }
 
 document.addEventListener('DOMContentLoaded', initModelPickers);
@@ -1644,14 +1694,24 @@ async function loadHonganTables() {
 function _renderHonganTables(payload) {
   const result = document.getElementById('hongan-tables-result');
   const tables = (payload.tables || []).filter(t => t.is_table);
+  const errs = (payload.tables || []).filter(t => !t.is_table && t.error);
   if (!tables.length) {
-    result.innerHTML = '<p style="color:var(--text2);">抽出された表がありません。</p>';
+    const errList = errs.slice(0, 6).map(t => {
+      const label = t.caption_label || t.caption || t.title || `p.${t.page_num || '?'}`;
+      return `<li><strong>${_esc(label)}</strong>: ${_esc(t.error)}</li>`;
+    }).join('');
+    result.innerHTML = [
+      '<p style="color:var(--text2);">抽出された表がありません。</p>',
+      errs.length ? `<div style="margin-top:0.45rem; color:#fca5a5; font-size:0.8rem;">` : '',
+      errs.length ? `抽出候補 ${payload.tables.length} 件中 ${errs.length} 件でエラー。再抽出してください。` : '',
+      errs.length ? `<ul style="margin:0.35rem 0 0 1.2rem;">${errList}</ul></div>` : '',
+    ].filter(Boolean).join('');
     return;
   }
   const refs = (payload.body_table_references || []).filter(r => /表|Table/i.test(r));
   const html = [
     `<div style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">`,
-    `  本文中の表参照: ${refs.length} 件 / 検出キャプション付き画像: ${payload.candidates_targeted ?? '?'} / 抽出成功: ${tables.length}`,
+    `  本文中の表参照: ${refs.length} 件 / 検出キャプション付き画像: ${payload.candidates_targeted ?? '?'} / 抽出成功: ${tables.length} / エラー: ${errs.length}`,
     `  &nbsp;|&nbsp; 所要 ${((payload.total_duration_ms||0)/1000).toFixed(1)}s &nbsp;|&nbsp; サブスク相当 $${payload.total_cost_usd_equivalent ?? 0}`,
     `</div>`,
   ];
@@ -1734,12 +1794,15 @@ const _KW_MARK_STORAGE_KEY = 'patent-compare:kw-marks:' + (CASE_ID || 'unknown')
 
 function _kwMarkSave() {
   try {
-    const marks = { kw: [], ft: [] };
+    const marks = { kw: [], ft: [], fi: [] };
     document.querySelectorAll('.kw-tag.kw-marked').forEach(el => {
       marks.kw.push((el.dataset.gid || '') + '|' + (el.dataset.term || ''));
     });
     document.querySelectorAll('.fterm-tag.kw-marked').forEach(el => {
       marks.ft.push((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
+    });
+    document.querySelectorAll('.fi-tag.kw-marked').forEach(el => {
+      marks.fi.push((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
     });
     localStorage.setItem(_KW_MARK_STORAGE_KEY, JSON.stringify(marks));
   } catch (e) { /* localStorage 不可 (シークレット等) は黙ってスキップ */ }
@@ -1754,6 +1817,7 @@ function _kwMarkRestore() {
   if (!marks) return;
   const kwSet = new Set(marks.kw || []);
   const ftSet = new Set(marks.ft || []);
+  const fiSet = new Set(marks.fi || []);
   document.querySelectorAll('.kw-tag').forEach(el => {
     const key = (el.dataset.gid || '') + '|' + (el.dataset.term || '');
     if (kwSet.has(key)) el.classList.add('kw-marked');
@@ -1761,6 +1825,10 @@ function _kwMarkRestore() {
   document.querySelectorAll('.fterm-tag').forEach(el => {
     const key = (el.dataset.gid || '') + '|' + (el.dataset.code || '');
     if (ftSet.has(key)) el.classList.add('kw-marked');
+  });
+  document.querySelectorAll('.fi-tag').forEach(el => {
+    const key = (el.dataset.gid || '') + '|' + (el.dataset.code || '');
+    if (fiSet.has(key)) el.classList.add('kw-marked');
   });
 }
 
@@ -1844,6 +1912,7 @@ function renderGroup(g) {
     </span>
   </div>
 
+  ${renderFis(g)}
   ${renderFterms(g)}
 </div>`;
 }
@@ -1880,6 +1949,32 @@ function renderFterms(g) {
                      font-size:0.75rem; padding:1px 6px; border-radius:4px;"
               onclick="addFterm(${g.group_id}, this.previousElementSibling); closeFtermPicker();">+</button>
       <div class="fterm-dropdown" id="fterm-dd-${g.group_id}" style="display:none;"></div>
+    </span>
+  </div>`;
+}
+
+function renderFis(g) {
+  const fis = g.search_codes && g.search_codes.fi ? g.search_codes.fi : [];
+  const items = fis.map(fi =>
+    `<span class="fi-tag" data-gid="${g.group_id}" data-code="${escAttr(fi.code)}"
+      title="クリックで残す/外すを切替（赤=残す）">
+      ${escHtml(fi.code)} <span class="fi-desc">${escHtml(fi.desc || '')}</span>
+    </span>`
+  ).join('');
+  return `<div style="margin-top:6px; border-top:1px solid var(--border); padding-top:6px;">
+    <span style="font-size:0.75rem; color:var(--text2);">FI:</span> ${items}
+    <span class="fi-picker-wrap" style="display:inline-flex; align-items:center; gap:3px; margin-left:4px; position:relative;">
+      <input class="fi-add-input" type="text" placeholder="本願FIから追加..." data-gid="${g.group_id}"
+        style="font-size:0.75rem; padding:1px 6px; border:1px solid var(--border); border-radius:4px;
+               background:var(--bg); color:var(--text); width:180px;"
+        onfocus="openFiPicker(${g.group_id}, this)"
+        oninput="filterFiPicker(this)"
+        onkeydown="if(event.key==='Enter'){addFi(${g.group_id}, this); closeFiPicker();}
+                   if(event.key==='Escape'){closeFiPicker();}">
+      <button style="background:none; border:1px solid var(--border); color:#6ee7b7; cursor:pointer;
+                     font-size:0.75rem; padding:1px 6px; border-radius:4px;"
+              onclick="addFi(${g.group_id}, this.previousElementSibling); closeFiPicker();">+</button>
+      <div class="fi-dropdown" id="fi-dd-${g.group_id}" style="display:none;"></div>
     </span>
   </div>`;
 }
@@ -2166,22 +2261,25 @@ function _shMarkApplied(d) {
   // localStorage の kw-marked に追加して、描画後に kw-marked が復元されるようにする
   try {
     const raw = localStorage.getItem(_KW_MARK_STORAGE_KEY);
-    const marks = raw ? JSON.parse(raw) : { kw: [], ft: [] };
+    const marks = raw ? JSON.parse(raw) : { kw: [], ft: [], fi: [] };
     marks.kw = marks.kw || [];
     marks.ft = marks.ft || [];
+    marks.fi = marks.fi || [];
     const kwSet = new Set(marks.kw);
     const ftSet = new Set(marks.ft);
+    const fiSet = new Set(marks.fi);
     Object.entries(d.added_terms_by_group || {}).forEach(([gid, items]) => {
       items.forEach(it => kwSet.add(`${gid}|${it.term}`));
     });
     Object.entries(d.added_codes_by_group || {}).forEach(([gid, items]) => {
       items.forEach(it => {
-        // F-term のみ既存の fterm-tag ハイライト構造に対応 (FI/IPC/CPC は別表示なのでスキップ)
         if (it.kind === 'fterm') ftSet.add(`${gid}|${it.code}`);
+        if (it.kind === 'fi') fiSet.add(`${gid}|${it.code}`);
       });
     });
     marks.kw = Array.from(kwSet);
     marks.ft = Array.from(ftSet);
+    marks.fi = Array.from(fiSet);
     localStorage.setItem(_KW_MARK_STORAGE_KEY, JSON.stringify(marks));
   } catch (e) { /* 不可なら諦める */ }
 }
@@ -2221,38 +2319,17 @@ async function pruneKeywordSegmentIds() {
 }
 
 async function reassignKeywordsToTechAnalysis() {
-  const ok = confirm(
-    'Step 4 element の語彙と既存キーワードを照合し、一致する element のグループへ移動します。\n' +
-    '\n' +
-    '・キーワードは消えません (所属グループだけが整理されます)\n' +
-    '・どの element にも該当しない語は元のグループに残ります\n' +
-    '・F-term (search_codes) は移動しません\n' +
-    '\n' +
-    '実行しますか?'
-  );
-  if (!ok) return;
-  try {
-    const resp = await fetch(`/case/${CASE_ID}/keywords/reassign-to-tech-analysis`, { method: 'POST' });
-    const d = await resp.json();
-    if (!resp.ok || d.error) { alert(d.error || `HTTP ${resp.status}`); return; }
-    alert(`✅ 再配置完了: ${d.moved} 件移動 / ${d.kept_unmatched} 件は該当 element なしで元グループに残しました。`);
-    if (typeof kwGroups !== 'undefined' && d.groups) {
-      kwGroups = d.groups;
-      if (typeof renderGroups === 'function') renderGroups();
-    } else {
-      location.reload();
-    }
-  } catch (e) {
-    alert('エラー: ' + e.message);
-  }
+  // 旧ボタン/古い画面から呼ばれた場合も、現在の正しい挙動へ寄せる。
+  return rebuildGroupsFromTechAnalysis();
 }
 
 async function rebuildGroupsFromTechAnalysis() {
   const ok = confirm(
-    'Step 4 Stage 1 の技術構造化 (要素 E1/E2/...) に合わせて Step 3 のグループを作り直します。\n' +
+    'Step 4 Stage 1 の技術構造化項目に合わせて Step 3 のキーワードグループを作り直します。\n' +
     '\n' +
-    '・グループは要素ごとに 1 つずつ作り直されます\n' +
+    '・グループは Step 4 の各項目ごとに 1 つずつ作り直されます\n' +
     '・既存の手動追加キーワード/Fターム は segment_ids の重なりで新グループへ自動移行されます\n' +
+    '・旧AI自動提案グループは残さず、Step 4 構造を正とします\n' +
     '・ハイライト (赤字) 状態は失われる場合があります\n' +
     '\n' +
     'よろしいですか?'
@@ -2322,7 +2399,7 @@ async function deleteGroup(gid) {
 function clearSelection(gid) {
   const groupEl = document.getElementById('kw-group-' + gid);
   if (!groupEl) return;
-  groupEl.querySelectorAll('.kw-tag.kw-marked, .fterm-tag.kw-marked').forEach(el => el.classList.remove('kw-marked'));
+  groupEl.querySelectorAll('.kw-tag.kw-marked, .fterm-tag.kw-marked, .fi-tag.kw-marked').forEach(el => el.classList.remove('kw-marked'));
   if (typeof _kwMarkSave === 'function') _kwMarkSave();
 }
 
@@ -2335,8 +2412,9 @@ async function deleteUnselected(gid) {
   // 赤字ハイライト = 残す。ハイライトされていないものを削除対象とする。
   const delKws = Array.from(groupEl.querySelectorAll('.kw-tag:not(.kw-marked)')).map(el => el.dataset.term).filter(Boolean);
   const delFts = Array.from(groupEl.querySelectorAll('.fterm-tag:not(.kw-marked)')).map(el => el.dataset.code).filter(Boolean);
+  const delFis = Array.from(groupEl.querySelectorAll('.fi-tag:not(.kw-marked)')).map(el => el.dataset.code).filter(Boolean);
 
-  if (delKws.length === 0 && delFts.length === 0) {
+  if (delKws.length === 0 && delFts.length === 0 && delFis.length === 0) {
     alert('チェックを外した項目がありません（すべて選択中のため削除対象なし）');
     return;
   }
@@ -2344,6 +2422,7 @@ async function deleteUnselected(gid) {
   const msg = [];
   if (delKws.length > 0) msg.push(`キーワード ${delKws.length}件`);
   if (delFts.length > 0) msg.push(`Fterm ${delFts.length}件`);
+  if (delFis.length > 0) msg.push(`FI ${delFis.length}件`);
   if (!confirm(`${msg.join('、')}を削除しますか？（チェックが入っている項目は残ります）`)) return;
 
   // キーワード削除
@@ -2370,6 +2449,20 @@ async function deleteUnselected(gid) {
   }
   if (g.search_codes && g.search_codes.fterm) {
     g.search_codes.fterm = g.search_codes.fterm.filter(ft => !delFts.includes(ft.code));
+  }
+
+  // FI削除
+  for (const code of delFis) {
+    try {
+      await fetch(`/case/${CASE_ID}/keywords/fi/delete`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ group_id: gid, code })
+      });
+    } catch(e) { console.warn('fi delete failed', code, e); }
+  }
+  if (g.search_codes && g.search_codes.fi) {
+    g.search_codes.fi = g.search_codes.fi.filter(fi => !delFis.includes(fi.code));
   }
 
   renderGroups();
@@ -2607,6 +2700,134 @@ function closeFtermPicker() {
   _ftermPickerGid = null;
 }
 
+// ================================================================
+// FI ピッカー（本願付与FI候補ドロップダウン）
+// ================================================================
+let _fiCandidates = null;
+let _fiPickerGid = null;
+
+async function _loadFiCandidates() {
+  if (_fiCandidates) return _fiCandidates;
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fi/candidates`);
+    if (res.ok) _fiCandidates = await res.json();
+    else _fiCandidates = [];
+  } catch(e) { _fiCandidates = []; }
+  return _fiCandidates;
+}
+
+async function openFiPicker(gid, inputEl) {
+  _fiPickerGid = gid;
+  const candidates = await _loadFiCandidates();
+  const dd = document.getElementById(`fi-dd-${gid}`);
+  if (!dd) return;
+
+  const g = kwGroups.find(g => g.group_id === gid);
+  const existing = new Set();
+  if (g && g.search_codes && g.search_codes.fi) {
+    g.search_codes.fi.forEach(fi => existing.add(fi.code));
+  }
+
+  const filtered = candidates.filter(c => !existing.has(c.code));
+  _renderFiDropdown(dd, filtered, gid);
+  dd.style.display = 'block';
+
+  setTimeout(() => {
+    document.addEventListener('click', _closeFiPickerOutside, { once: true, capture: true });
+  }, 100);
+}
+
+function _closeFiPickerOutside(e) {
+  if (e.target.closest('.fi-picker-wrap')) {
+    setTimeout(() => {
+      document.addEventListener('click', _closeFiPickerOutside, { once: true, capture: true });
+    }, 100);
+    return;
+  }
+  closeFiPicker();
+}
+
+function closeFiPicker() {
+  document.querySelectorAll('.fi-dropdown').forEach(dd => dd.style.display = 'none');
+  _fiPickerGid = null;
+}
+
+function filterFiPicker(inputEl) {
+  const gid = parseInt(inputEl.dataset.gid);
+  const dd = document.getElementById(`fi-dd-${gid}`);
+  if (!dd || !_fiCandidates) return;
+
+  const q = (inputEl.value || '').trim().toLowerCase();
+  const g = kwGroups.find(g => g.group_id === gid);
+  const existing = new Set();
+  if (g && g.search_codes && g.search_codes.fi) {
+    g.search_codes.fi.forEach(fi => existing.add(fi.code));
+  }
+
+  const filtered = _fiCandidates.filter(c => {
+    if (existing.has(c.code)) return false;
+    if (!q) return true;
+    return c.code.toLowerCase().includes(q)
+      || (c.label || '').toLowerCase().includes(q);
+  });
+  _renderFiDropdown(dd, filtered, gid);
+  dd.style.display = 'block';
+}
+
+function _renderFiDropdown(dd, items, gid) {
+  if (!items.length) {
+    dd.innerHTML = '<div style="padding:8px 10px; color:var(--text2);">候補なし</div>';
+    return;
+  }
+
+  const bySource = {};
+  const sourceOrder = ['本願分類', '既存グループ'];
+  items.forEach(c => {
+    const src = c.source || '本願分類';
+    if (!bySource[src]) bySource[src] = [];
+    bySource[src].push(c);
+  });
+
+  let html = '';
+  for (const src of sourceOrder) {
+    const group = bySource[src];
+    if (!group || !group.length) continue;
+    html += `<div class="fterm-dd-section">${escHtml(src)}（${group.length}件）</div>`;
+    group.forEach(c => {
+      html += `<div class="fterm-dd-item" data-code="${escAttr(c.code)}" data-label="${escAttr(c.label || '')}"
+        onclick="selectFiCandidate(${gid}, '${escAttr(c.code)}', '${escAttr(c.label || '')}')">
+        <span class="fterm-dd-code">${escHtml(c.code)}</span>
+        <span class="fterm-dd-label">${escHtml(c.label || '')}</span>
+      </div>`;
+    });
+  }
+  dd.innerHTML = html;
+}
+
+async function selectFiCandidate(gid, code, label) {
+  closeFiPicker();
+  const input = document.querySelector(`.fi-add-input[data-gid="${gid}"]`);
+  if (input) input.value = code;
+
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fi/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code, desc: label })
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || '追加失敗'); }
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      if (!g.search_codes) g.search_codes = {};
+      if (!g.search_codes.fi) g.search_codes.fi = [];
+      g.search_codes.fi.push({ code, desc: label });
+    }
+    if (input) input.value = '';
+    renderGroups();
+    showKwToast(`FI「${code} ${label || ''}」を追加しました`);
+  } catch(e) { alert(e.message); }
+}
+
 function filterFtermPicker(inputEl) {
   const gid = parseInt(inputEl.dataset.gid);
   const dd = document.getElementById(`fterm-dd-${gid}`);
@@ -2741,6 +2962,54 @@ async function deleteFterm(gid, code) {
     }
     renderGroups();
     showKwToast(`Fterm「${code}」を削除しました`);
+  } catch(e) { alert(e.message); }
+}
+
+// ================================================================
+// FI 追加・削除
+// ================================================================
+async function addFi(gid, inputEl) {
+  const code = (inputEl.value || '').trim();
+  if (!code) return;
+  let desc = '';
+  if (_fiCandidates) {
+    const match = _fiCandidates.find(c => c.code === code);
+    if (match) desc = match.label || '';
+  }
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fi/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code, desc })
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error || '追加失敗'); }
+    const d = await res.json();
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g) {
+      if (!g.search_codes) g.search_codes = {};
+      if (!g.search_codes.fi) g.search_codes.fi = [];
+      g.search_codes.fi.push({ code: d.code, desc: d.desc || '' });
+    }
+    inputEl.value = '';
+    renderGroups();
+    showKwToast(`FI「${d.code}」を追加しました`);
+  } catch(e) { alert(e.message); }
+}
+
+async function deleteFi(gid, code) {
+  try {
+    const res = await fetch(`/case/${CASE_ID}/keywords/fi/delete`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group_id: gid, code })
+    });
+    if (!res.ok) throw new Error('削除失敗');
+    const g = kwGroups.find(g => g.group_id === gid);
+    if (g && g.search_codes && g.search_codes.fi) {
+      g.search_codes.fi = g.search_codes.fi.filter(fi => fi.code !== code);
+    }
+    renderGroups();
+    showKwToast(`FI「${code}」を削除しました`);
   } catch(e) { alert(e.message); }
 }
 
@@ -3125,7 +3394,7 @@ document.addEventListener('DOMContentLoaded', () => {
     kwContainer.addEventListener('click', (e) => {
       // 編集中の input や追加用 input は無視
       if (e.target.closest('input, button')) return;
-      const tag = e.target.closest('.kw-tag, .fterm-tag');
+      const tag = e.target.closest('.kw-tag, .fterm-tag, .fi-tag');
       if (!tag) return;
       e.preventDefault();
       if (_kwClickTimer) clearTimeout(_kwClickTimer);
@@ -3203,8 +3472,8 @@ async function executeCompareUnanswered() {
     });
     const data = await resp.json();
     if (overlay) overlay.classList.remove('show');
-    if (data.error) {
-      alert('対比エラー: ' + data.error);
+    if (data.error || data.success === false) {
+      _renderExecError(document.getElementById('parse-result'), data);
       return;
     }
     if (data.success) {
@@ -4513,6 +4782,8 @@ async function annotateAll() {
   try {
     const resp = await fetch('/api/claude-status');
     const data = await resp.json();
+    _LLM_STATUS = data;
+    initModelPickers({ force: true });
     if (data.available) {
       document.querySelectorAll('.btn-execute').forEach(btn => {
         btn.style.display = 'inline-block';
@@ -4579,6 +4850,45 @@ async function executeSearch() {
 }
 
 // --- Step 5: 対比 直接実行 ---
+function _renderExecError(targetEl, data) {
+  if (!targetEl) {
+    alert('エラー: ' + ((data && data.error) || '不明なエラー'));
+    return;
+  }
+  const palette = {
+    llm_not_available: { bg: '#422006', fg: '#fbbf24', label: 'LLM 未利用' },
+    llm_timeout: { bg: '#450a0a', fg: '#fca5a5', label: 'タイムアウト' },
+    llm_execution: { bg: '#450a0a', fg: '#fca5a5', label: 'LLM 実行エラー' },
+    llm_unknown: { bg: '#450a0a', fg: '#fca5a5', label: 'LLM 不明エラー' },
+    parse_failed: { bg: '#422006', fg: '#fbbf24', label: '応答パース失敗' },
+    server_error: { bg: '#450a0a', fg: '#fca5a5', label: 'サーバーエラー' },
+  };
+  const p = palette[data?.phase] || { bg: '#450a0a', fg: '#fca5a5', label: 'エラー' };
+  const meta = [data?.provider, data?.model].filter(Boolean).join(' / ');
+  targetEl.innerHTML = `
+    <div style="padding:0.9rem 1rem; background:${p.bg}; color:${p.fg}; border-radius:8px; margin-bottom:0.75rem;">
+      <strong>${_escapeHtml(p.label)}${meta ? ` (${_escapeHtml(meta)})` : ''}</strong>
+      <div style="margin-top:0.35rem; font-size:0.9rem; white-space:pre-wrap;">${_escapeHtml(data?.error || '不明なエラー')}</div>
+      ${data?.hint ? `<div style="margin-top:0.35rem; font-size:0.82rem; opacity:0.9;">${_escapeHtml(data.hint)}</div>` : ''}
+      ${data?.raw_path ? `<div style="margin-top:0.35rem; font-size:0.78rem;"><code>${_escapeHtml(data.raw_path)}</code> を確認してください。</div>` : ''}
+      ${data?.timeout_sec ? `<div style="margin-top:0.25rem; font-size:0.78rem;">timeout=${_escapeHtml(String(data.timeout_sec))}秒 / prompt=${_escapeHtml(String(data.prompt_chars || 0))}文字</div>` : ''}
+    </div>`;
+}
+
+async function _readJsonResponse(resp) {
+  const text = await resp.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return {
+      error: `サーバーがJSONではない応答を返しました (HTTP ${resp.status})\n${text.slice(0, 500)}`,
+      phase: 'server_error',
+      hint: 'Flask の web.err.log を確認してください。',
+    };
+  }
+}
+
 async function executeCompare() {
   const citIds = getSelectedCitationIds();
   if (citIds.length === 0) { alert('対象文献を1つ以上選択してください'); return; }
@@ -4601,14 +4911,17 @@ async function executeCompare() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ citation_ids: citIds, model, mode, effort })
     });
-    const data = await resp.json();
+    const data = await _readJsonResponse(resp);
     progress.classList.remove('show');
     btn.disabled = false;
 
-    if (data.error) { alert('エラー: ' + data.error); return; }
-
     const result = document.getElementById('parse-result');
     result.innerHTML = '';
+
+    if (data.error || data.success === false) {
+      _renderExecError(result, data);
+      return;
+    }
 
     if (data.errors && data.errors.length > 0) {
       result.innerHTML += `<div style="padding:1rem; background:#422006; border-radius:8px; color:#fbbf24; margin-bottom:0.5rem;">
@@ -4651,7 +4964,7 @@ async function executeInventiveStep() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ model })
     });
-    const data = await resp.json();
+    const data = await _readJsonResponse(resp);
     progress.classList.remove('show');
     btn.disabled = false;
 
@@ -6256,7 +6569,10 @@ function srRenderHitCard(h) {
     : 'PDF/画像 未取得 — 一括抽出時に自動で全文取得を試みます';
 
   // タイトル → 全文ハイライトビューを新タブで開く
-  const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view`;
+  const runQ = _srCurrentRun && _srCurrentRun.run_id
+    ? `?run_id=${encodeURIComponent(_srCurrentRun.run_id)}`
+    : '';
+  const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view${runQ}`;
   const titleEsc = _pkmEsc(titleSrc) || '<em style="color:var(--text2);">(タイトル未取得 — クリックで全文取得)</em>';
 
   return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
@@ -6597,25 +6913,81 @@ async function srEnrich() {
 
 async function srAiScore() {
   if (!_srCurrentRun) return;
-  const pending = (_srCurrentRun.hits || []).filter(h => h.ai_score == null).length;
+  const pending = (_srCurrentRun.hits || []).filter(h =>
+    h.ai_score == null && !String(h.ai_reason || '').startsWith('scoring error:')
+  ).length;
   const model = getPickerModel('sr-aiscore', 'sonnet');
   if (!confirm(`LLM(${model})を呼び出して関連度スコアを計算します。\n未スコア ${pending} 件すべてを実行します。`)) return;
   const loading = document.getElementById('loading-sr-aiscore');
+  const loadingText = loading ? loading.querySelector('span') : null;
   loading.classList.add('show');
   try {
-    const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/ai-score`, {
+    const r = await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/ai-score-stream`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ model }),  // limit 未指定 = 全件
     });
-    const data = await r.json();
+    if (!r.ok || !r.body) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${r.status}`);
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let total = pending;
+    let done = 0;
+    let scored = 0;
+    let failed = 0;
+
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      if (streamDone) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === 'error') throw new Error(ev.error || 'AIスコアエラー');
+        if (ev.type === 'start') {
+          total = ev.total || 0;
+          if (loadingText) loadingText.textContent = `AI関連度スコアを計算中... 0/${total}`;
+          continue;
+        }
+        if (ev.type === 'score') {
+          done = ev.done || done + 1;
+          scored = ev.scored || scored;
+          failed = ev.failed || failed;
+          const hit = ev.hit || null;
+          if (hit && _srCurrentRun && Array.isArray(_srCurrentRun.hits)) {
+            const idx = _srCurrentRun.hits.findIndex(h => h.patent_id === ev.patent_id);
+            if (idx >= 0) {
+              _srCurrentRun.hits[idx] = hit;
+              srRerenderOneHitCard(ev.patent_id);
+            }
+          }
+          if (loadingText) {
+            loadingText.textContent = `AI関連度スコアを計算中... ${done}/${total}（成功 ${scored} / 失敗 ${failed}）`;
+          }
+          continue;
+        }
+        if (ev.type === 'done') {
+          _srCurrentRun = ev.run || _srCurrentRun;
+          done = ev.done || done;
+          scored = ev.scored || scored;
+          failed = ev.failed || failed;
+        }
+      }
+    }
+
     loading.classList.remove('show');
-    if (!r.ok) { alert(data.error || 'AIスコアエラー'); return; }
-    _srCurrentRun = data.run;
+    if (loadingText) loadingText.textContent = 'AI関連度スコアを計算中... (候補数により数分かかります)';
     document.getElementById('sr-sort').value = 'ai_score';
     renderSrHits();
   } catch (e) {
     loading.classList.remove('show');
+    if (loadingText) loadingText.textContent = 'AI関連度スコアを計算中... (候補数により数分かかります)';
     alert('通信エラー: ' + e.message);
   }
 }
@@ -7090,15 +7462,19 @@ async function srBuildFormulaFromKeywords() {
   // DOM のハイライト状態を集計
   const markedKw = new Set();   // "gid|term"
   const markedFt = new Set();   // "gid|code"
+  const markedFi = new Set();   // "gid|code"
   document.querySelectorAll('.kw-tag.kw-marked').forEach(el => {
     markedKw.add((el.dataset.gid || '') + '|' + (el.dataset.term || ''));
   });
   document.querySelectorAll('.fterm-tag.kw-marked').forEach(el => {
     markedFt.add((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
   });
+  document.querySelectorAll('.fi-tag.kw-marked').forEach(el => {
+    markedFi.add((el.dataset.gid || '') + '|' + (el.dataset.code || ''));
+  });
 
   let useAll = false;
-  if (markedKw.size === 0 && markedFt.size === 0) {
+  if (markedKw.size === 0 && markedFt.size === 0 && markedFi.size === 0) {
     if (!confirm(
       'ハイライト (赤字) した語が無いため、各グループの全キーワードを使います。\n\n' +
       '選別したい場合は Step 3 で残したい語をクリックして赤くしてからもう一度実行してください。\n\n' +
@@ -7121,7 +7497,7 @@ async function srBuildFormulaFromKeywords() {
   }
 
   const parts = [];
-  let totalKw = 0, totalFt = 0;
+  let totalKw = 0, totalFt = 0, totalFi = 0;
 
   for (const g of groups) {
     const gid = String(g.group_id);
@@ -7141,21 +7517,40 @@ async function srBuildFormulaFromKeywords() {
   for (const g of groups) {
     const gid = String(g.group_id);
     const codes = ((g.search_codes || {}).fterm) || [];
+    const ftByTheme = {};
+    const ftNoTheme = [];
     for (const ft of codes) {
       const code = (ft && ft.code ? ft.code : (typeof ft === 'string' ? ft : '')).trim();
       if (!code) continue;
       if (useAll || markedFt.has(gid + '|' + code)) {
-        parts.push(/\/FT\b/.test(code) ? code : `${code}/FT`);
-        totalFt++;
+        const parsed = _srParseFtermCode(code);
+        if (parsed) {
+          if (parsed.theme) {
+            if (!ftByTheme[parsed.theme]) ftByTheme[parsed.theme] = [];
+            if (!ftByTheme[parsed.theme].includes(parsed.queryCode)) {
+              ftByTheme[parsed.theme].push(parsed.queryCode);
+              totalFt++;
+            }
+          } else if (!ftNoTheme.includes(parsed.queryCode)) {
+            ftNoTheme.push(parsed.queryCode);
+            totalFt++;
+          }
+        }
       }
     }
+    Object.entries(ftByTheme).forEach(([theme, qs]) => {
+      const ftPart = qs.length === 1 ? `${qs[0]}/FT` : `(${qs.join('+')})/FT`;
+      parts.push(`(${theme}/FC*${ftPart})`);
+    });
+    ftNoTheme.forEach(q => parts.push(`${q}/FT`));
     const fiCodes = ((g.search_codes || {}).fi) || [];
     for (const fi of fiCodes) {
       const code = (fi && fi.code ? fi.code : (typeof fi === 'string' ? fi : '')).trim();
       if (!code) continue;
-      // FI には専用ハイライト UI が無いので useAll の時のみ含める
-      if (useAll) {
+      // FI は Step 3 の FI タグでハイライトしたもの、または全件使用時のみ含める
+      if (useAll || markedFi.has(gid + '|' + code)) {
         parts.push(/\/FI\b/.test(code) ? code : `${code}/FI`);
+        totalFi++;
       }
     }
   }
@@ -7175,10 +7570,249 @@ async function srBuildFormulaFromKeywords() {
   srOnFormulaChange();
   if (typeof srAutoResizeTextarea === 'function') srAutoResizeTextarea(ta);
   ta.focus();
-  const note = useAll ? '(全件使用)' : `(ハイライト ${totalKw} 語 / ${totalFt} F-term)`;
+  const note = useAll ? '(全件使用)' : `(ハイライト ${totalKw} 語 / ${totalFt} F-term / ${totalFi} FI)`;
   if (typeof _srShowToast === 'function') {
     _srShowToast(`検索式を組立 ${note}: ${formula.length} 字`);
   }
+}
+
+async function srToggleStructureBuilder() {
+  const panel = document.getElementById('sr-structure-builder');
+  if (!panel) return;
+  const willShow = !panel.classList.contains('show');
+  panel.classList.toggle('show', willShow);
+  if (willShow) {
+    if (_srKwSnippets === null) {
+      await srLoadKwSnippets();
+    } else {
+      srRenderStructureBuilder();
+    }
+  }
+}
+
+function _srDefaultStructSources(grp) {
+  const out = [];
+  if ((grp.terms_sanitized || grp.terms || []).length) out.push('keyword');
+  if ((grp.fterm_codes || []).length) out.push('fterm');
+  if ((grp.ipc_codes || []).length) out.push('ipc');
+  else if ((grp.fi_codes || []).length) out.push('fi');
+  while (out.length < 3) out.push('');
+  return out.slice(0, 3);
+}
+
+function _srStructOption(value, label, count, selected) {
+  const disabled = count <= 0 && value ? ' disabled' : '';
+  const sel = selected === value ? ' selected' : '';
+  const suffix = value ? ` (${count})` : '';
+  return `<option value="${value}"${sel}${disabled}>${label}${suffix}</option>`;
+}
+
+function _srStructSelectHtml(grp, selected, pos) {
+  const terms = (grp.terms_sanitized || grp.terms || []).length;
+  const ipc = (grp.ipc_codes || []).length;
+  const fi = (grp.fi_codes || []).length;
+  const ft = (grp.fterm_codes || []).length;
+  return `<select class="sr-struct-source" data-pos="${pos}" onchange="srStructurePreview()">
+    ${_srStructOption('', 'なし', 0, selected)}
+    ${_srStructOption('keyword', 'キーワード', terms, selected)}
+    ${_srStructOption('fterm', 'Fターム', ft, selected)}
+    ${_srStructOption('ipc', 'IPC', ipc, selected)}
+    ${_srStructOption('fi', 'FI', fi, selected)}
+  </select>`;
+}
+
+function srRenderStructureBuilder() {
+  const body = document.getElementById('sr-structure-builder-body');
+  if (!body) return;
+  const groups = ((_srKwSnippets || {}).groups || []);
+  if (!groups.length) {
+    body.innerHTML = '<div class="muted" style="font-size:0.8rem;">Step 4 の構造グループがありません。先に Step 4「構造に再配置」を実行してください。</div>';
+    srStructurePreview();
+    return;
+  }
+  body.innerHTML = groups.map((grp, idx) => {
+    const sources = _srDefaultStructSources(grp);
+    const alpha = idx < 26 ? String.fromCharCode(65 + idx) : `G${idx + 1}`;
+    const label = _escapeHtml(grp.label || `group${idx + 1}`);
+    const terms = (grp.terms_sanitized || grp.terms || []).length;
+    const ipc = (grp.ipc_codes || []).length;
+    const fi = (grp.fi_codes || []).length;
+    const ft = (grp.fterm_codes || []).length;
+    return `<div class="sr-struct-row" data-idx="${idx}">
+      <label class="sr-struct-label" title="${label}">
+        <input type="checkbox" class="sr-struct-enabled" checked onchange="srStructurePreview()">
+        <span class="sr-struct-alpha">${alpha}</span>
+        <span style="min-width:0;">
+          <span class="sr-struct-title">${label}</span>
+          <span class="sr-struct-counts">KW ${terms} / IPC ${ipc} / FI ${fi} / FT ${ft}</span>
+        </span>
+      </label>
+      <div class="sr-struct-selects">
+        ${_srStructSelectHtml(grp, sources[0], 0)}
+        ${_srStructSelectHtml(grp, sources[1], 1)}
+        ${_srStructSelectHtml(grp, sources[2], 2)}
+      </div>
+      <code class="sr-struct-row-preview"></code>
+    </div>`;
+  }).join('');
+  srStructurePreview();
+}
+
+function srStructurePreset(mode) {
+  const rows = document.querySelectorAll('.sr-struct-row');
+  rows.forEach(row => {
+    const idx = parseInt(row.dataset.idx || '0', 10);
+    const grp = ((_srKwSnippets || {}).groups || [])[idx] || {};
+    const selects = Array.from(row.querySelectorAll('.sr-struct-source'));
+    let vals = ['', '', ''];
+    if (mode === 'keyword') vals = ['keyword', '', ''];
+    else if (mode === 'fterm') vals = ['fterm', '', ''];
+    else if (mode === 'all') vals = _srDefaultStructSources(grp);
+    selects.forEach((sel, i) => {
+      const v = vals[i] || '';
+      const opt = Array.from(sel.options).find(o => o.value === v && !o.disabled);
+      sel.value = opt ? v : '';
+    });
+  });
+  srStructurePreview();
+}
+
+function _srNormalizeClassCode(code) {
+  return String(code || '').trim().replace(/\s+/g, '');
+}
+
+function _srClassCodesPart(codes, tag) {
+  const tagRe = new RegExp(`/${tag}$`, 'i');
+  const norm = (codes || [])
+    .map(c => _srNormalizeClassCode(c).replace(tagRe, ''))
+    .filter(Boolean);
+  const uniq = Array.from(new Set(norm));
+  if (!uniq.length) return '';
+  return uniq.length === 1 ? `${uniq[0]}/${tag}` : `(${uniq.join('+')})/${tag}`;
+}
+
+function _srKeywordPart(grp, tag) {
+  const terms = (grp.terms_sanitized || grp.terms || []).map(_kwSanitizeTerm).filter(Boolean);
+  const uniq = Array.from(new Set(terms));
+  if (!uniq.length) return '';
+  return uniq.length === 1 ? `${uniq[0]}${tag}` : `(${uniq.join('+')})${tag}`;
+}
+
+function _srOrParts(parts) {
+  const clean = parts.filter(Boolean);
+  if (!clean.length) return '';
+  return clean.length === 1 ? clean[0] : `[${clean.join('+')}]`;
+}
+
+function _srStructPart(grp, source, kwTag) {
+  if (source === 'keyword') return _srKeywordPart(grp, kwTag);
+  if (source === 'fterm') return _srOrParts(_srFtermToFormulaParts(grp.fterm_codes || []));
+  if (source === 'ipc') return _srClassCodesPart(grp.ipc_codes || [], 'IP');
+  if (source === 'fi') return _srClassCodesPart(grp.fi_codes || [], 'FI');
+  return '';
+}
+
+function srStructurePreview() {
+  const groups = ((_srKwSnippets || {}).groups || []);
+  const join = (document.getElementById('sr-struct-join') || {}).value || '*';
+  const kwTag = (document.getElementById('sr-struct-kw-tag') || {}).value || '/CL';
+  const formulaParts = [];
+  let activeRows = 0;
+  document.querySelectorAll('.sr-struct-row').forEach(row => {
+    const idx = parseInt(row.dataset.idx || '0', 10);
+    const grp = groups[idx] || {};
+    const enabled = !!row.querySelector('.sr-struct-enabled')?.checked;
+    row.classList.toggle('off', !enabled);
+    const selected = Array.from(row.querySelectorAll('.sr-struct-source'))
+      .map(sel => sel.value)
+      .filter((v, i, arr) => v && arr.indexOf(v) === i);
+    const rowPart = enabled ? _srOrParts(selected.map(src => _srStructPart(grp, src, kwTag))) : '';
+    const preview = row.querySelector('.sr-struct-row-preview');
+    if (preview) preview.textContent = rowPart || '(未使用)';
+    if (rowPart) {
+      formulaParts.push(rowPart);
+      activeRows++;
+    }
+  });
+  const formula = formulaParts.join(join);
+  const pv = document.getElementById('sr-struct-preview');
+  if (pv) pv.textContent = formula || '(選択された構造・項目がありません)';
+  const st = document.getElementById('sr-struct-status');
+  if (st) st.textContent = activeRows ? `${activeRows} 構造 / ${formula.length} 字` : '';
+  return formula;
+}
+
+function srStructureApply(append) {
+  const formula = srStructurePreview();
+  if (!formula) {
+    alert('組み立てる項目がありません。構造行とプルダウンを確認してください。');
+    return;
+  }
+  const ta = document.getElementById('sr-formula');
+  if (!ta) return;
+  if (append && ta.value.trim()) {
+    const joiner = (document.getElementById('sr-struct-join') || {}).value || '*';
+    ta.value = `${ta.value.trim()}${joiner}${formula}`;
+  } else {
+    if (ta.value.trim() && !confirm('現在の検索式を上書きします。よろしいですか？')) return;
+    ta.value = formula;
+  }
+  srOnFormulaChange();
+  if (typeof srAutoResizeTextarea === 'function') srAutoResizeTextarea(ta);
+  ta.focus();
+  if (typeof _srShowToast === 'function') _srShowToast(`構造から検索式を生成: ${formula.length} 字`);
+}
+
+function _srParseFtermCode(raw) {
+  let s = String(raw || '').trim().replace(/\s+/g, '').replace(/[：:]/g, '');
+  if (!s) return null;
+  s = s.replace(/\/FT$/i, '');
+  const full = s.match(/^(\d[A-Z]\d{3})([A-Z]{2})(\d{2,3})([A-Z])?$/i);
+  if (full) {
+    const theme = full[1].toUpperCase();
+    const axis = full[2].toUpperCase();
+    let num = full[3];
+    const layerSuffix = (full[4] || '').toUpperCase();
+    const addon = (theme === '4C083' && num.length === 3 && /[12]$/.test(num)) ? num.slice(-1) : '';
+    let queryCode = axis + num + layerSuffix;
+    if (addon) {
+      num = num.slice(0, -1);
+      queryCode = `${axis}${num}.${addon}${layerSuffix}`;
+    } else if (theme === '4C083' && num.length === 2 && !layerSuffix) {
+      queryCode = `${axis}${num}.`;
+    }
+    return { theme, queryCode };
+  }
+  const short = s.match(/^([A-Z]{2})(\d{2,3})([A-Z])?(?:\.([12]?))?$/i);
+  if (short) {
+    return {
+      theme: '',
+      queryCode: short[1].toUpperCase() + short[2] + (short[3] ? short[3].toUpperCase() : '') + (short[4] !== undefined ? `.${short[4]}` : ''),
+    };
+  }
+  return null;
+}
+
+function _srFtermToFormulaParts(codes) {
+  const byTheme = {};
+  const noTheme = [];
+  (codes || []).forEach(code => {
+    const parsed = _srParseFtermCode(code);
+    if (!parsed) return;
+    if (parsed.theme) {
+      if (!byTheme[parsed.theme]) byTheme[parsed.theme] = [];
+      if (!byTheme[parsed.theme].includes(parsed.queryCode)) byTheme[parsed.theme].push(parsed.queryCode);
+    } else if (!noTheme.includes(parsed.queryCode)) {
+      noTheme.push(parsed.queryCode);
+    }
+  });
+  const parts = [];
+  Object.entries(byTheme).forEach(([theme, qs]) => {
+    const ftPart = qs.length === 1 ? `${qs[0]}/FT` : `(${qs.join('+')})/FT`;
+    parts.push(`(${theme}/FC*${ftPart})`);
+  });
+  noTheme.forEach(q => parts.push(`${q}/FT`));
+  return parts;
 }
 
 function srInsertText(text) {
@@ -7313,8 +7947,9 @@ async function srLoadKwSnippets() {
   try {
     const r = await fetch(`/case/${CASE_ID}/search-run/snippets`);
     _srKwSnippets = await r.json();
-  } catch (e) { _srKwSnippets = {groups: [], fi_codes: [], fterm_codes: [], theme_codes: []}; }
+  } catch (e) { _srKwSnippets = {groups: [], ipc_codes: [], fi_codes: [], fterm_codes: [], theme_codes: []}; }
   srRenderKwSnippets();
+  srRenderStructureBuilder();
   srRenderThemeChips(_srKwSnippets.theme_codes || []);
 }
 
@@ -7353,11 +7988,21 @@ function srRenderKwSnippets() {
       </div>`;
     }).join('');
   }
+  const ipc = snip.ipc_codes || [];
   const fi = snip.fi_codes || [];
   const ft = snip.fterm_codes || [];
   // 既に /FI などが付いていればそのまま、無ければ付与
+  const withIPC = (c) => /\/IP\b/.test(c) ? c : `${_srNormalizeClassCode(c)}/IP`;
   const withFI = (c) => /\/FI\b/.test(c) ? c : `${c}/FI`;
-  const withFT = (c) => /\/FT\b/.test(c) ? c : `${c}/FT`;
+  const withFT = (c) => {
+    const parts = _srFtermToFormulaParts([c]);
+    return parts[0] || (/\/FT\b/.test(c) ? c : `${c}/FT`);
+  };
+  const ipcBtns = ipc.map(code => {
+    const tagged = withIPC(code);
+    const esc = JSON.stringify(tagged);
+    return `<button class="sr-kw-code" onclick='srInsertText(${esc})' title="${tagged.replace(/"/g, '&quot;')}">${code.replace(/</g, '&lt;')}</button>`;
+  }).join('');
   const fiBtns = fi.map(code => {
     const tagged = withFI(code);
     const esc = JSON.stringify(tagged);
@@ -7368,8 +8013,9 @@ function srRenderKwSnippets() {
     const esc = JSON.stringify(tagged);
     return `<button class="sr-kw-code" onclick='srInsertText(${esc})' title="${tagged.replace(/"/g, '&quot;')}">${code.replace(/</g, '&lt;')}</button>`;
   }).join('');
-  c.innerHTML = (fiBtns || ftBtns)
+  c.innerHTML = (ipcBtns || fiBtns || ftBtns)
     ? `
+      ${ipcBtns ? `<div class="sr-kw-codes-row"><span class="sr-kw-codes-label">IPC:</span>${ipcBtns}</div>` : ''}
       ${fiBtns ? `<div class="sr-kw-codes-row"><span class="sr-kw-codes-label">FI:</span>${fiBtns}</div>` : ''}
       ${ftBtns ? `<div class="sr-kw-codes-row"><span class="sr-kw-codes-label">Fterm:</span>${ftBtns}</div>` : ''}
     `

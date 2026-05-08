@@ -109,6 +109,17 @@ def _load_case_data(case_id: str) -> dict:
     if cls_path.exists():
         with cls_path.open(encoding="utf-8") as f:
             data["classification"] = json.load(f)
+    elif data.get("hongan"):
+        h = data["hongan"]
+        cls = {
+            "ipc": h.get("ipc") or [],
+            "fi": h.get("fi") or [],
+            "fterm": h.get("fterm") or [],
+            "theme_codes": h.get("theme_codes") or h.get("theme_code") or [],
+            "source": "hongan.json",
+        }
+        if any(cls.get(k) for k in ("ipc", "fi", "fterm", "theme_codes")):
+            data["classification"] = cls
 
     rel_path = case_dir / "related_paragraphs.json"
     if rel_path.exists():
@@ -198,8 +209,9 @@ def _enrich_fterm_codes(codes: list[str], field: str) -> dict:
         if not c:
             continue
         # F-term コード "4C083AA161" → theme="4C083", suffix="AA161"
+        # 4F100 では末尾 A/B/C が層位置を表すことがあるため suffix 側に残す。
         import re as _re
-        m = _re.match(r"^(\d{1,2}[A-Z]\d{3})([A-Z]{2}\d{2,3})$", c)
+        m = _re.match(r"^(\d[A-Z]\d{3})([A-Z]{2}\d{2,3}[A-Z]?)$", c)
         if m:
             theme, suffix = m.group(1), m.group(2)
         else:

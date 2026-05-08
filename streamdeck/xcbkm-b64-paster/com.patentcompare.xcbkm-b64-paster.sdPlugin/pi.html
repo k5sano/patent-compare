@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XCBKM B64 Paster</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <section id="dropZone" class="drop-zone">
+      <div class="drop-title">XCBKM / PDF bookmark export</div>
+      <div class="drop-sub">ここにファイルをドロップ</div>
+      <button id="pickButton" type="button">ファイルを選択</button>
+      <input id="fileInput" type="file" hidden>
+    </section>
+
+    <section class="delay-panel">
+      <label for="delayInput">打鍵間隔</label>
+      <div class="delay-row">
+        <input id="delayInput" type="range" min="1" max="10" step="1" value="5">
+        <output id="delayValue">5 ms</output>
+      </div>
+    </section>
+
+    <section class="status-panel">
+      <div class="status-line">
+        <span>保持状態</span>
+        <strong id="storedState">未設定</strong>
+      </div>
+      <div class="status-line">
+        <span>ファイル</span>
+        <strong id="fileName">-</strong>
+      </div>
+      <div class="status-line">
+        <span>Base64</span>
+        <strong id="b64Length">0 chars</strong>
+      </div>
+    </section>
+  </main>
+  <script src="pi-v013.js"></script>
+</body>
+</html>

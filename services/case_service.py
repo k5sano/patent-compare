@@ -3,6 +3,7 @@
 """案件データ管理サービス"""
 
 import json
+import logging
 import re
 import shutil
 import threading
@@ -10,6 +11,7 @@ import yaml
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+logger = logging.getLogger(__name__)
 
 # case_id ごとの排他制御。同一案件への並列書き込み（複数PDF同時アップロード等）で
 # case.yaml / search_reports.json などの lost-update を防ぐ。
@@ -97,6 +99,89 @@ def save_case_meta(case_id, meta):
     p = get_case_dir(case_id) / "case.yaml"
     with open(p, "w", encoding="utf-8") as f:
         yaml.dump(meta, f, allow_unicode=True, default_flow_style=False)
+
+
+def _safe_fetch_bibliography(patent_id: str) -> dict:
+    """J-PlatPat 書誌情報を取得する。失敗時は既存挙動維持のため空 dict。"""
+    if not patent_id:
+        return {}
+    try:
+        from modules.jplatpat_bibliography import fetch_jplatpat_bibliography
+        return fetch_jplatpat_bibliography(patent_id) or {}
+    except Exception as e:
+        logger.info("J-PlatPat 書誌情報取得をスキップ (%s): %s", patent_id, e)
+        return {}
+
+
+def _merge_bibliography_into_meta(meta: dict, bib: dict) -> bool:
+    if not bib:
+        return False
+    changed = False
+    for key in ("application_number", "application_date", "publication_date",
+                "priority_date", "priority_dates", "applicants", "inventors"):
+        value = bib.get(key)
+        if value and not meta.get(key):
+            meta[key] = value
+            changed = True
+    if bib.get("applicant") and not meta.get("applicant"):
+        meta["applicant"] = bib["applicant"]
+        changed = True
+    if bib.get("patent_title") and not meta.get("patent_title"):
+        meta["patent_title"] = bib["patent_title"]
+        changed = True
+    return changed
+
+
+def _merge_bibliography_into_hongan(hongan: dict, bib: dict) -> bool:
+    if not bib:
+        return False
+    changed = False
+    for key in ("application_number", "application_date", "publication_date",
+                "priority_date", "priority_dates", "applicants", "applicant",
+                "inventors"):
+        value = bib.get(key)
+        if value and not hongan.get(key):
+            hongan[key] = value
+            changed = True
+    for src_key, dst_key in (
+        ("ipc", "ipc"),
+        ("fi", "fi"),
+        ("fterm", "fterm"),
+        ("theme_code", "theme_code"),
+        ("theme_codes", "theme_codes"),
+    ):
+        value = bib.get(src_key)
+        if value and not hongan.get(dst_key):
+            hongan[dst_key] = value
+            changed = True
+    if bib.get("fetched_at"):
+        hongan["jplatpat_bibliography_fetched_at"] = bib["fetched_at"]
+        changed = True
+    return changed
+
+
+def _classification_from_bibliography(pn: str, bib: dict) -> dict:
+    return {
+        "patent_number": pn,
+        "source": "jplatpat",
+        "fetched_at": bib.get("fetched_at"),
+        "ipc": [{"code": c} for c in (bib.get("ipc") or [])],
+        "fi": [{"code": c} for c in (bib.get("fi") or [])],
+        "theme_codes": bib.get("theme_codes") or bib.get("theme_code") or [],
+        "fterm": [
+            {"code": c, "label": "", "type": "本願付与", "note": "J-PlatPat より自動取得"}
+            for c in (bib.get("fterm") or [])
+        ],
+    }
+
+
+def _save_classification_from_bibliography(case_dir: Path, pn: str, bib: dict) -> None:
+    if not bib or not any(bib.get(k) for k in ("ipc", "fi", "fterm", "theme_code", "theme_codes")):
+        return
+    search_dir = case_dir / "search"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    with (search_dir / "classification.json").open("w", encoding="utf-8") as f:
+        json.dump(_classification_from_bibliography(pn, bib), f, ensure_ascii=False, indent=2)
 
 
 def list_all_cases():
@@ -358,19 +443,27 @@ def create_case(case_number, year="", month="", field="cosmetics",
             "google_patents_url": dl_result.get("google_patents_url", ""),
         }
 
+    # PDF が取れた番号で J-PlatPat 書誌情報も取得する。失敗時は空 dict のまま進める。
+    bibliography = _safe_fetch_bibliography(parsed["patent_number"] or jp_id)
+    if _merge_bibliography_into_meta(meta, bibliography):
+        save_case_meta(case_id, meta)
+
     try:
         result = extract_patent_pdf(dl_result["path"], "hongan")
         # PDF 解決時に元ファイルを正引きできるよう source_pdf を残す
         result["source_pdf"] = Path(dl_result["path"]).name
+        _merge_bibliography_into_hongan(result, bibliography)
         with open(case_dir / "hongan.json", "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
-        patent_number = result.get("patent_number", "")
-        patent_title = result.get("patent_title", "")
+        patent_number = result.get("patent_number") or bibliography.get("patent_number", "")
+        patent_title = result.get("patent_title") or bibliography.get("patent_title", "")
         meta["patent_number"] = patent_number
         meta["patent_title"] = patent_title
         meta["title"] = patent_title
+        _merge_bibliography_into_meta(meta, bibliography)
         save_case_meta(case_id, meta)
+        _save_classification_from_bibliography(case_dir, patent_number, bibliography)
 
         num_segments = 0
         if result.get("claims"):
@@ -910,8 +1003,6 @@ def fetch_hongan_classification_from_jplatpat(case_id):
     Returns:
         ({"success": True, "classifications": {...}}, 200) | (error, code)
     """
-    from modules.jplatpat_client import fetch_jplatpat_full_text
-
     case_dir = get_case_dir(case_id)
     meta = load_case_meta(case_id)
     if not meta:
@@ -921,35 +1012,21 @@ def fetch_hongan_classification_from_jplatpat(case_id):
     if not pn:
         return {"error": "本願の公開番号が設定されていません (case meta の patent_number)"}, 400
 
-    # J-PlatPat 詳細ページから raw + classifications を取得
+    # J-PlatPat 内部 API から書誌欄 + classifications を取得
     try:
-        ft = fetch_jplatpat_full_text(pn, language="ja")
+        from modules.jplatpat_bibliography import fetch_jplatpat_bibliography
+        bib = fetch_jplatpat_bibliography(pn)
     except Exception as e:
         return {"error": f"J-PlatPat 取得失敗: {e}"}, 500
 
-    if ft.get("error"):
-        return {"error": f"J-PlatPat 取得失敗: {ft['error']}"}, 500
-
-    cls = ft.get("classifications") or {}
-    if not any(cls.values()):
+    if not any(bib.get(k) for k in ("ipc", "fi", "fterm", "theme_code", "theme_codes")):
         return {
             "error": ("J-PlatPat 詳細ページから書誌情報を抽出できませんでした。"
-                      "公開番号が正しいか、J-PlatPat の DOM 変更が無いかを確認してください。"),
+                      "公開番号が正しいか、J-PlatPat の内部 API 仕様変更が無いかを確認してください。"),
         }, 500
 
     # 保存形式は既存 fterm_candidates が読む {"fterm": [{"code","label","type","note"},...]} に合わせる
-    out = {
-        "patent_number": pn,
-        "source": "jplatpat",
-        "fetched_at": ft.get("fetched_at"),
-        "ipc": [{"code": c} for c in (cls.get("ipc") or [])],
-        "fi": [{"code": c} for c in (cls.get("fi") or [])],
-        "theme_codes": cls.get("theme_codes") or [],
-        "fterm": [
-            {"code": c, "label": "", "type": "本願付与", "note": "J-PlatPat より自動取得"}
-            for c in (cls.get("fterm") or [])
-        ],
-    }
+    out = _classification_from_bibliography(pn, bib)
 
     search_dir = case_dir / "search"
     search_dir.mkdir(parents=True, exist_ok=True)
@@ -965,6 +1042,11 @@ def fetch_hongan_classification_from_jplatpat(case_id):
         "n_fterm": len(out["fterm"]),
         "n_theme": len(out["theme_codes"]),
         "theme_codes": out["theme_codes"],
+        "bibliography": {
+            "application_date": bib.get("application_date", ""),
+            "applicants": bib.get("applicants") or [],
+            "inventors": bib.get("inventors") or [],
+        },
         "saved_to": str(out_path),
     }, 200
 
