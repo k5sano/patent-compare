@@ -65,6 +65,32 @@ _EXPAND_ALL_SELECTORS = [
     'a:has-text("Open all")',
     '[role="button"]:has-text("Open all")',
 ]
+_EXPAND_ALL_LABELS = [
+    "書類情報を全て開く",
+    "書類情報をすべて開く",
+    "全て開く",
+    "すべて開く",
+    "Open all",
+]
+_SHOW_ALL_CITATION_SELECTORS = [
+    'text="全ての分類･引用情報を表示"',
+    'text="全ての分類・引用情報を表示"',
+    'text="すべての分類･引用情報を表示"',
+    'text="すべての分類・引用情報を表示"',
+    'button:has-text("分類")',
+    'button:has-text("引用情報")',
+    'a:has-text("分類")',
+    'a:has-text("引用情報")',
+    '[role="button"]:has-text("分類")',
+    '[role="button"]:has-text("引用情報")',
+]
+_SHOW_ALL_CITATION_LABELS = [
+    "全ての分類･引用情報を表示",
+    "全ての分類・引用情報を表示",
+    "すべての分類･引用情報を表示",
+    "すべての分類・引用情報を表示",
+    "Show all classification/citation information",
+]
 
 _SCRAPE_SELECTORS = [
     "table tbody tr",
@@ -427,6 +453,14 @@ def _rejection_cover_key(label: str, date: str = "") -> str:
     return f"{date or ''}|{norm}"
 
 
+def _rejection_cover_keys(kind: str, label: str, date: str = "") -> set[str]:
+    keys = {_rejection_cover_key(label, date)}
+    kind_norm = re.sub(r"\s+", "", kind or "").lower()
+    if date and kind_norm:
+        keys.add(f"{date}|kind:{kind_norm}")
+    return keys
+
+
 def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
     cache = _load_rejection_summary_cache(case_id)
     cached_items = cache.get("items") or {}
@@ -441,7 +475,8 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
         kind = report.get("kind") or ""
         label = report.get("label") or report.get("filename") or kind
         if kind in ("IPER", "WOSA") or kind in _REJECTION_KINDS or re.search(r"IPER|Written Opinion|書面意見|予備報告|Rejection|Office Action|拒絶理由", label, re.I):
-            covered_opd_document_keys.add(_rejection_cover_key(label, report.get("date", "")))
+            cover_kind = "IPER" if kind == "WOSA" and re.search(r"International Preliminary Report|予備報告|IPER", label, re.I) else kind
+            covered_opd_document_keys.update(_rejection_cover_keys(cover_kind, label, report.get("date", "")))
 
     def add_item(kind: str, label: str, *, source: str, text: str = "", date: str = "", note: str = "") -> None:
         label = re.sub(r"\s+", " ", label or "").strip()
@@ -479,7 +514,7 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
             continue
         text = doc.get("text") or doc.get("label") or ""
         date = doc.get("date") or _extract_doc_date(text)
-        if _rejection_cover_key(text, date) in covered_opd_document_keys:
+        if _rejection_cover_keys(kind, text, date) & covered_opd_document_keys:
             continue
         add_item(kind, text, source="opd_document", date=date)
 
@@ -946,6 +981,8 @@ class OpdDossierSession:
                 "patent_number": _hongan_patent_number(case_id),
                 "collected_at": datetime.now(timezone.utc).isoformat(),
                 "page_url": result.get("url", ""),
+                "expanded": bool(result.get("expanded")),
+                "citation_info_expanded": bool(result.get("citation_info_expanded")),
                 "page_text": result.get("page_text", ""),
                 "citation_info_texts": result.get("citation_info_texts", []),
                 "documents": result.get("documents", []),
@@ -1149,13 +1186,16 @@ class OpdDossierSession:
         expanded = _click_expand_all_documents(page)
         if expanded:
             page.wait_for_timeout(2500)
+        citation_expanded = _click_show_all_citation_info(page)
+        if citation_expanded:
+            page.wait_for_timeout(2000)
         documents = _scrape_documents(page)
         page_text = _scrape_page_text(page)
         citation_info_texts = _scrape_citation_info_texts(page)
         targets = [d for d in documents if d.get("target")]
         targets.sort(key=lambda d: (-int(d.get("priority") or 0), d.get("kind", ""), d.get("label", "")))
         warnings = []
-        if not expanded:
+        if not expanded and not _documents_look_expanded(documents):
             warnings.append("「書類情報を全て開く」ボタンを自動クリックできませんでした。未展開なら手動で開いて再収集してください。")
         if not targets:
             warnings.append("対象書類候補が見つかりませんでした。OPD画面が開かれているか確認してください。")
@@ -1169,6 +1209,7 @@ class OpdDossierSession:
             "ok": True,
             "url": page.url,
             "expanded": bool(expanded),
+            "citation_info_expanded": bool(citation_expanded),
             "page_text": page_text,
             "citation_info_texts": citation_info_texts,
             "documents": documents,
@@ -1191,6 +1232,13 @@ class OpdDossierSession:
             date = target.get("date") or _extract_doc_date(label)
             item = {"kind": kind, "label": label, "date": date, "success": False}
             try:
+                direct_ok, direct_path = _try_direct_opd_recipe_download(page, case_id, target)
+                if direct_ok:
+                    item["success"] = True
+                    item["path"] = direct_path
+                    item["resolved_by"] = "saved_wsh0901_recipe"
+                    downloads.append(item)
+                    continue
                 row = _find_opd_attachment_row_for_target(page, target)
                 if row is None:
                     item["error"] = "OPD画面上で対象の添付書類行を見つけられませんでした"
@@ -1234,49 +1282,81 @@ def _click_first_visible(page, selectors: list[str], *, timeout: int) -> bool:
 
 
 def _click_expand_all_documents(page) -> bool:
-    if _click_first_visible(page, _EXPAND_ALL_SELECTORS, timeout=1200):
+    return _click_opd_toolbar_button(page, _EXPAND_ALL_LABELS, _EXPAND_ALL_SELECTORS)
+
+
+def _click_show_all_citation_info(page) -> bool:
+    return _click_opd_toolbar_button(page, _SHOW_ALL_CITATION_LABELS, _SHOW_ALL_CITATION_SELECTORS)
+
+
+def _documents_look_expanded(documents: list[dict]) -> bool:
+    if not documents:
+        return False
+    has_target = any(d.get("target") for d in documents)
+    has_attachment = any(_ATTACHED_PAT.search(d.get("text") or d.get("label") or "") for d in documents)
+    has_original = any(re.search(r"原文|Original", d.get("text") or d.get("label") or "", re.I) for d in documents)
+    return bool(has_target and (has_attachment or has_original))
+
+
+def _click_opd_toolbar_button(page, labels: list[str], selectors: list[str]) -> bool:
+    """Click OPD toolbar buttons whose visible label may be split across nested nodes."""
+    if _click_first_visible(page, selectors, timeout=1200):
         return True
     try:
         return bool(page.evaluate(
-            """() => {
-                const labels = ['書類情報を全て開く', '書類情報をすべて開く', '全て開く', 'すべて開く', 'Open all'];
+            """({labels}) => {
+                const normalizedLabels = labels.map(label => String(label || '').replace(/[\\s　]+/g, ''));
+                const clickableSelector = 'button,a,[role="button"],input[type="button"],input[type="submit"]';
                 const isVisible = (el) => {
                   const r = el.getBoundingClientRect();
                   const s = window.getComputedStyle(el);
                   return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
                 };
-                const score = (el) => {
+                const normText = (el) => {
+                  const value = el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '';
+                  return ((el.innerText || el.textContent || '') + ' ' + value).replace(/[\\s　]+/g, '');
+                };
+                const clickableAncestor = (el) => {
+                  let cur = el;
+                  for (let i = 0; cur && i < 5; i += 1, cur = cur.parentElement) {
+                    if (cur.matches && cur.matches(clickableSelector)) return cur;
+                    if (cur.onclick || cur.tabIndex >= 0) return cur;
+                  }
+                  return el;
+                };
+                const score = (el, text) => {
                   const tag = (el.tagName || '').toLowerCase();
                   let v = 0;
-                  if (tag === 'button' || tag === 'a') v += 4;
-                  if (el.getAttribute('role') === 'button') v += 3;
-                  if (typeof el.onclick === 'function') v += 2;
-                  if (el.tabIndex >= 0) v += 1;
+                  if (tag === 'button' || tag === 'a') v += 40;
+                  if (el.getAttribute('role') === 'button') v += 30;
+                  if (el.onclick) v += 15;
+                  if (el.tabIndex >= 0) v += 5;
+                  if (normalizedLabels.some(label => text === label)) v += 20;
+                  if (normalizedLabels.some(label => text.startsWith(label))) v += 8;
                   return v;
                 };
                 const candidates = [];
-                for (const el of document.querySelectorAll('button,a,[role=\"button\"],span,div,li')) {
+                const nodes = document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"],span,div,li');
+                for (const el of nodes) {
                   if (!isVisible(el)) continue;
-                  const text = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                  const text = normText(el);
                   if (!text) continue;
-                  for (const label of labels) {
-                    if (text === label.replace(/\\s+/g, '') || text.includes(label.replace(/\\s+/g, ''))) {
-                      candidates.push(el);
-                      break;
-                    }
-                  }
+                  if (!normalizedLabels.some(label => text === label || text.includes(label))) continue;
+                  const target = clickableAncestor(el);
+                  if (!target || !isVisible(target)) continue;
+                  const targetText = normText(target) || text;
+                  candidates.push({target, score: score(target, targetText), area: target.getBoundingClientRect().width * target.getBoundingClientRect().height});
                 }
-                candidates.sort((a, b) => {
-                  const ar = a.getBoundingClientRect();
-                  const br = b.getBoundingClientRect();
-                  return score(b) - score(a) || (ar.width * ar.height) - (br.width * br.height);
-                });
-                const target = candidates[0];
-                if (!target) return false;
-                target.scrollIntoView({block: 'center', inline: 'center'});
-                target.click();
+                candidates.sort((a, b) => b.score - a.score || a.area - b.area);
+                const found = candidates[0] && candidates[0].target;
+                if (!found) return false;
+                found.scrollIntoView({block: 'center', inline: 'center'});
+                for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                  found.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window}));
+                }
                 return true;
-            }"""
+            }""",
+            {"labels": labels},
         ))
     except Exception:
         return False
@@ -1688,9 +1768,6 @@ def _try_save_pdf_from_response(page, response, case_id: str, target: dict) -> t
 
 def _click_row_pdf_and_capture_download(page, row, case_id: str, target: dict) -> tuple[bool, str]:
     dest_dir = _opd_pdf_dir(case_id)
-    direct_ok, direct_path = _try_direct_opd_recipe_download(page, case_id, target)
-    if direct_ok:
-        return True, direct_path
     clickers = []
     for sel in _OPD_ATTACHMENT_DOWNLOAD_SELECTORS:
         try:

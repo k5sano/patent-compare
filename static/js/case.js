@@ -1196,6 +1196,9 @@ async function autoProcessCollectedOpd(data) {
   } catch (_) {
     /* summarizeOpdRejections handles display */
   }
+  if (typeof loadDossierCitationCandidates === 'function') {
+    await loadDossierCitationCandidates();
+  }
 }
 
 window.downloadOpdRejectionPdfs = downloadOpdRejectionPdfs;
@@ -1639,6 +1642,7 @@ function _hrefSourceLabel(source) {
     opd_dossier: 'ドシエ',
     opd_dossier_ocr: 'ドシエOCR',
     opd_dossier_ocr_family: 'ドシエOCRファミリー',
+    opd_attached_pdf_ocr: 'OPD添付PDF OCR',
   };
   return labels[source] || source || '';
 }
@@ -1852,6 +1856,7 @@ function _dossierSourceLabel(source) {
     opd_dossier: 'ドシエ',
     opd_dossier_ocr: 'ドシエOCR',
     opd_dossier_ocr_family: 'ドシエOCRファミリー',
+    opd_attached_pdf_ocr: 'OPD添付PDF OCR',
   };
   return labels[source] || source || 'ドシエ';
 }
@@ -1985,7 +1990,7 @@ async function downloadAllDossierCitationCandidates(btn) {
     const ids = (data.candidates || []).filter(c => !c.loaded && c.patent_id).map(c => c.patent_id);
     if (!ids.length) return;
     if (!confirm(`未読込のドシエ引例 ${ids.length}件をPDF取得して引用文献に追加します。続行しますか?`)) return;
-    _downloadDossierCitationPatentIds(ids, btn);
+    await _downloadDossierCitationPatentIds(ids, btn);
   } catch (e) {
     alert('ドシエ引例候補の取得に失敗しました: ' + (e.message || e));
   }
@@ -6021,6 +6026,64 @@ async function annotateAll() {
     loading.classList.remove('show');
     alert('エラー: ' + e.message);
   }
+}
+
+async function annotateSelected() {
+  const loading = document.getElementById('loading-annotate');
+  const resultDiv = document.getElementById('annotate-result');
+  const selected = _getSelectedCitIdsForExport();
+  const ids = (selected === null)
+    ? ((window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.cit_ids) || [])
+    : selected;
+
+  if (!ids.length) {
+    resultDiv.innerHTML = `<div style="padding:0.8rem; background:#450a0a; border-radius:8px; color:#fca5a5; font-size:0.85rem;">
+      注釈PDFを開く文献が選択されていません。Step 6 の「表示する列」で 1 件以上チェックしてください。
+    </div>`;
+    return;
+  }
+
+  loading.classList.add('show');
+  resultDiv.innerHTML = `<div style="padding:0.8rem; background:var(--surface2); border-radius:8px; color:var(--text2); font-size:0.85rem;">
+    選択した文献 ${ids.length}件の注釈PDFを準備しています...
+  </div>`;
+
+  const results = [];
+  try {
+    for (const citId of ids) {
+      const resp = await fetch(`/case/${CASE_ID}/annotate/${encodeURIComponent(citId)}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({force_new_file: false}),
+      });
+      const data = await resp.json();
+      results.push({citation_id: citId, ok: resp.ok && data.success, data});
+    }
+  } catch (e) {
+    loading.classList.remove('show');
+    alert('エラー: ' + e.message);
+    return;
+  }
+
+  loading.classList.remove('show');
+  const ok = results.filter(r => r.ok).length;
+  const opened = results.filter(r => r.ok && r.data.opened).length;
+  let html = `<div style="padding:0.8rem; background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;">
+    選択した文献 ${ids.length}件中 ${ok}件の注釈PDFを生成し、${opened}件をPDF-XChange Editorで開きました。
+  </div>`;
+  const failures = results.filter(r => !r.ok);
+  if (failures.length) {
+    const failLines = failures.map(r => {
+      const data = r.data || {};
+      const jpUrl = data.jplatpat_url || buildJplatpatUrl(r.citation_id);
+      const link = jpUrl ? ` <a href="${jpUrl}" target="_blank" style="color:#60a5fa;">J-PlatPat</a>` : '';
+      return `${_escapeHtml(r.citation_id)}: ${_escapeHtml(data.error || '失敗')}${link}`;
+    }).join('<br>');
+    html += `<div style="padding:0.8rem; background:#422006; border-radius:8px; margin-top:0.5rem; color:#fbbf24; font-size:0.85rem;">
+      ${failures.length}件失敗:<br>${failLines}
+    </div>`;
+  }
+  resultDiv.innerHTML = html;
 }
 
 // ================================================================

@@ -176,6 +176,83 @@ def test_find_opd_download_recipe_matches_target(tmp_path, monkeypatch):
     assert recipe["endpoint"].endswith("/app/opdgw/wsh0901")
 
 
+def test_click_opd_toolbar_button_falls_back_to_dom_click(monkeypatch):
+    calls = {}
+
+    class FakePage:
+        def evaluate(self, script, arg):
+            calls["script"] = script
+            calls["arg"] = arg
+            return True
+
+    monkeypatch.setattr(opd, "_click_first_visible", lambda *_args, **_kwargs: False)
+
+    assert opd._click_opd_toolbar_button(FakePage(), ["書類情報を全て開く"], []) is True
+    assert "clickableAncestor" in calls["script"]
+    assert calls["arg"] == {"labels": ["書類情報を全て開く"]}
+
+
+def test_documents_look_expanded_when_target_and_attachment_are_present():
+    docs = [
+        {"kind": "IPER", "target": True, "text": "2030-01-02 International Preliminary Report 原文"},
+        {"kind": "添付書類", "target": False, "text": "2030-01-02 添付書類（Attached Document） 原文"},
+    ]
+
+    assert opd._documents_look_expanded(docs) is True
+    assert opd._documents_look_expanded([{"kind": "IPER", "target": True, "text": "IPER"}]) is False
+
+
+def test_download_rejection_pdfs_uses_saved_recipe_without_row(monkeypatch):
+    sess = opd.OpdDossierSession()
+    sess._page = object()
+    monkeypatch.setattr(opd, "_dismiss_modals", lambda _page: None)
+    monkeypatch.setattr(opd, "_click_expand_all_documents", lambda _page: False)
+    monkeypatch.setattr(opd, "_try_direct_opd_recipe_download", lambda _page, _case_id, _target: (True, "saved.pdf"))
+
+    def fail_find_row(*_args, **_kwargs):
+        raise AssertionError("row lookup should not be needed when a saved recipe works")
+
+    monkeypatch.setattr(opd, "_find_opd_attachment_row_for_target", fail_find_row)
+
+    result = sess._op_download_rejection_pdfs("2030-opd", [{
+        "kind": "IPER",
+        "label": "2030-01-02 International Preliminary Report",
+        "date": "2030-01-02",
+    }])
+
+    assert result["downloads"][0]["success"] is True
+    assert result["downloads"][0]["path"] == "saved.pdf"
+    assert result["downloads"][0]["resolved_by"] == "saved_wsh0901_recipe"
+
+
+def test_rejection_documents_opd_pdf_covers_same_date_kind_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    case_dir = tmp_path / "cases" / "2030-opd"
+    case_dir.mkdir(parents=True)
+    (case_dir / "meta.json").write_text(json.dumps({"case_id": "2030-opd"}), encoding="utf-8")
+
+    data = {
+        "documents": [{
+            "kind": "IPER",
+            "target": True,
+            "date": "2030-01-02",
+            "text": "2030-01-02 International Preliminary Report on Patentability Chapter I 発送書類 原文",
+        }],
+        "opd_pdf_reports": [{
+            "kind": "WOSA",
+            "label": "2030-01-02 特許性に関する国際予備報告（第I章） Attached Document",
+            "date": "2030-01-02",
+            "raw_text": "Box No.V Reasoned statement text",
+        }],
+    }
+
+    docs = opd._build_rejection_documents("2030-opd", data)
+
+    assert len(docs) == 1
+    assert docs[0]["source"] == "opd_attached_pdf"
+
+
 def test_citation_candidates_ignore_page_text_family_and_use_citation_info():
     data = {
         "case_id": "2024-533284",
