@@ -1,0 +1,19 @@
+{
+  "document_id": "JP2030000002A",
+  "comparisons": [
+    {
+      "requirement_id": "1A",
+      "judgment": "○",
+      "cited_location": "0010;0011",
+      "judgment_reason": "成分Aが記載されている。"
+    },
+    {
+      "requirement_id": "1B",
+      "judgment": "△",
+      "cited_location": "T1;T2",
+      "judgment_reason": "成分Bは表で一部記載されている。"
+    }
+  ],
+  "overall_summary": "保存テスト",
+  "category_suggestion": "Y"
+}

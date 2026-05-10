@@ -880,7 +880,8 @@ function _renderOpdTargets(data) {
   const opdPdfReports = (data && data.opd_pdf_reports) || [];
   const rejections = (data && data.rejection_documents) || [];
   const warnings = (data && data.warnings) || [];
-  if (!targets.length && !docs.length && !citations.length && !ocrReports.length && !rejections.length && !warnings.length) {
+  const timing = (data && data.opd_timing) || null;
+  if (!targets.length && !docs.length && !citations.length && !ocrReports.length && !rejections.length && !warnings.length && !timing) {
     wrap.style.display = 'none';
     wrap.innerHTML = '';
     return;
@@ -919,6 +920,37 @@ function _renderOpdTargets(data) {
   const embeddedOcrCitations = ocrReports.reduce((sum, r) =>
     sum + ((r.citations || []).length) + ((r.family_citations || []).length), 0);
   const opdPdfChars = opdPdfReports.reduce((sum, r) => sum + Number(r.raw_text_length || (r.raw_text || '').length || 0), 0);
+  const timingLabels = {
+    collect_opd_documents: 'OPD書類収集',
+    download_rejection_pdfs: 'OPD添付PDF保存/OCR',
+    rebuild_embedded_isr_ocr: '本願内ISR OCR',
+    summarize_rejection_documents: '拒絶理由・見解の翻訳/要約',
+    ingest_opd_pdf_file: 'OPD添付PDF手動取込',
+    fetch: '取得/ブラウザ操作',
+    load_index: '収集結果読込',
+    ocr: 'OCR/解析',
+    parse: '候補整理',
+    llm: 'LLM翻訳・要約',
+    save: '保存',
+  };
+  const timingHtml = timing && Number.isFinite(Number(timing.total_sec)) ? (() => {
+    const stepRows = Object.entries(timing.steps || {}).map(([name, sec]) => `
+      <tr>
+        <td style="padding:0.18rem 0.45rem; color:#94a3b8;">${_hrefEsc(timingLabels[name] || name)}</td>
+        <td style="padding:0.18rem 0.45rem; text-align:right; font-family:ui-monospace,monospace;">${Number(sec || 0).toFixed(1)}s</td>
+      </tr>`).join('');
+    const title = timingLabels[timing.operation] || timing.operation || 'OPD処理';
+    const statusColor = timing.status === 'ok' ? '#86efac' : '#fbbf24';
+    return `<details style="margin-top:0.5rem;" open>
+      <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">
+        前回処理時間: ${_hrefEsc(title)} / ${Number(timing.total_sec || 0).toFixed(1)}s
+        <span style="color:${statusColor}; margin-left:0.35rem;">${_hrefEsc(timing.status || '')}</span>
+      </summary>
+      <table style="width:100%; border-collapse:collapse; font-size:0.76rem; margin-top:0.3rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
+        <tbody>${stepRows || '<tr><td style="padding:0.35rem 0.45rem; color:#94a3b8;">内訳なし</td><td></td></tr>'}</tbody>
+      </table>
+    </details>`;
+  })() : '';
   const sourceStatusHtml = `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.4rem; margin-top:0.55rem;">
     <div style="padding:0.45rem 0.55rem; border:1px solid var(--border); border-radius:6px; background:rgba(15,23,42,0.35); font-size:0.78rem;">
       <div style="color:#bfdbfe; font-weight:700;">本願PDF内ISR OCR</div>
@@ -994,6 +1026,7 @@ function _renderOpdTargets(data) {
     </table>
     <div style="margin-top:0.55rem; color:#94a3b8; font-size:0.78rem;">ドシエ引用候補は Step 4 の本願引用抽出にも追加されます。</div>
     ${sourceStatusHtml}
+    ${timingHtml}
     <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-top:0.3rem; background:rgba(15,23,42,0.35); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
       <thead><tr style="color:#94a3b8;">
         <th style="text-align:left; padding:0.25rem 0.45rem;">ラベル</th>

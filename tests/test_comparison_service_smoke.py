@@ -1,11 +1,41 @@
 """comparison_service の軽量スモークテスト。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from openpyxl import load_workbook
 
-from services.comparison_service import export_excel, generate_prompt_single
+from services.comparison_service import (
+    check_segments_freshness,
+    export_excel,
+    generate_prompt_single,
+    save_response_single,
+)
+
+
+SNAPSHOTS = Path(__file__).resolve().parent / "fixtures" / "snapshots"
+
+
+def _prompt_sections_snapshot(prompt):
+    lines = []
+    for line in prompt.splitlines():
+        s = line.rstrip()
+        st = s.strip()
+        if (
+            s.startswith("## ")
+            or s.startswith("### 請求項")
+            or s.startswith("### グループ")
+            or s.startswith("- **")
+            or s.startswith("- 成分")
+            or s.startswith("【請求項")
+            or s.startswith("【001")
+            or st.startswith('"document_id"')
+            or st.startswith('"requirement_id"')
+            or "全ての構成要件" in s
+        ):
+            lines.append(s)
+    return "\n".join(lines)
 
 
 def test_generate_prompt_single_contains_required_sections(copy_case_fixture):
@@ -20,6 +50,47 @@ def test_generate_prompt_single_contains_required_sections(copy_case_fixture):
     assert "## 本願の請求項 構成要件" in prompt
     assert "JP2030000002A" in prompt
     assert (case_dir / "prompts" / "JP2030000002A_prompt.txt").exists()
+
+
+def test_generate_prompt_single_sections_match_snapshot(copy_case_fixture):
+    copy_case_fixture("smoke")
+    result, code = generate_prompt_single("smoke", "JP2030000002A")
+
+    assert code == 200
+    actual = _prompt_sections_snapshot(result["prompt"])
+    expected = (SNAPSHOTS / "generate_prompt_single_smoke.sections.txt").read_text(encoding="utf-8").rstrip()
+    assert actual == expected
+
+
+def test_save_response_single_writes_snapshot_json(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    raw = json.dumps({
+        "document_id": "JP2030000002A",
+        "comparisons": [
+            {
+                "requirement_id": "1A",
+                "judgment": "○",
+                "cited_location": "0010;0011",
+                "judgment_reason": "成分Aが記載されている。",
+            },
+            {
+                "requirement_id": "1B",
+                "judgment": "△",
+                "cited_location": "T1;T2",
+                "judgment_reason": "成分Bは表で一部記載されている。",
+            },
+        ],
+        "overall_summary": "保存テスト",
+        "category_suggestion": "Y",
+    }, ensure_ascii=False)
+
+    result, code = save_response_single("smoke", "JP2030000002A", raw)
+
+    assert code == 200
+    assert result["success"] is True
+    saved = (case_dir / "responses" / "JP2030000002A.json").read_text(encoding="utf-8").rstrip()
+    expected = (SNAPSHOTS / "save_response_single_smoke.json").read_text(encoding="utf-8").rstrip()
+    assert saved == expected
 
 
 def test_export_excel_writes_workbook(copy_case_fixture):
@@ -37,3 +108,69 @@ def test_export_excel_writes_workbook(copy_case_fixture):
     ws = wb["対比表"]
     values = [cell.value for row in ws.iter_rows(max_row=12, max_col=4) for cell in row]
     assert "JP2030000002A" in " ".join(str(v or "") for v in values)
+
+
+def test_export_excel_expected_cells_are_stable(copy_case_fixture):
+    copy_case_fixture("smoke")
+    result, code = export_excel("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"])["対比表"]
+    assert ws["A2"].value == "特開2030-000001　テスト組成物　請求項分節・対比表"
+    assert ws["A8"].value == "ID"
+    assert ws["B8"].value == "請求項1 構成要件"
+    assert ws["C8"].value == "[X] JP2030000002A\n(JP2030000002A)\n主引例"
+    assert ws["A9"].value == "1A"
+    assert ws["B9"].value == "成分Aを含む"
+    assert ws["C10"].value == "段落0010に成分Aが記載されている。\n[段落【0010】]"
+    assert ws["A11"].value == "1B"
+    assert ws["B11"].value == "成分Bを含む"
+    assert ws["C12"].value == "段落0011に成分Bが記載されている。\n[段落【0011】]"
+
+
+def test_check_segments_freshness_clean_fixture(copy_case_fixture):
+    copy_case_fixture("smoke")
+
+    result, code = check_segments_freshness("smoke")
+
+    assert code == 200
+    assert result["has_responses"] is True
+    assert result["response_count"] == 1
+    assert result["current_segment_count"] == 2
+    assert result["missing_in_responses"] == []
+    assert result["orphans_in_responses"] == {}
+    assert result["needs_recompare"] is False
+
+
+def test_check_segments_freshness_detects_missing_after_segment_added(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    segments = json.loads((case_dir / "segments.json").read_text(encoding="utf-8"))
+    segments[0]["segments"].append({"id": "1C", "text": "成分Cを含む"})
+    (case_dir / "segments.json").write_text(json.dumps(segments, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result, code = check_segments_freshness("smoke")
+
+    assert code == 200
+    assert result["missing_in_responses"] == ["1C"]
+    assert result["needs_recompare"] is True
+
+
+def test_check_segments_freshness_detects_orphan_response_id(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    response = json.loads((case_dir / "responses" / "JP2030000002A.json").read_text(encoding="utf-8"))
+    response["comparisons"].append({
+        "requirement_id": "9Z",
+        "judgment": "×",
+        "cited_location": "",
+        "judgment_reason": "古い分節ID",
+    })
+    (case_dir / "responses" / "JP2030000002A.json").write_text(
+        json.dumps(response, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result, code = check_segments_freshness("smoke")
+
+    assert code == 200
+    assert result["orphans_in_responses"] == {"JP2030000002A": ["9Z"]}
+    assert result["needs_recompare"] is True

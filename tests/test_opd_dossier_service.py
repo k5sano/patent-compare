@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from services import case_service
 from services import opd_dossier_service as opd
@@ -358,6 +359,28 @@ def test_save_and_load_opd_index(tmp_path, monkeypatch):
     assert loaded["targets"][0]["kind"] == "ISR"
 
 
+def test_opd_timing_is_saved_and_loaded_with_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    monkeypatch.setattr(opd, "load_case_meta", case_service.load_case_meta)
+    (tmp_path / "cases").mkdir()
+    case_service.create_minimal_case("2030-opd", title="x")
+    opd.save_opd_index("2030-opd", {"case_id": "2030-opd", "documents": [], "targets": []})
+
+    timing = opd._new_opd_timing("2030-opd", "collect_opd_documents")
+    started = time.perf_counter()
+    opd._add_timing_step(timing, "fetch", started, documents=3)
+    saved = opd._finish_opd_timing("2030-opd", timing, status="ok", document_count=3)
+
+    loaded, code = opd.load_opd_index("2030-opd")
+
+    assert code == 200
+    assert saved["operation"] == "collect_opd_documents"
+    assert saved["steps"]["fetch"] >= 0
+    assert loaded["opd_timing"]["document_count"] == 3
+    assert loaded["opd_timing"]["events"][0]["documents"] == 3
+
+
 def test_rebuild_ocr_reports_returns_candidates(tmp_path, monkeypatch):
     monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
@@ -380,6 +403,8 @@ def test_rebuild_ocr_reports_returns_candidates(tmp_path, monkeypatch):
     assert data["ocr_scope"] == "hongan_embedded_isr"
     assert data["citation_candidates"][0]["patent_id"] == "US2016175445A1"
     assert data["citation_candidates"][1]["patent_id"] == "JP5980304B2"
+    assert data["opd_timing"]["operation"] == "rebuild_embedded_isr_ocr"
+    assert "ocr" in data["opd_timing"]["steps"]
     cache = tmp_path / "cases" / "2030-opd" / "dossier" / "opd_ocr_reports.json"
     assert json.loads(cache.read_text(encoding="utf-8"))["reports"][0]["citations"][0]["category"] == "Y"
 

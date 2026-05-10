@@ -301,10 +301,68 @@ def save_opd_index(case_id: str, payload: dict) -> Path:
     return path
 
 
+def _opd_timing_path(case_id: str) -> Path:
+    return get_case_dir(case_id) / "dossier" / "opd_timing.json"
+
+
+def _load_opd_timing(case_id: str) -> dict:
+    path = _opd_timing_path(case_id)
+    if not path.exists():
+        return {}
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _new_opd_timing(case_id: str, operation: str) -> dict:
+    return {
+        "case_id": case_id,
+        "operation": operation,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "_start_perf": time.perf_counter(),
+        "steps": {},
+        "events": [],
+        "pdf_pages": 0,
+        "retry_count": 0,
+    }
+
+
+def _add_timing_step(timing: dict | None, name: str, started: float, **meta) -> None:
+    if timing is None:
+        return
+    elapsed = max(0.0, time.perf_counter() - started)
+    timing.setdefault("steps", {})
+    timing["steps"][name] = round(float(timing["steps"].get(name, 0.0)) + elapsed, 3)
+    event = {"name": name, "sec": round(elapsed, 3)}
+    for key, value in meta.items():
+        if value not in (None, ""):
+            event[key] = value
+    timing.setdefault("events", []).append(event)
+
+
+def _finish_opd_timing(case_id: str, timing: dict | None, *, status: str = "ok", **extra) -> dict:
+    if timing is None:
+        return {}
+    payload = {k: v for k, v in timing.items() if not k.startswith("_")}
+    payload["status"] = status
+    payload["finished_at"] = datetime.now(timezone.utc).isoformat()
+    payload["total_sec"] = round(max(0.0, time.perf_counter() - float(timing.get("_start_perf") or time.perf_counter())), 3)
+    payload.update({k: v for k, v in extra.items() if v not in (None, "")})
+    path = _opd_timing_path(case_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    return payload
+
+
 def load_opd_index(case_id: str) -> tuple[dict, int]:
     if not load_case_meta(case_id):
         return {"error": "案件が見つかりません"}, 404
     path = get_case_dir(case_id) / "dossier" / "opd_index.json"
+    timing = _load_opd_timing(case_id)
     if not path.exists():
         data = {
             "case_id": case_id,
@@ -314,6 +372,8 @@ def load_opd_index(case_id: str) -> tuple[dict, int]:
             "exists": False,
             "ocr_reports": _load_or_build_ocr_reports(case_id),
         }
+        if timing:
+            data["opd_timing"] = timing
         data["citation_candidates"] = _extract_citation_candidates_from_index(data)
         data["rejection_documents"] = _build_rejection_documents(case_id, data)
         return data, 200
@@ -324,6 +384,8 @@ def load_opd_index(case_id: str) -> tuple[dict, int]:
         data["opd_pdf_reports"] = _load_opd_pdf_reports(case_id)
         data["rejection_documents"] = _build_rejection_documents(case_id, data)
         data["exists"] = True
+        if timing:
+            data["opd_timing"] = timing
         return data, 200
     except (OSError, json.JSONDecodeError) as e:
         return {"error": f"OPDインデックス読込失敗: {e}"}, 500
@@ -571,12 +633,18 @@ def get_rejection_documents(case_id: str) -> tuple[dict, int]:
 def summarize_rejection_documents(case_id: str, model: str | None = None, force: bool = False) -> tuple[dict, int]:
     from modules.claude_client import call_claude, ClaudeClientError
 
+    timing = _new_opd_timing(case_id, "summarize_rejection_documents")
+    t0 = time.perf_counter()
     data, code = load_opd_index(case_id)
+    _add_timing_step(timing, "load_index", t0)
     if code != 200:
+        data["opd_timing"] = _finish_opd_timing(case_id, timing, status="error", error=data.get("error", "load failed"))
         return data, code
+    t0 = time.perf_counter()
     docs = data.get("rejection_documents") or []
     cache = _load_rejection_summary_cache(case_id)
     cache.setdefault("items", {})
+    _add_timing_step(timing, "parse", t0, documents=len(docs))
     results = []
     for doc in docs:
         base_result = {
@@ -592,52 +660,81 @@ def summarize_rejection_documents(case_id: str, model: str | None = None, force:
             results.append({**base_result, "status": "cached"})
             continue
         prompt = _build_rejection_summary_prompt(doc)
+        t0 = time.perf_counter()
         try:
             ja_summary = call_claude(prompt, timeout=300, model=model)
         except ClaudeClientError as e:
+            _add_timing_step(timing, "llm", t0, kind=doc.get("kind", ""), status="error")
             results.append({**base_result, "status": "error", "error": str(e)})
             continue
+        _add_timing_step(timing, "llm", t0, kind=doc.get("kind", ""), status="summarized")
         cache["items"][doc["id"]] = {
             "ja_summary": ja_summary,
             "summarized_at": datetime.now(timezone.utc).isoformat(),
             "model": model or "",
         }
         results.append({**base_result, "status": "summarized"})
+    t0 = time.perf_counter()
     _save_rejection_summary_cache(case_id, cache)
     refreshed, _ = load_opd_index(case_id)
+    _add_timing_step(timing, "save", t0, results=len(results))
+    timing_payload = _finish_opd_timing(
+        case_id,
+        timing,
+        status="ok",
+        summarized=sum(1 for r in results if r.get("status") == "summarized"),
+        cached=sum(1 for r in results if r.get("status") == "cached"),
+        waiting=sum(1 for r in results if r.get("status") == "needs_pdf_ocr"),
+    )
     return {
         "success": True,
         "results": results,
         "documents": refreshed.get("rejection_documents") or [],
+        "opd_timing": timing_payload,
     }, 200
 
 
 def ingest_opd_pdf_file(case_id: str, src_path: str | Path, *, label: str = "", kind: str = "") -> tuple[dict, int]:
+    timing = _new_opd_timing(case_id, "ingest_opd_pdf_file")
     if not load_case_meta(case_id):
-        return {"error": "案件が見つかりません"}, 404
+        return {"error": "案件が見つかりません", "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="case not found")}, 404
     src = Path(src_path)
     if not src.exists():
-        return {"error": f"PDFが見つかりません: {src}"}, 404
+        return {"error": f"PDFが見つかりません: {src}", "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="pdf not found")}, 404
+    t0 = time.perf_counter()
     dest_dir = _opd_pdf_dir(case_id)
     safe = re.sub(r'[<>:"/\\|?*]', "_", src.name).strip() or "opd.pdf"
     dest = dest_dir / safe
     if src.resolve() != dest.resolve():
         shutil.copy2(str(src), str(dest))
+    _add_timing_step(timing, "fetch", t0, filename=dest.name)
     meta = {"label": label or safe, "kind": kind or "", "date": ""}
+    t0 = time.perf_counter()
     try:
         report = _parse_opd_pdf_report(case_id, dest, meta)
     except Exception as e:
-        return {"error": f"OPD添付PDFのOCR/解析に失敗: {e}", "filename": dest.name}, 400
+        _add_timing_step(timing, "ocr", t0, filename=dest.name, status="error")
+        return {
+            "error": f"OPD添付PDFのOCR/解析に失敗: {e}",
+            "filename": dest.name,
+            "opd_timing": _finish_opd_timing(case_id, timing, status="error", error=str(e)),
+        }, 400
+    _add_timing_step(timing, "ocr", t0, filename=dest.name, chars=report.get("raw_text_length") or 0)
+    t0 = time.perf_counter()
     reports = [r for r in _load_opd_pdf_reports(case_id) if r.get("filename") != report.get("filename")]
     reports.append(report)
     _save_opd_pdf_reports(case_id, reports)
     data, code = load_opd_index(case_id)
+    _add_timing_step(timing, "save", t0, reports=len(reports))
     if code != 200:
+        data["opd_timing"] = _finish_opd_timing(case_id, timing, status="error", error=data.get("error", "load failed"))
         return data, code
+    timing_payload = _finish_opd_timing(case_id, timing, status="ok", pdf_count=1, raw_text_length=report.get("raw_text_length") or 0)
     return {
         "success": True,
         "report": {k: v for k, v in report.items() if k != "raw_text"},
         "documents": data.get("rejection_documents") or [],
+        "opd_timing": timing_payload,
     }, 200
 
 
@@ -838,10 +935,14 @@ def _loaded_citation_keys(case_id: str) -> set[str]:
 
 
 def rebuild_ocr_reports(case_id: str) -> tuple[dict, int]:
+    timing = _new_opd_timing(case_id, "rebuild_embedded_isr_ocr")
     if not load_case_meta(case_id):
-        return {"error": "案件が見つかりません"}, 404
+        return {"error": "案件が見つかりません", "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="case not found")}, 404
     cache_path = get_case_dir(case_id) / "dossier" / "opd_ocr_reports.json"
+    t0 = time.perf_counter()
     reports = _build_ocr_reports(case_id)
+    _add_timing_step(timing, "ocr", t0, reports=len(reports))
+    t0 = time.perf_counter()
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     with cache_path.open("w", encoding="utf-8") as f:
         json.dump({
@@ -851,7 +952,9 @@ def rebuild_ocr_reports(case_id: str) -> tuple[dict, int]:
         }, f, ensure_ascii=False, indent=2)
 
     data, code = load_opd_index(case_id)
+    _add_timing_step(timing, "save", t0, reports=len(reports))
     if code != 200:
+        data["opd_timing"] = _finish_opd_timing(case_id, timing, status="error", error=data.get("error", "load failed"))
         return data, code
     data["case_id"] = case_id
     data["patent_number"] = _hongan_patent_number(case_id)
@@ -859,6 +962,13 @@ def rebuild_ocr_reports(case_id: str) -> tuple[dict, int]:
     data["citation_candidates"] = _extract_citation_candidates_from_index(data)
     data["ocr_scope"] = "hongan_embedded_isr"
     data["ocr_note"] = "本願PDF内のISRだけをOCRしました。OPD添付のIPER/拒絶理由PDFは未取得のため、別途保存/OCRが必要です。"
+    data["opd_timing"] = _finish_opd_timing(
+        case_id,
+        timing,
+        status="ok",
+        report_count=len(reports),
+        citation_count=len(data.get("citation_candidates") or []),
+    )
     return data, 200
 
 
@@ -972,10 +1082,20 @@ class OpdDossierSession:
         return self._submit("open_opd", {"url": url, "patent_number": patent_number}, timeout=timeout)
 
     def collect(self, case_id: str, *, timeout: int = 45) -> dict:
+        timing = _new_opd_timing(case_id, "collect_opd_documents")
         if not self.is_alive():
-            return {"ok": False, "error": "OPDセッションが開かれていません。先に OPD を開いてください。"}
+            return {
+                "ok": False,
+                "error": "OPDセッションが開かれていません。先に OPD を開いてください。",
+                "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="OPD session not open"),
+            }
+        t0 = time.perf_counter()
         result = self._submit("collect", {}, timeout=timeout)
+        _add_timing_step(timing, "fetch", t0, ok=bool(result.get("ok")))
         if result.get("ok"):
+            t0 = time.perf_counter()
+            ocr_reports = _load_or_build_ocr_reports(case_id)
+            _add_timing_step(timing, "ocr", t0, reports=len(ocr_reports))
             payload = {
                 "case_id": case_id,
                 "patent_number": _hongan_patent_number(case_id),
@@ -988,20 +1108,46 @@ class OpdDossierSession:
                 "documents": result.get("documents", []),
                 "targets": result.get("targets", []),
                 "citation_candidates": result.get("citation_candidates", []),
-                "ocr_reports": _load_or_build_ocr_reports(case_id),
+                "ocr_reports": ocr_reports,
                 "warnings": result.get("warnings", []),
             }
+            t0 = time.perf_counter()
             payload["citation_candidates"] = _extract_citation_candidates_from_index(payload)
+            _add_timing_step(timing, "parse", t0, documents=len(payload.get("documents") or []), targets=len(payload.get("targets") or []))
+            t0 = time.perf_counter()
             save_opd_index(case_id, payload)
+            _add_timing_step(timing, "save", t0)
+            payload["opd_timing"] = _finish_opd_timing(
+                case_id,
+                timing,
+                status="ok",
+                document_count=len(payload.get("documents") or []),
+                target_count=len(payload.get("targets") or []),
+                citation_count=len(payload.get("citation_candidates") or []),
+            )
             result.update(payload)
+        else:
+            result["opd_timing"] = _finish_opd_timing(case_id, timing, status="error", error=result.get("error", "collect failed"))
         return result
 
     def download_rejection_pdfs(self, case_id: str, *, target_indices: list[int] | None = None, timeout: int = 120) -> dict:
+        timing = _new_opd_timing(case_id, "download_rejection_pdfs")
         if not self.is_alive():
-            return {"ok": False, "error": "OPDセッションが開かれていません。先に OPD を開いてください。"}
+            return {
+                "ok": False,
+                "error": "OPDセッションが開かれていません。先に OPD を開いてください。",
+                "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="OPD session not open"),
+            }
+        t0 = time.perf_counter()
         data, code = load_opd_index(case_id)
+        _add_timing_step(timing, "load_index", t0)
         if code != 200:
-            return {"ok": False, "error": data.get("error", "OPDインデックス読込失敗")}
+            return {
+                "ok": False,
+                "error": data.get("error", "OPDインデックス読込失敗"),
+                "opd_timing": _finish_opd_timing(case_id, timing, status="error", error=data.get("error", "load failed")),
+            }
+        t0 = time.perf_counter()
         all_targets = data.get("targets") or data.get("documents") or []
         if target_indices is not None:
             wanted = set()
@@ -1017,30 +1163,38 @@ class OpdDossierSession:
         else:
             raw_targets = [t for t in all_targets if t.get("kind") in _REJECTION_KINDS]
         targets, skipped = _downloadable_rejection_targets(raw_targets)
+        _add_timing_step(timing, "parse", t0, candidate_targets=len(raw_targets), downloadable_targets=len(targets))
         if not targets:
             return {
                 "ok": False,
                 "error": "収集結果の中に安全に自動保存できるOPD添付書類がありません。対象行に添付がない場合は、OPDで対象PDFを開いて保存し、PDF手動取込を使ってください。",
                 "downloads": skipped,
+                "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="no downloadable targets"),
             }
+        t0 = time.perf_counter()
         result = self._submit("download_rejection_pdfs", {
             "case_id": case_id,
             "targets": targets,
         }, timeout=timeout)
+        _add_timing_step(timing, "fetch", t0, downloads=len(result.get("downloads") or []), ok=bool(result.get("ok")))
         if skipped:
             result.setdefault("downloads", [])
             result["downloads"].extend(skipped)
         if result.get("ok"):
+            t0 = time.perf_counter()
             reports = _load_opd_pdf_reports(case_id)
             for item in result.get("downloads") or []:
                 if not item.get("success") or not item.get("path"):
                     continue
+                item_t0 = time.perf_counter()
                 try:
                     report = _parse_opd_pdf_report(case_id, Path(item["path"]), item)
                 except Exception as e:
+                    _add_timing_step(timing, "ocr", item_t0, filename=Path(item.get("path", "")).name, status="error")
                     item["success"] = False
                     item["error"] = f"OCR/解析失敗: {e}"
                     continue
+                _add_timing_step(timing, "ocr", item_t0, filename=report.get("filename", ""), chars=report.get("raw_text_length") or 0)
                 if not (report.get("raw_text") or "").strip() and not (report.get("box_v") or "").strip():
                     item["success"] = False
                     item["error"] = "PDFは保存できましたが、OCRテキストが0字でした。表紙/ビューアHTML/空PDFの可能性があります。"
@@ -1049,9 +1203,20 @@ class OpdDossierSession:
                 reports.append(report)
                 item["report_kind"] = report.get("kind", "")
                 item["has_box_v"] = bool(report.get("box_v"))
+            save_t0 = time.perf_counter()
             _save_opd_pdf_reports(case_id, reports)
             refreshed, _ = load_opd_index(case_id)
+            _add_timing_step(timing, "save", save_t0, reports=len(reports))
             result["rejection_documents"] = refreshed.get("rejection_documents") or []
+            result["opd_timing"] = _finish_opd_timing(
+                case_id,
+                timing,
+                status="ok",
+                download_count=len(result.get("downloads") or []),
+                pdf_count=sum(1 for item in result.get("downloads") or [] if item.get("success")),
+            )
+        else:
+            result["opd_timing"] = _finish_opd_timing(case_id, timing, status="error", error=result.get("error", "download failed"))
         return result
 
     def status(self) -> dict:
