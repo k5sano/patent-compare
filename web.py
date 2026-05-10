@@ -549,6 +549,58 @@ def opd_dossier_citation_candidates(case_id):
     return _svc_response(extract_citation_candidates(case_id))
 
 
+@app.route("/case/<case_id>/dossier/opd/ocr/rebuild", methods=["POST"])
+def opd_dossier_ocr_rebuild(case_id):
+    from services.opd_dossier_service import rebuild_ocr_reports
+    return _svc_response(rebuild_ocr_reports(case_id))
+
+
+@app.route("/case/<case_id>/dossier/opd/rejections", methods=["GET"])
+def opd_dossier_rejections(case_id):
+    from services.opd_dossier_service import get_rejection_documents
+    return _svc_response(get_rejection_documents(case_id))
+
+
+@app.route("/case/<case_id>/dossier/opd/rejections/summarize", methods=["POST"])
+def opd_dossier_rejections_summarize(case_id):
+    from services.opd_dossier_service import summarize_rejection_documents
+    data = request.get_json(silent=True) or {}
+    return _svc_response(summarize_rejection_documents(
+        case_id,
+        model=data.get("model"),
+        force=bool(data.get("force")),
+    ))
+
+
+@app.route("/case/<case_id>/dossier/opd/rejections/download", methods=["POST"])
+def opd_dossier_rejections_download(case_id):
+    from services.opd_dossier_service import get_session
+    sess = get_session()
+    result = sess.download_rejection_pdfs(case_id, timeout=180)
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/case/<case_id>/dossier/opd/rejections/upload", methods=["POST"])
+def opd_dossier_rejections_upload(case_id):
+    from services.opd_dossier_service import ingest_opd_pdf_file
+    if "file" not in request.files:
+        return jsonify({"error": "ファイルがありません"}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "ファイル名が空です"}), 400
+    case_dir = get_case_dir(case_id)
+    tmp_dir = case_dir / "dossier" / "_upload_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    save_path = tmp_dir / file.filename
+    file.save(str(save_path))
+    return _svc_response(ingest_opd_pdf_file(
+        case_id,
+        save_path,
+        label=request.form.get("label", file.filename),
+        kind=request.form.get("kind", ""),
+    ))
+
+
 @app.route("/case/<case_id>/dossier/opd/status", methods=["GET"])
 def opd_dossier_status(case_id):
     from services.opd_dossier_service import get_session

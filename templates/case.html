@@ -153,6 +153,12 @@
                     title="保存済みのOPD収集結果とドシエ引用候補を表示します">
               収集結果を表示
             </button>
+            <button type="button" class="btn btn-outline" id="btn-opd-ocr-rebuild"
+                    style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                    onclick="rebuildHonganOpdOcr()"
+                    title="本願PDF内に含まれるISRをOCRし、引用候補に反映します。OPD添付のIPER/拒絶理由PDFは別途取得が必要です">
+              本願内ISR OCR
+            </button>
           </div>
           <div id="hongan-dossier-msg" style="display:none; margin-top:0.5rem; font-size:0.82rem; color:var(--text2);"></div>
           <div id="hongan-opd-targets" style="display:none; margin-top:0.6rem;"></div>
@@ -601,6 +607,7 @@
 
       <!-- ISR/書面意見から取り込み (PCT) -->
       <h3 style="font-size:1rem; margin-bottom:0.8rem;">ISR/書面意見から取り込み (PCT)</h3>
+      <div id="dossier-citation-candidates" style="margin-bottom:0.8rem;"></div>
       <div class="dropzone" id="dropzone-search-report" style="padding:1rem;">
         <div class="icon">&#128196;</div>
         <p><strong>ISR / 書面意見 (PCT/ISA/210, 237) PDFをドロップ</strong></p>
@@ -632,14 +639,14 @@
         <input type="file" accept=".pdf" multiple onchange="uploadCitations(this.files)">
       </div>
 
-      <!-- 本願明細書中の【特許文献N】を抽出 → 自動 DL → 登録 -->
+      <!-- 本願/ISR/ドシエの引用候補を抽出 → 自動 DL → 登録 -->
       <div style="margin-top:0.6rem; padding:0.6rem 0.8rem; background:#0f172a; border:1px solid var(--border); border-radius:8px;">
         <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-          <strong style="color:#cbd5e1; font-size:0.9rem;">📚 本願明細書から引例を抽出</strong>
+          <strong style="color:#cbd5e1; font-size:0.9rem;">📚 本願/ISR/ドシエから引例を抽出</strong>
           <button class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
-                  onclick="extractHonganRefs()" title="本願PDFの【特許文献N】を一覧表示">📋 抽出</button>
+                  onclick="extractHonganRefs()" title="本願PDFの【特許文献N】、内包ISR、保存済みドシエOCR候補を一覧表示">📋 抽出</button>
           <button class="btn btn-primary" style="font-size:0.78rem; padding:0.25rem 0.6rem;"
-                  onclick="downloadHonganRefs()" title="抽出した【特許文献N】を Google Patents から DL し『本願引用N』として一括登録">⬇ DL+登録 (全件)</button>
+                  onclick="downloadHonganRefs()" title="抽出した候補を PDF DL し、引用文献として一括登録">⬇ DL+登録 (全件)</button>
           <span id="hongan-refs-status" style="font-size:0.78rem; color:var(--text2);"></span>
         </div>
         <div id="hongan-refs-list" style="margin-top:0.4rem;"></div>

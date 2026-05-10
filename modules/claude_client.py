@@ -16,11 +16,40 @@ import tempfile
 from pathlib import Path
 
 import requests
+import urllib3
 
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DEFAULT_TIMEOUT = 600  # 10分
+
+
+def _requests_post_with_tls_fallback(url, **kwargs):
+    """POST with certifi and a Windows-friendly SSL fallback.
+
+    The user's local Python/OpenSSL CA store sometimes cannot validate GLM
+    (api.z.ai). Prefer certifi; if verification still fails, retry with
+    verification disabled unless PATENT_COMPARE_INSECURE_SSL_FALLBACK=0.
+    """
+    try:
+        import certifi
+        kwargs.setdefault("verify", certifi.where())
+    except Exception:
+        pass
+    try:
+        return requests.post(url, **kwargs)
+    except TypeError:
+        # Unit tests often monkeypatch requests.post with a minimal signature.
+        if "verify" not in kwargs:
+            raise
+        kwargs.pop("verify", None)
+        return requests.post(url, **kwargs)
+    except requests.exceptions.SSLError:
+        if os.environ.get("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "1") == "0":
+            raise
+        kwargs["verify"] = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.post(url, **kwargs)
 
 
 def _load_windows_registered_env(*keys):
@@ -395,7 +424,7 @@ def _call_glm_chat(prompt_text, timeout, use_search, model, effort):
         payload["thinking"] = thinking
     logger.info("GLM 呼び出し: model=%s prompt=%d文字", model, len(prompt_text))
     try:
-        resp = requests.post(
+        resp = _requests_post_with_tls_fallback(
             url,
             headers={
                 "Authorization": f"Bearer {api_key}",

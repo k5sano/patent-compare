@@ -99,6 +99,39 @@ def test_call_claude_routes_glm_to_zai(monkeypatch):
     assert timeout == 9
 
 
+def test_glm_retries_without_verify_on_ssl_error(monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test")
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append(kwargs.get("verify"))
+        if len(calls) == 1:
+            raise cc.requests.exceptions.SSLError("certificate verify failed")
+        return _Resp({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    out = cc.call_claude("hello", model="glm-opus", effort="low", timeout=9)
+
+    assert out == "ok"
+    assert calls[-1] is False
+
+
+def test_glm_ssl_fallback_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("ZAI_API_KEY", "zai-test")
+    monkeypatch.setenv("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "0")
+
+    def fake_post(url, **kwargs):
+        raise cc.requests.exceptions.SSLError("certificate verify failed")
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    with pytest.raises(cc.ClaudeExecutionError) as ei:
+        cc.call_claude("hello", model="glm-opus", effort="low", timeout=9)
+
+    assert "certificate verify failed" in str(ei.value)
+
+
 @pytest.mark.parametrize(
     ("status_code", "body", "exc_type", "needle"),
     [

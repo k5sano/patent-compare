@@ -788,8 +788,10 @@ function _renderOpdTargets(data) {
   const targets = (data && data.targets) || [];
   const docs = (data && data.documents) || [];
   const citations = (data && data.citation_candidates) || [];
+  const ocrReports = (data && data.ocr_reports) || [];
+  const rejections = (data && data.rejection_documents) || [];
   const warnings = (data && data.warnings) || [];
-  if (!targets.length && !docs.length && !citations.length && !warnings.length) {
+  if (!targets.length && !docs.length && !citations.length && !ocrReports.length && !rejections.length && !warnings.length) {
     wrap.style.display = 'none';
     wrap.innerHTML = '';
     return;
@@ -816,6 +818,54 @@ function _renderOpdTargets(data) {
     <td style="padding:0.22rem 0.45rem; white-space:nowrap; color:#94a3b8;">${_hrefEsc(d.kind || '')}</td>
     <td style="padding:0.22rem 0.45rem;">${_hrefEsc(d.label || d.text || '')}</td>
   </tr>`).join('');
+  const rejectionRows = rejections.map(d => {
+    const status = d.status === 'summarized'
+      ? '<span class="badge badge-green">要約済</span>'
+      : d.status === 'ready'
+        ? '<span class="badge" style="background:#1e3a5f; color:#bfdbfe;">本文あり</span>'
+        : '<span class="badge" style="background:#422006; color:#fbbf24;">PDF/OCR待ち</span>';
+    const summary = d.ja_summary
+      ? `<div style="white-space:pre-wrap; color:#cbd5e1; margin-top:0.25rem;">${_hrefEsc(d.ja_summary)}</div>`
+      : `<div style="color:#94a3b8; margin-top:0.25rem;">${_hrefEsc(d.note || d.text_preview || '')}</div>`;
+    return `<tr>
+      <td style="padding:0.28rem 0.45rem; color:#bfdbfe; white-space:nowrap;">${_hrefEsc(d.kind || '')}</td>
+      <td style="padding:0.28rem 0.45rem;">${_hrefEsc(d.label || '')}${summary}</td>
+      <td style="padding:0.28rem 0.45rem; white-space:nowrap;">${status}</td>
+    </tr>`;
+  }).join('');
+  const ocrHtml = ocrReports.map((r, i) => {
+    const reportCitations = [
+      ...((r.citations || []).map(c => ({ ...c, row_kind: c.category || '' }))),
+      ...((r.family_citations || []).map(c => ({ ...c, row_kind: 'JP family' }))),
+    ].map(c => `<tr>
+      <td style="padding:0.22rem 0.45rem; color:#bfdbfe; white-space:nowrap;">${_hrefEsc(c.row_kind || c.category || '')}</td>
+      <td style="padding:0.22rem 0.45rem; font-family:ui-monospace,monospace;">${_hrefEsc(c.doc_id || '')}</td>
+      <td style="padding:0.22rem 0.45rem;">${_hrefEsc(c.claims || '')}</td>
+      <td style="padding:0.22rem 0.45rem; color:#94a3b8;">${_hrefEsc(c.raw_text || c.passages || c.doc_label || '')}</td>
+    </tr>`).join('');
+    const rawText = _hrefEsc((r.raw_text || '').trim() || 'OCRテキストなし');
+    const shownLen = (r.raw_text || '').length;
+    const totalLen = Number(r.raw_text_length || shownLen);
+    const textNote = totalLen > shownLen ? ` / 表示 ${shownLen.toLocaleString()}字` : '';
+    return `<details style="margin-top:0.45rem;" ${i === 0 ? 'open' : ''}>
+      <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">
+        ${_hrefEsc(r.label || r.kind || 'OCR結果')} (${((r.citations || []).length + (r.family_citations || []).length)}件 / ${totalLen.toLocaleString()}字${textNote})
+      </summary>
+      <table style="width:100%; border-collapse:collapse; font-size:0.78rem; margin-top:0.35rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
+        <thead><tr style="color:#94a3b8;">
+          <th style="text-align:left; padding:0.22rem 0.45rem;">区分</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">公報番号</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">請求項</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">箇所</th>
+        </tr></thead>
+        <tbody>${reportCitations || '<tr><td colspan="4" style="padding:0.4rem; color:#94a3b8;">OCR引用候補なし</td></tr>'}</tbody>
+      </table>
+      <details style="margin-top:0.35rem;">
+        <summary style="cursor:pointer; color:#94a3b8; font-size:0.78rem;">OCRテキストを表示</summary>
+        <pre style="white-space:pre-wrap; max-height:18rem; overflow:auto; margin-top:0.3rem; padding:0.55rem; border:1px solid var(--border); border-radius:6px; background:#020617; color:#cbd5e1; font-size:0.74rem; line-height:1.5;">${rawText}</pre>
+      </details>
+    </details>`;
+  }).join('');
   wrap.innerHTML = `${warnHtml}
     <table style="width:100%; border-collapse:collapse; font-size:0.8rem; background:rgba(15,23,42,0.35); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
       <thead><tr style="color:#94a3b8;">
@@ -833,6 +883,35 @@ function _renderOpdTargets(data) {
       </tr></thead>
       <tbody>${citationRows || '<tr><td colspan="3" style="padding:0.4rem; color:#94a3b8;">ドシエ引用候補なし</td></tr>'}</tbody>
     </table>
+    <details style="margin-top:0.5rem;" ${ocrReports.length ? 'open' : ''}>
+      <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">OCR解析結果を表示 (${ocrReports.length}件)</summary>
+      ${ocrHtml || '<div style="padding:0.4rem 0; color:#94a3b8; font-size:0.78rem;">OCR解析結果なし</div>'}
+    </details>
+    <details style="margin-top:0.5rem;" ${rejections.length ? 'open' : ''}>
+      <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">拒絶理由・見解の翻訳/要約 (${rejections.length}件)</summary>
+      <div style="display:flex; gap:0.4rem; align-items:center; margin:0.4rem 0;">
+        <select class="model-picker" data-model-key="opd-rejection-summary" data-model-default="sonnet"
+                style="padding:0.28rem 0.4rem; font-size:0.76rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
+        <button class="btn btn-primary" id="btn-opd-rejection-download"
+                style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                onclick="downloadOpdRejectionPdfs()">OPD添付PDFを保存/OCR</button>
+        <label class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem; cursor:pointer;">
+          PDF手動取込
+          <input type="file" accept=".pdf" multiple style="display:none;" onchange="uploadOpdRejectionPdfs(this.files); this.value='';">
+        </label>
+        <button class="btn btn-outline" id="btn-opd-rejection-summary"
+                style="font-size:0.78rem; padding:0.25rem 0.6rem;"
+                onclick="summarizeOpdRejections()">翻訳・要約</button>
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:0.78rem; margin-top:0.35rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
+        <thead><tr style="color:#94a3b8;">
+          <th style="text-align:left; padding:0.22rem 0.45rem;">種別</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">書類・要約</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">状態</th>
+        </tr></thead>
+        <tbody>${rejectionRows || '<tr><td colspan="3" style="padding:0.4rem; color:#94a3b8;">対象書類なし</td></tr>'}</tbody>
+      </table>
+    </details>
     <details style="margin-top:0.5rem;">
       <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">収集された書類情報を表示 (${docs.length}件)</summary>
       <table style="width:100%; border-collapse:collapse; font-size:0.78rem; margin-top:0.35rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
@@ -844,6 +923,112 @@ function _renderOpdTargets(data) {
       </table>
     </details>`;
   wrap.style.display = '';
+  if (typeof initModelPickers === 'function') initModelPickers();
+}
+
+async function downloadOpdRejectionPdfs() {
+  _honganDossierMsg('OPD添付PDFを保存してOCR解析しています...', 'info');
+  _setDossierButtonLoading('btn-opd-rejection-download', true, '保存/OCR中...');
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/rejections/download`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    const downloads = data.downloads || [];
+    const ok = downloads.filter(d => d.success).length;
+    const ng = downloads.length - ok;
+    const currentResp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
+    const current = await currentResp.json();
+    if (currentResp.ok) _renderOpdTargets(current);
+    if (ng) {
+      const errs = downloads.filter(d => !d.success).map(d => `${d.kind || ''}: ${d.error || '失敗'}`).join(' / ');
+      _honganDossierMsg(`OPD添付PDF: 保存/OCR ${ok}件 / 失敗 ${ng}件。${errs}`, ok ? 'success' : 'error');
+    } else {
+      _honganDossierMsg(`OPD添付PDFを保存/OCRしました: ${ok}件`, 'success');
+    }
+  } catch (e) {
+    _honganDossierMsg('OPD添付PDFの保存/OCRに失敗しました: ' + (e.message || e), 'error');
+  } finally {
+    _setDossierButtonLoading('btn-opd-rejection-download', false);
+  }
+}
+
+async function uploadOpdRejectionPdfs(files) {
+  const pdfs = Array.from(files || []).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!pdfs.length) return;
+  _honganDossierMsg(`OPD添付PDFを手動取込中です... (${pdfs.length}件)`, 'info');
+  try {
+    const results = [];
+    for (const file of pdfs) {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('label', file.name);
+      const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/rejections/upload`, {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await resp.json();
+      results.push({ok: resp.ok && data.success, file: file.name, error: data.error || ''});
+    }
+    const ok = results.filter(r => r.ok).length;
+    const ng = results.length - ok;
+    const currentResp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
+    const current = await currentResp.json();
+    if (currentResp.ok) _renderOpdTargets(current);
+    if (ng) {
+      _honganDossierMsg(`手動取込: 成功 ${ok}件 / 失敗 ${ng}件`, ok ? 'success' : 'error');
+    } else {
+      _honganDossierMsg(`手動取込しました: ${ok}件`, 'success');
+    }
+  } catch (e) {
+    _honganDossierMsg('OPD添付PDFの手動取込に失敗しました: ' + (e.message || e), 'error');
+  }
+}
+
+async function summarizeOpdRejections() {
+  _honganDossierMsg('拒絶理由・見解を翻訳・要約しています...', 'info');
+  _setDossierButtonLoading('btn-opd-rejection-summary', true, '要約中...');
+  try {
+    if (typeof initModelPickers === 'function') initModelPickers();
+    const sel = document.querySelector('select.model-picker[data-model-key="opd-rejection-summary"]');
+    const model = (sel && sel.value) || 'sonnet';
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/rejections/summarize`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const ok = (data.results || []).filter(r => r.status === 'summarized' || r.status === 'cached').length;
+    const wait = (data.results || []).filter(r => r.status === 'needs_pdf_ocr').length;
+    const currentResp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
+    const current = await currentResp.json();
+    if (currentResp.ok) _renderOpdTargets(current);
+    _honganDossierMsg(`翻訳・要約を更新しました: ${ok}件 / PDF・OCR待ち ${wait}件`, 'success');
+  } catch (e) {
+    _honganDossierMsg('拒絶理由・見解の要約に失敗しました: ' + (e.message || e), 'error');
+  } finally {
+    _setDossierButtonLoading('btn-opd-rejection-summary', false);
+  }
+}
+
+async function rebuildHonganOpdOcr() {
+  _honganDossierMsg('本願PDF内ISRをOCR解析しています...', 'info');
+  _setDossierButtonLoading('btn-opd-ocr-rebuild', true, 'OCR中...');
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/ocr/rebuild`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    _renderOpdTargets(data);
+    const pendingRejections = (data.rejection_documents || []).filter(d => d.status === 'needs_pdf_ocr').length;
+    const note = pendingRejections
+      ? ` / IPER・拒絶理由 ${pendingRejections}件はOPD添付PDF未取得`
+      : '';
+    _honganDossierMsg(`本願内ISR OCRを更新しました: ${((data.ocr_reports || []).length)} 件 / 引用候補 ${((data.citation_candidates || []).length)} 件${note}`, 'success');
+  } catch (e) {
+    _honganDossierMsg('OCR解析に失敗しました: ' + (e.message || e), 'error');
+  } finally {
+    _setDossierButtonLoading('btn-opd-ocr-rebuild', false);
+  }
 }
 
 async function openHonganOpd() {
@@ -884,7 +1069,7 @@ async function loadHonganOpdIndex() {
   try {
     const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
     const data = await resp.json();
-    if (resp.ok && data.exists) _renderOpdTargets(data);
+    if (resp.ok && (data.exists || (data.rejection_documents || []).length)) _renderOpdTargets(data);
   } catch (_) {
     /* 既存インデックス表示は補助なので静かに無視 */
   }
@@ -988,7 +1173,11 @@ function showPanel(idx) {
       s.classList.toggle('active', i === idx);
     }
   });
-  if (idx === 3) { if (typeof refreshCitationBadges === 'function') refreshCitationBadges(); }
+  if (idx === 3) {
+    if (typeof refreshCitationBadges === 'function') refreshCitationBadges();
+    if (typeof maybeAutoExtractHonganRefs === 'function') maybeAutoExtractHonganRefs();
+    if (typeof loadDossierCitationCandidates === 'function') loadDossierCitationCandidates();
+  }
   if (idx === 4) { loadSearchRuns(); srJppCheckStatus(); srEnsureSnippetsLoaded(); }
   if (idx === 5) { if (typeof refreshCitationBadges === 'function') refreshCitationBadges(); }
   if (idx === 6) loadComparisonSummary();
@@ -1222,6 +1411,20 @@ function _hrefEsc(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+let _honganRefsAutoLoaded = false;
+
+function _hrefSourceLabel(source) {
+  const labels = {
+    hongan: '本願',
+    isr: 'ISR',
+    isr_family: 'ISRファミリー',
+    opd_dossier: 'ドシエ',
+    opd_dossier_ocr: 'ドシエOCR',
+    opd_dossier_ocr_family: 'ドシエOCRファミリー',
+  };
+  return labels[source] || source || '';
+}
+
 async function extractHonganRefs() {
   _hrefStatus('抽出中...');
   try {
@@ -1242,6 +1445,7 @@ async function extractHonganRefs() {
       return `<tr>
         <td style="padding:0.2rem 0.5rem; color:#94a3b8;">${_hrefEsc(label)}</td>
         <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${pid}</td>
+        <td style="padding:0.2rem 0.5rem; color:#93c5fd; font-size:0.78rem;">${_hrefEsc(_hrefSourceLabel(r.source))}</td>
         <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(raw)}</td>
         <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(r.para_id || '')}</td>
       </tr>`;
@@ -1251,6 +1455,7 @@ async function extractHonganRefs() {
         <thead><tr style="color:#94a3b8;">
           <th style="text-align:left; padding:0.2rem 0.5rem;">ラベル</th>
           <th style="text-align:left; padding:0.2rem 0.5rem;">特許番号</th>
+          <th style="text-align:left; padding:0.2rem 0.5rem;">由来</th>
           <th style="text-align:left; padding:0.2rem 0.5rem;">前後文</th>
           <th style="text-align:left; padding:0.2rem 0.5rem;">段落</th>
         </tr></thead>
@@ -1258,13 +1463,23 @@ async function extractHonganRefs() {
       </table>
     `;
     _hrefStatus(`${refs.length} 件 抽出`, 'success');
+    _honganRefsAutoLoaded = true;
   } catch (e) {
     _hrefStatus('エラー: ' + e.message, 'error');
   }
 }
 
+function maybeAutoExtractHonganRefs() {
+  if (_honganRefsAutoLoaded) return;
+  if (!(window.CASE_BOOTSTRAP || {}).has_hongan) return;
+  const wrap = document.getElementById('hongan-refs-list');
+  if (!wrap || wrap.innerHTML.trim()) return;
+  _honganRefsAutoLoaded = true;
+  extractHonganRefs();
+}
+
 async function downloadHonganRefs() {
-  if (!confirm('本願明細書から抽出した【特許文献N】を Google Patents から DL して「本願引用N」として一括登録します。\n\n10 件で 1〜2 分。続行しますか?')) return;
+  if (!confirm('本願/ISR/ドシエから抽出した候補を PDF DL して引用文献として一括登録します。\n\n10 件で 1〜2 分。続行しますか?')) return;
   _hrefStatus('⏳ DL 中... (件数により 1〜数分)');
   try {
     const resp = await fetch(`/case/${CASE_ID}/hongan/refs/download`, {
@@ -1414,6 +1629,15 @@ function _fetchStatusBadge(status) {
   return '';
 }
 
+function _dossierSourceLabel(source) {
+  const labels = {
+    opd_dossier: 'ドシエ',
+    opd_dossier_ocr: 'ドシエOCR',
+    opd_dossier_ocr_family: 'ドシエOCRファミリー',
+  };
+  return labels[source] || source || 'ドシエ';
+}
+
 function _escapeHtml(s) {
   return (s || '').replace(/[&<>"']/g, ch => ({
     '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
@@ -1425,6 +1649,128 @@ function _escapeAttr(s) {
   return String(s == null ? '' : s)
     .replace(/\\/g, '\\\\')
     .replace(/'/g, "\\'");
+}
+
+function renderDossierCitationCandidates(candidates) {
+  const box = document.getElementById('dossier-citation-candidates');
+  if (!box) return;
+  const items = candidates || [];
+  if (!items.length) {
+    box.innerHTML = '<div style="font-size:0.82rem; color:var(--text2); padding:0.55rem 0.7rem; border:1px solid var(--border); border-radius:6px; background:#0f172a;">ドシエ情報からの引例候補はまだありません。</div>';
+    return;
+  }
+  const rows = items.map(c => {
+    const status = c.loaded
+      ? '<span class="badge badge-green">済</span>'
+      : '<span class="badge" style="background:var(--surface2); color:var(--text2);">未読込</span>';
+    const links = c.loaded ? '' : [
+      c.jplatpat_url ? `<a href="${_escapeHtml(c.jplatpat_url)}" target="_blank" rel="noopener" style="color:#60a5fa;">J-PlatPat</a>` : '',
+      c.google_patents_url ? `<a href="${_escapeHtml(c.google_patents_url)}" target="_blank" rel="noopener" style="color:#60a5fa;">Google Patents</a>` : '',
+    ].filter(Boolean).join(' / ');
+    return `<tr>
+      <td style="padding:0.24rem 0.45rem; color:#94a3b8;">${_escapeHtml(c.label || '')}</td>
+      <td style="padding:0.24rem 0.45rem; font-family:ui-monospace,monospace;">${_escapeHtml(c.patent_id || '')}</td>
+      <td style="padding:0.24rem 0.45rem;">${_catBadge(c.category)} <span style="color:#93c5fd; font-size:0.78rem;">${_escapeHtml(_dossierSourceLabel(c.source))}</span></td>
+      <td style="padding:0.24rem 0.45rem;">${status}</td>
+      <td style="padding:0.24rem 0.45rem; font-size:0.8rem;">${links || '<span style="color:var(--text2);">—</span>'}</td>
+      <td style="padding:0.24rem 0.45rem;">
+        ${c.loaded ? '<span style="color:var(--text2); font-size:0.78rem;">—</span>' : `<button class="btn btn-success" style="padding:0.22rem 0.5rem; font-size:0.75rem;" onclick="downloadDossierCitationCandidate('${_escapeAttr(c.patent_id || '')}', this)">DL</button>`}
+      </td>
+      <td style="padding:0.24rem 0.45rem; color:#64748b; font-size:0.76rem;">${_escapeHtml((c.raw_text || '').slice(0, 90))}</td>
+    </tr>`;
+  }).join('');
+  const pending = items.filter(c => !c.loaded && c.patent_id);
+  box.innerHTML = `
+    <div style="padding:0.65rem 0.75rem; border:1px solid var(--border); border-radius:8px; background:#0f172a;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; margin-bottom:0.45rem;">
+        <strong style="font-size:0.9rem; color:#cbd5e1;">ドシエ情報からの引例候補</strong>
+        <div style="display:flex; align-items:center; gap:0.45rem;">
+          <span style="font-size:0.78rem; color:var(--text2);">${items.length}件 / 未読込 ${pending.length}件</span>
+          ${pending.length ? '<button class="btn btn-success" style="padding:0.25rem 0.6rem; font-size:0.78rem;" onclick="downloadAllDossierCitationCandidates(this)">未読込をDL</button>' : ''}
+        </div>
+      </div>
+      <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
+        <thead><tr style="color:#94a3b8; border-bottom:1px solid var(--border);">
+          <th style="text-align:left; padding:0.24rem 0.45rem;">ラベル</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">公報番号</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">由来</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">状態</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">固定URL</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">取得</th>
+          <th style="text-align:left; padding:0.24rem 0.45rem;">前後文</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+async function loadDossierCitationCandidates() {
+  const box = document.getElementById('dossier-citation-candidates');
+  if (!box) return;
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/dossier/opd/citation-candidates`);
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    renderDossierCitationCandidates(data.candidates || []);
+  } catch (e) {
+    box.innerHTML = `<div style="font-size:0.82rem; color:#fca5a5; padding:0.55rem 0.7rem; border:1px solid #7f1d1d; border-radius:6px; background:#450a0a;">ドシエ引例候補の読み込みに失敗: ${_escapeHtml(e.message || e)}</div>`;
+  }
+}
+
+async function _downloadDossierCitationPatentIds(patentIds, btn) {
+  const ids = (patentIds || []).filter(Boolean);
+  if (!ids.length) return;
+  const oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'DL中...';
+  }
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search/download`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ patent_ids: ids, role: 'ドシエ引用' }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const results = data.results || [];
+    const ok = results.filter(r => r.success).length;
+    const ng = results.length - ok;
+    if (ng) {
+      const errors = results
+        .filter(r => !r.success)
+        .map(r => `${r.patent_id}: ${r.error || '失敗'}`)
+        .join('\n');
+      alert(`取得結果: 成功 ${ok} / 失敗 ${ng}\n${errors}`);
+    }
+    await loadDossierCitationCandidates();
+    if (ok > 0) setTimeout(() => location.reload(), 900);
+  } catch (e) {
+    alert('ドシエ引例のPDF取得に失敗しました: ' + (e.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || 'DL';
+    }
+  }
+}
+
+function downloadDossierCitationCandidate(patentId, btn) {
+  _downloadDossierCitationPatentIds([patentId], btn);
+}
+
+async function downloadAllDossierCitationCandidates(btn) {
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/dossier/opd/citation-candidates`);
+    const data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+    const ids = (data.candidates || []).filter(c => !c.loaded && c.patent_id).map(c => c.patent_id);
+    if (!ids.length) return;
+    if (!confirm(`未読込のドシエ引例 ${ids.length}件をPDF取得して引用文献に追加します。続行しますか?`)) return;
+    _downloadDossierCitationPatentIds(ids, btn);
+  } catch (e) {
+    alert('ドシエ引例候補の取得に失敗しました: ' + (e.message || e));
+  }
 }
 
 function renderSearchReport(report) {
@@ -1521,6 +1867,7 @@ function toggleSrCheckboxes(filename, on) {
 
 async function loadSearchReports() {
   try {
+    if (typeof loadDossierCitationCandidates === 'function') loadDossierCitationCandidates();
     const resp = await fetch(`/case/${CASE_ID}/search-report/list`);
     const data = await resp.json();
     const list = document.getElementById('search-reports-list');

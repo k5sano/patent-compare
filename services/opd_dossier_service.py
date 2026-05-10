@@ -9,6 +9,8 @@ import queue
 import re
 import threading
 import time
+import hashlib
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -84,6 +86,17 @@ _IPER_BODY_PAT = re.compile(
 
 _DATE_PAT = re.compile(r"(\d{4}[-/]\d{2}[-/]\d{2})")
 _ATTACHED_PAT = re.compile(r"添付書類|Attached\s+Document", re.I)
+_REJECTION_KINDS = {"IPER", "US Non Final Rejection", "US Final Rejection", "CN拒絶理由"}
+_OPD_DOWNLOAD_CLICK_SELECTORS = [
+    'a:has-text("添付書類")',
+    'button:has-text("添付書類")',
+    'a:has-text("原文")',
+    'button:has-text("原文")',
+    'a:has-text("PDF")',
+    'button:has-text("PDF")',
+    '[role="button"]:has-text("原文")',
+    '[role="button"]:has-text("PDF")',
+]
 _PATENT_CITATION_RE = re.compile(
     r"\b(WO|JP|US|EP|CN|KR|DE|GB|FR|CA|AU|TW)"
     r"[\s\-/]*"
@@ -212,11 +225,23 @@ def load_opd_index(case_id: str) -> tuple[dict, int]:
         return {"error": "案件が見つかりません"}, 404
     path = get_case_dir(case_id) / "dossier" / "opd_index.json"
     if not path.exists():
-        return {"documents": [], "targets": [], "exists": False}, 200
+        data = {
+            "case_id": case_id,
+            "patent_number": _hongan_patent_number(case_id),
+            "documents": [],
+            "targets": [],
+            "exists": False,
+            "ocr_reports": _load_or_build_ocr_reports(case_id),
+        }
+        data["citation_candidates"] = _extract_citation_candidates_from_index(data)
+        data["rejection_documents"] = _build_rejection_documents(case_id, data)
+        return data, 200
     try:
         with path.open(encoding="utf-8") as f:
             data = json.load(f)
         _refresh_targets_from_documents(data, case_id=case_id)
+        data["opd_pdf_reports"] = _load_opd_pdf_reports(case_id)
+        data["rejection_documents"] = _build_rejection_documents(case_id, data)
         data["exists"] = True
         return data, 200
     except (OSError, json.JSONDecodeError) as e:
@@ -250,8 +275,265 @@ def _refresh_targets_from_documents(data: dict, case_id: str | None = None) -> d
     data["targets"] = targets
     if case_id:
         data["ocr_reports"] = _load_or_build_ocr_reports(case_id)
+        data["opd_pdf_reports"] = _load_opd_pdf_reports(case_id)
     data["citation_candidates"] = _extract_citation_candidates_from_index(data)
     return data
+
+
+def _rejection_summary_path(case_id: str) -> Path:
+    return get_case_dir(case_id) / "dossier" / "opd_rejection_summaries.json"
+
+
+def _opd_pdf_dir(case_id: str) -> Path:
+    d = get_case_dir(case_id) / "dossier" / "opd_pdfs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _opd_pdf_reports_path(case_id: str) -> Path:
+    return get_case_dir(case_id) / "dossier" / "opd_pdf_reports.json"
+
+
+def _load_opd_pdf_reports(case_id: str) -> list[dict]:
+    path = _opd_pdf_reports_path(case_id)
+    if not path.exists():
+        return []
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("reports") if isinstance(data.get("reports"), list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _save_opd_pdf_reports(case_id: str, reports: list[dict]) -> None:
+    path = _opd_pdf_reports_path(case_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump({
+            "case_id": case_id,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "reports": reports,
+        }, f, ensure_ascii=False, indent=2)
+
+
+def _parse_opd_pdf_report(case_id: str, pdf_path: Path, meta: dict) -> dict:
+    from modules.search_report_parser import parse_search_report
+
+    parsed = parse_search_report(str(pdf_path))
+    raw_text = parsed.get("raw_text") or ""
+    return {
+        "kind": parsed.get("form") or meta.get("kind") or "OPD PDF",
+        "label": meta.get("label") or pdf_path.name,
+        "source": "opd_attached_pdf",
+        "filename": pdf_path.name,
+        "path": str(pdf_path),
+        "date": meta.get("date", ""),
+        "citations": parsed.get("citations") or [],
+        "box_v": parsed.get("box_v") or "",
+        "raw_text": raw_text[:20000],
+        "raw_text_length": len(raw_text),
+        "language": parsed.get("language", ""),
+        "intl_app_no": parsed.get("intl_app_no", ""),
+    }
+
+
+def _load_rejection_summary_cache(case_id: str) -> dict:
+    path = _rejection_summary_path(case_id)
+    if not path.exists():
+        return {"items": {}}
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data.get("items"), dict) else {"items": {}}
+    except (OSError, json.JSONDecodeError):
+        return {"items": {}}
+
+
+def _save_rejection_summary_cache(case_id: str, cache: dict) -> None:
+    path = _rejection_summary_path(case_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+
+
+def _rejection_doc_id(kind: str, label: str, source: str) -> str:
+    src = f"{kind}|{source}|{label}"
+    return hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
+    cache = _load_rejection_summary_cache(case_id)
+    cached_items = cache.get("items") or {}
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add_item(kind: str, label: str, *, source: str, text: str = "", date: str = "", note: str = "") -> None:
+        label = re.sub(r"\s+", " ", label or "").strip()
+        if not label:
+            return
+        item_id = _rejection_doc_id(kind, label, source)
+        if item_id in seen:
+            return
+        seen.add(item_id)
+        cached = cached_items.get(item_id) or {}
+        text = text or ""
+        status = "summarized" if cached.get("ja_summary") else ("ready" if text.strip() else "needs_pdf_ocr")
+        if status == "needs_pdf_ocr" and not note:
+            note = "OPD上の書類候補のみ取得済みです。本願内ISR OCRでは処理されません。OPDの添付PDFを保存/OCRすると翻訳・要約できます。"
+        item = {
+            "id": item_id,
+            "kind": kind,
+            "label": label,
+            "source": source,
+            "date": date,
+            "has_text": bool(text.strip()),
+            "text_preview": text.strip()[:800],
+            "source_text": text.strip()[:20000],
+            "status": status,
+            "note": note,
+            "ja_summary": cached.get("ja_summary", ""),
+            "summarized_at": cached.get("summarized_at", ""),
+            "model": cached.get("model", ""),
+        }
+        items.append(item)
+
+    for doc in data.get("documents") or []:
+        kind = doc.get("kind") or ""
+        if kind not in _REJECTION_KINDS:
+            continue
+        text = doc.get("text") or doc.get("label") or ""
+        add_item(kind, text, source="opd_document", date=doc.get("date") or _extract_doc_date(text))
+
+    for report in data.get("ocr_reports") or []:
+        kind = report.get("kind") or ""
+        label = report.get("label") or report.get("filename") or kind
+        text = report.get("box_v") or report.get("raw_text") or ""
+        if kind in ("IPER", "WOSA") or re.search(r"IPER|Written Opinion|書面意見|予備報告", label, re.I):
+            add_item(kind or "IPER", label, source=report.get("source") or "opd_ocr", text=text)
+
+    for report in data.get("opd_pdf_reports") or []:
+        kind = report.get("kind") or ""
+        label = report.get("label") or report.get("filename") or kind
+        text = report.get("box_v") or report.get("raw_text") or ""
+        if kind in ("IPER", "WOSA") or kind in _REJECTION_KINDS or re.search(r"IPER|Written Opinion|書面意見|予備報告|Rejection|Office Action|拒絶理由", label, re.I):
+            add_item(kind or "OPD PDF", label, source="opd_attached_pdf", text=text, date=report.get("date", ""))
+
+    try:
+        from services.search_report_service import load_reports
+        reports = load_reports(case_id).get("reports") or []
+    except Exception:
+        reports = []
+    for report in reports:
+        form = report.get("form") or ""
+        if form not in ("IPER", "WOSA"):
+            continue
+        label = report.get("filename") or form
+        text = report.get("box_v") or ""
+        add_item(form, label, source="search_report", text=text)
+        if report.get("box_v_summary"):
+            item_id = _rejection_doc_id(form, label, "search_report")
+            cached_items.setdefault(item_id, {})
+            cached_items[item_id].setdefault("ja_summary", report.get("box_v_summary"))
+
+    items.sort(key=lambda x: (0 if x["status"] == "summarized" else 1 if x["has_text"] else 2, x.get("kind", ""), x.get("date", ""), x.get("label", "")))
+    return items
+
+
+def get_rejection_documents(case_id: str) -> tuple[dict, int]:
+    data, code = load_opd_index(case_id)
+    if code != 200:
+        return data, code
+    items = data.get("rejection_documents") or []
+    return {"documents": items, "count": len(items)}, 200
+
+
+def summarize_rejection_documents(case_id: str, model: str | None = None, force: bool = False) -> tuple[dict, int]:
+    from modules.claude_client import call_claude, ClaudeClientError
+
+    data, code = load_opd_index(case_id)
+    if code != 200:
+        return data, code
+    docs = data.get("rejection_documents") or []
+    cache = _load_rejection_summary_cache(case_id)
+    cache.setdefault("items", {})
+    results = []
+    for doc in docs:
+        if not doc.get("has_text"):
+            results.append({"id": doc.get("id"), "status": "needs_pdf_ocr"})
+            continue
+        if doc.get("ja_summary") and not force:
+            results.append({"id": doc.get("id"), "status": "cached"})
+            continue
+        prompt = _build_rejection_summary_prompt(doc)
+        try:
+            ja_summary = call_claude(prompt, timeout=300, model=model)
+        except ClaudeClientError as e:
+            results.append({"id": doc.get("id"), "status": "error", "error": str(e)})
+            continue
+        cache["items"][doc["id"]] = {
+            "ja_summary": ja_summary,
+            "summarized_at": datetime.now(timezone.utc).isoformat(),
+            "model": model or "",
+        }
+        results.append({"id": doc.get("id"), "status": "summarized"})
+    _save_rejection_summary_cache(case_id, cache)
+    refreshed, _ = load_opd_index(case_id)
+    return {
+        "success": True,
+        "results": results,
+        "documents": refreshed.get("rejection_documents") or [],
+    }, 200
+
+
+def ingest_opd_pdf_file(case_id: str, src_path: str | Path, *, label: str = "", kind: str = "") -> tuple[dict, int]:
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+    src = Path(src_path)
+    if not src.exists():
+        return {"error": f"PDFが見つかりません: {src}"}, 404
+    dest_dir = _opd_pdf_dir(case_id)
+    safe = re.sub(r'[<>:"/\\|?*]', "_", src.name).strip() or "opd.pdf"
+    dest = dest_dir / safe
+    if src.resolve() != dest.resolve():
+        shutil.copy2(str(src), str(dest))
+    meta = {"label": label or safe, "kind": kind or "", "date": ""}
+    try:
+        report = _parse_opd_pdf_report(case_id, dest, meta)
+    except Exception as e:
+        return {"error": f"OPD添付PDFのOCR/解析に失敗: {e}", "filename": dest.name}, 400
+    reports = [r for r in _load_opd_pdf_reports(case_id) if r.get("filename") != report.get("filename")]
+    reports.append(report)
+    _save_opd_pdf_reports(case_id, reports)
+    data, code = load_opd_index(case_id)
+    if code != 200:
+        return data, code
+    return {
+        "success": True,
+        "report": {k: v for k, v in report.items() if k != "raw_text"},
+        "documents": data.get("rejection_documents") or [],
+    }, 200
+
+
+def _build_rejection_summary_prompt(doc: dict) -> str:
+    text = (doc.get("source_text") or doc.get("text_preview") or "").strip()
+    return f"""以下は特許ドシエ中の拒絶理由・見解系書類です。
+
+書類種別: {doc.get('kind')}
+書類名: {doc.get('label')}
+
+## 原文
+{text[:16000]}
+
+## 指示
+日本語で、実務者がすぐ判断できるように整理してください。
+1. 主要な拒絶・否定的見解の結論
+2. 問題になっている請求項
+3. 引用文献と使われ方
+4. 新規性・進歩性・サポート/明確性などの論点別まとめ
+5. 本願対応で確認すべきポイント
+
+原文にない推測は避け、不明な点は不明と書いてください。"""
 
 
 def _extract_citation_candidates_from_index(data: dict) -> list[dict]:
@@ -305,6 +587,21 @@ def _extract_citation_candidates_from_index(data: dict) -> list[dict]:
                 "raw_text": " / ".join(part for part in raw_parts if part)[:180],
                 "category": cit.get("category", ""),
             })
+        for cit in report.get("family_citations") or []:
+            pid = cit.get("doc_id") or ""
+            key = _canonical_patent_id(pid)
+            if not key or key in own_keys or key in seen:
+                continue
+            seen.add(key)
+            candidates.append({
+                "patent_id": pid,
+                "label": cit.get("label") or f"ドシエ引用{len(candidates) + 1}",
+                "source": "opd_dossier_ocr_family",
+                "source_label": report.get("label") or report.get("kind") or "OCR",
+                "raw_text": (cit.get("raw_text") or "")[:180],
+                "category": cit.get("category", ""),
+                "family_of": cit.get("family_of", ""),
+            })
     return candidates
 
 
@@ -312,8 +609,87 @@ def extract_citation_candidates(case_id: str) -> tuple[dict, int]:
     data, code = load_opd_index(case_id)
     if code != 200:
         return data, code
-    candidates = data.get("citation_candidates") or []
+    candidates = _decorate_citation_candidates(case_id, data.get("citation_candidates") or [])
     return {"candidates": candidates, "count": len(candidates)}, 200
+
+
+def _decorate_citation_candidates(case_id: str, candidates: list[dict]) -> list[dict]:
+    loaded_keys = _loaded_citation_keys(case_id)
+    try:
+        from modules.patent_downloader import build_google_patents_url, build_jplatpat_url
+    except Exception:
+        build_google_patents_url = lambda _pid: ""
+        build_jplatpat_url = lambda _pid: ""
+
+    out = []
+    for cand in candidates:
+        item = dict(cand)
+        pid = item.get("patent_id") or ""
+        key = _canonical_patent_id(pid)
+        item["loaded"] = bool(key and key in loaded_keys)
+        item["google_patents_url"] = build_google_patents_url(pid) if pid else ""
+        item["jplatpat_url"] = build_jplatpat_url(pid) if pid else ""
+        out.append(item)
+    return out
+
+
+def _loaded_citation_keys(case_id: str) -> set[str]:
+    keys: set[str] = set()
+
+    def add(value: str) -> None:
+        key = _canonical_patent_id(value or "")
+        if key:
+            keys.add(key)
+
+    meta = load_case_meta(case_id) or {}
+    for cit in meta.get("citations") or []:
+        add(cit.get("id", ""))
+        add(cit.get("label", ""))
+
+    case_dir = get_case_dir(case_id)
+    citations_dir = case_dir / "citations"
+    if citations_dir.exists():
+        for path in citations_dir.glob("*.json"):
+            add(path.stem)
+            try:
+                with path.open(encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue
+            add(data.get("patent_number", ""))
+            add(data.get("label", ""))
+            add(Path(data.get("source_pdf", "")).stem)
+
+    input_dir = case_dir / "input"
+    if input_dir.exists():
+        for path in input_dir.glob("*.pdf"):
+            add(path.stem)
+    return keys
+
+
+def rebuild_ocr_reports(case_id: str) -> tuple[dict, int]:
+    if not load_case_meta(case_id):
+        return {"error": "案件が見つかりません"}, 404
+    cache_path = get_case_dir(case_id) / "dossier" / "opd_ocr_reports.json"
+    reports = _build_ocr_reports(case_id)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w", encoding="utf-8") as f:
+        json.dump({
+            "case_id": case_id,
+            "built_at": datetime.now(timezone.utc).isoformat(),
+            "reports": reports,
+        }, f, ensure_ascii=False, indent=2)
+
+    data, code = load_opd_index(case_id)
+    if code != 200:
+        return data, code
+    data["case_id"] = case_id
+    data["patent_number"] = _hongan_patent_number(case_id)
+    data["ocr_reports"] = reports
+    data["citation_candidates"] = _extract_citation_candidates_from_index(data)
+    data["ocr_scope"] = "hongan_embedded_isr"
+    data["ocr_note"] = "本願PDF内のISRだけをOCRしました。OPD添付のIPER/拒絶理由PDFは未取得のため、別途保存/OCRが必要です。"
+    return data, 200
 
 
 def _load_or_build_ocr_reports(case_id: str) -> list[dict]:
@@ -349,6 +725,7 @@ def _build_ocr_reports(case_id: str) -> list[dict]:
         from services import case_service as cs
         pdf_path = cs._resolve_hongan_pdf_for_isr_scan(case_id)
         parsed = cs._parse_embedded_isr_search_report(pdf_path)
+        jp_family_by_num = cs._extract_jp_family_members_by_isr_num(parsed or {})
     except Exception as e:
         logger.info("OPD OCR report build skipped (%s): %s", case_id, e)
         return []
@@ -356,6 +733,26 @@ def _build_ocr_reports(case_id: str) -> list[dict]:
     if not parsed or not parsed.get("citations"):
         return []
     raw_text = parsed.get("raw_text") or ""
+    family_citations = []
+    for cit in parsed.get("citations") or []:
+        family_num = cit.get("num")
+        try:
+            family_jps = jp_family_by_num.get(int(family_num or 0), [])
+        except (TypeError, ValueError):
+            family_jps = []
+        for idx, jp_patent_id in enumerate(family_jps, start=1):
+            label = f"本ISRD{family_num}易読"
+            if len(family_jps) > 1:
+                label = f"{label}{idx}"
+            family_citations.append({
+                "doc_id": jp_patent_id,
+                "label": label,
+                "raw_text": f"{cit.get('doc_id') or cit.get('doc_label') or ''} のJPファミリー",
+                "family_of": cit.get("doc_id", ""),
+                "isr_num": family_num,
+                "category": cit.get("category", ""),
+                "claims": cit.get("claims", ""),
+            })
     return [{
         "kind": parsed.get("form") or "ISR",
         "label": "本願PDF内ISR OCR",
@@ -364,6 +761,7 @@ def _build_ocr_reports(case_id: str) -> list[dict]:
         "language": parsed.get("language", ""),
         "intl_app_no": parsed.get("intl_app_no", ""),
         "citations": parsed.get("citations") or [],
+        "family_citations": family_citations,
         "raw_text": raw_text[:20000],
         "raw_text_length": len(raw_text),
     }]
@@ -418,10 +816,48 @@ class OpdDossierSession:
                 "documents": result.get("documents", []),
                 "targets": result.get("targets", []),
                 "citation_candidates": result.get("citation_candidates", []),
+                "ocr_reports": _load_or_build_ocr_reports(case_id),
                 "warnings": result.get("warnings", []),
             }
+            payload["citation_candidates"] = _extract_citation_candidates_from_index(payload)
             save_opd_index(case_id, payload)
             result.update(payload)
+        return result
+
+    def download_rejection_pdfs(self, case_id: str, *, timeout: int = 120) -> dict:
+        if not self.is_alive():
+            return {"ok": False, "error": "OPDセッションが開かれていません。先に OPD を開いてください。"}
+        data, code = load_opd_index(case_id)
+        if code != 200:
+            return {"ok": False, "error": data.get("error", "OPDインデックス読込失敗")}
+        targets = [
+            t for t in (data.get("targets") or data.get("documents") or [])
+            if (t.get("kind") in _REJECTION_KINDS)
+        ]
+        if not targets:
+            return {"ok": False, "error": "保存対象のIPER/拒絶理由書類候補がありません。先にOPD書類を収集してください。"}
+        result = self._submit("download_rejection_pdfs", {
+            "case_id": case_id,
+            "targets": targets,
+        }, timeout=timeout)
+        if result.get("ok"):
+            reports = _load_opd_pdf_reports(case_id)
+            for item in result.get("downloads") or []:
+                if not item.get("success") or not item.get("path"):
+                    continue
+                try:
+                    report = _parse_opd_pdf_report(case_id, Path(item["path"]), item)
+                except Exception as e:
+                    item["success"] = False
+                    item["error"] = f"OCR/解析失敗: {e}"
+                    continue
+                reports = [r for r in reports if r.get("filename") != report.get("filename")]
+                reports.append(report)
+                item["report_kind"] = report.get("kind", "")
+                item["has_box_v"] = bool(report.get("box_v"))
+            _save_opd_pdf_reports(case_id, reports)
+            refreshed, _ = load_opd_index(case_id)
+            result["rejection_documents"] = refreshed.get("rejection_documents") or []
         return result
 
     def status(self) -> dict:
@@ -473,7 +909,11 @@ class OpdDossierSession:
                 headless=False,
                 args=["--disable-blink-features=AutomationControlled"],
             )
-            self._ctx = self._browser.new_context(locale="ja-JP", viewport={"width": 1280, "height": 900})
+            self._ctx = self._browser.new_context(
+                locale="ja-JP",
+                viewport={"width": 1280, "height": 900},
+                accept_downloads=True,
+            )
             self._page = self._ctx.new_page()
             self._ready_event.set()
 
@@ -517,6 +957,8 @@ class OpdDossierSession:
             return self._op_open_opd(kw["url"], kw.get("patent_number", ""))
         if op == "collect":
             return self._op_collect()
+        if op == "download_rejection_pdfs":
+            return self._op_download_rejection_pdfs(kw["case_id"], kw.get("targets") or [])
         if op == "status":
             return {"ok": True, "url": self._page.url if self._page else ""}
         return {"ok": False, "error": f"unknown op: {op}"}
@@ -578,6 +1020,34 @@ class OpdDossierSession:
             "warnings": warnings,
         }
 
+    def _op_download_rejection_pdfs(self, case_id: str, targets: list[dict]) -> dict:
+        page = self._page
+        _dismiss_modals(page)
+        downloads = []
+        for target in targets:
+            label = target.get("label") or target.get("text") or ""
+            kind = target.get("kind") or ""
+            date = target.get("date") or _extract_doc_date(label)
+            item = {"kind": kind, "label": label, "date": date, "success": False}
+            try:
+                row = _find_opd_row_for_target(page, target)
+                if row is None:
+                    item["error"] = "OPD画面上で対象行を見つけられませんでした"
+                    downloads.append(item)
+                    continue
+                clicked, path = _click_row_pdf_and_capture_download(page, row, case_id, target)
+                if not clicked:
+                    item["error"] = "対象行の原文/PDF/添付書類ボタンをクリックできませんでした"
+                    downloads.append(item)
+                    continue
+                item["success"] = True
+                item["path"] = path
+                downloads.append(item)
+            except Exception as e:
+                item["error"] = f"{type(e).__name__}: {e}"
+                downloads.append(item)
+        return {"ok": True, "downloads": downloads}
+
 
 def _dismiss_modals(page) -> None:
     for sel in _DISMISS_SELECTORS:
@@ -600,6 +1070,114 @@ def _click_first_visible(page, selectors: list[str], *, timeout: int) -> bool:
         except Exception:
             continue
     return False
+
+
+def _target_needles(target: dict) -> list[str]:
+    text = _normalize_doc_text(target.get("text") or target.get("label") or "")
+    kind = target.get("kind") or ""
+    date = target.get("date") or _extract_doc_date(text)
+    needles = []
+    if date:
+        needles.append(date)
+    if kind == "IPER":
+        needles.append("preliminary")
+    elif "Final Rejection" in kind:
+        needles.append("final")
+    elif "Non Final" in kind:
+        needles.append("non")
+    elif "CN" in kind:
+        needles.append("office")
+    for token in re.findall(r"[A-Za-z]{5,}|[\u4e00-\u9fff\u3040-\u30ff]{2,}", text)[:8]:
+        if token.lower() not in ("original", "english", "classification", "citation"):
+            needles.append(token)
+    return needles[:5]
+
+
+def _find_opd_row_for_target(page, target: dict):
+    needles = [n.lower() for n in _target_needles(target) if n]
+    selectors = ["table tbody tr", "mat-row, .mat-row", "li", "div"]
+    for sel in selectors:
+        try:
+            locs = page.locator(sel).all()
+        except Exception:
+            continue
+        for loc in locs[:1000]:
+            try:
+                text = _normalize_doc_text(loc.inner_text(timeout=250))
+            except Exception:
+                continue
+            low = text.lower()
+            if len(text) > 1800:
+                continue
+            if needles and sum(1 for n in needles if n.lower() in low) >= min(2, len(needles)):
+                return loc
+    return None
+
+
+def _safe_opd_pdf_name(target: dict, suggested: str = "") -> str:
+    base = suggested or "_".join(part for part in [
+        target.get("date") or _extract_doc_date(target.get("label") or ""),
+        target.get("kind") or "OPD",
+        hashlib.sha1((target.get("label") or "").encode("utf-8", errors="ignore")).hexdigest()[:8],
+    ] if part)
+    if not base.lower().endswith(".pdf"):
+        base += ".pdf"
+    return re.sub(r'[<>:"/\\|?*]', "_", base)
+
+
+def _click_row_pdf_and_capture_download(page, row, case_id: str, target: dict) -> tuple[bool, str]:
+    dest_dir = _opd_pdf_dir(case_id)
+    clickers = []
+    for sel in _OPD_DOWNLOAD_CLICK_SELECTORS:
+        try:
+            count = min(row.locator(sel).count(), 5)
+        except Exception:
+            continue
+        for idx in range(count):
+            clickers.append(row.locator(sel).nth(idx))
+    if not clickers:
+        clickers = [row]
+
+    for loc in clickers:
+        try:
+            with page.expect_download(timeout=8000) as dl_info:
+                loc.click(timeout=2000)
+            download = dl_info.value
+            name = _safe_opd_pdf_name(target, download.suggested_filename)
+            dest = dest_dir / name
+            download.save_as(str(dest))
+            return True, str(dest)
+        except Exception:
+            # Some OPD actions open a new page instead of a download.
+            try:
+                before_pages = list(page.context.pages)
+                loc.click(timeout=2000)
+                page.wait_for_timeout(2000)
+                after_pages = list(page.context.pages)
+                if len(after_pages) > len(before_pages):
+                    new_page = after_pages[-1]
+                    try:
+                        new_page.wait_for_load_state("domcontentloaded", timeout=6000)
+                    except Exception:
+                        pass
+                    url = new_page.url or ""
+                    if ".pdf" in url.lower():
+                        resp = page.context.request.get(url, timeout=30000)
+                        if resp.ok:
+                            dest = dest_dir / _safe_opd_pdf_name(target)
+                            dest.write_bytes(resp.body())
+                            try:
+                                new_page.close()
+                            except Exception:
+                                pass
+                            return True, str(dest)
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+    return False, ""
 
 
 def _scrape_documents(page) -> list[dict]:

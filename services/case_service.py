@@ -720,12 +720,18 @@ def extract_hongan_citations(case_id):
             })
     refs.sort(key=lambda r: r["ref_no"])
     next_ref_no = (max((r["ref_no"] for r in refs), default=0) + 1)
+    if _has_saved_opd_dossier_material(case_id):
+        refs.extend(_extract_opd_dossier_refs(case_id, start_ref_no=next_ref_no, seen_pids=seen_pids))
+        next_ref_no = (max((r["ref_no"] for r in refs), default=0) + 1)
     refs.extend(_extract_isr_citation_refs_from_hongan_pdf(
         case_id, start_ref_no=next_ref_no, seen_pids=seen_pids
     ))
-    next_ref_no = (max((r["ref_no"] for r in refs), default=0) + 1)
-    refs.extend(_extract_opd_dossier_refs(case_id, start_ref_no=next_ref_no, seen_pids=seen_pids))
     return {"refs": refs}, 200
+
+
+def _has_saved_opd_dossier_material(case_id):
+    dossier_dir = get_case_dir(case_id) / "dossier"
+    return (dossier_dir / "opd_index.json").exists() or (dossier_dir / "opd_ocr_reports.json").exists()
 
 
 def _extract_opd_dossier_refs(case_id, start_ref_no=1, seen_pids=None):
@@ -755,7 +761,9 @@ def _extract_opd_dossier_refs(case_id, start_ref_no=1, seen_pids=None):
             "raw_text": (cand.get("raw_text") or "")[:160],
             "para_id": cand.get("source_label") or "OPD",
             "label": cand.get("label") or f"ドシエ引用{len(refs) + 1}",
-            "source": "opd_dossier",
+            "source": cand.get("source") or "opd_dossier",
+            "family_of": cand.get("family_of", ""),
+            "category": cand.get("category", ""),
         })
         ref_no += 1
     return refs
@@ -840,6 +848,7 @@ def _extract_isr_citation_refs_from_hongan_pdf(case_id, start_ref_no=1, seen_pid
         return []
 
     seen = seen_pids if seen_pids is not None else set()
+    seen_keys = {_canonical_patent_id(pid) for pid in seen if pid}
     refs = []
     ref_no = int(start_ref_no or 1)
     isr_no = 1
@@ -848,9 +857,11 @@ def _extract_isr_citation_refs_from_hongan_pdf(case_id, start_ref_no=1, seen_pid
         patent_id = _normalize_patent_id(cit.get("doc_id") or "")
         if not patent_id:
             patent_id = _extract_patent_id_from_tail(cit.get("doc_label", ""))
-        if not patent_id or patent_id in seen:
+        key = _canonical_patent_id(patent_id)
+        if not patent_id or key in seen_keys:
             continue
         seen.add(patent_id)
+        seen_keys.add(key)
         raw_parts = [
             cit.get("category", ""),
             cit.get("doc_label", ""),
@@ -874,9 +885,11 @@ def _extract_isr_citation_refs_from_hongan_pdf(case_id, start_ref_no=1, seen_pid
         family_num = cit.get("num")
         family_jps = jp_family_by_num.get(int(family_num or 0), [])
         for idx, jp_patent_id in enumerate(family_jps, start=1):
-            if jp_patent_id in seen:
+            key = _canonical_patent_id(jp_patent_id)
+            if key in seen_keys:
                 continue
             seen.add(jp_patent_id)
+            seen_keys.add(key)
             label = f"本ISRD{family_num}易読"
             if len(family_jps) > 1:
                 label = f"{label}{idx}"

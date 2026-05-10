@@ -8,9 +8,11 @@ Google Patents ページからPDFリンクを抽出してダウンロード。
 """
 
 import re
+import os
 from pathlib import Path
 
 import requests
+import urllib3
 
 from modules import google_patents_throttle
 
@@ -19,6 +21,28 @@ _HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 }
+
+
+def _requests_get(url, **kwargs):
+    """requests.get with a more reliable CA bundle on Windows.
+
+    Some local Python installs cannot validate Google Patents with the bundled
+    OpenSSL CA store. Prefer certifi, then fall back to an insecure retry unless
+    PATENT_COMPARE_INSECURE_SSL_FALLBACK=0 is set.
+    """
+    try:
+        import certifi
+        kwargs.setdefault("verify", certifi.where())
+    except Exception:
+        pass
+    try:
+        return requests.get(url, **kwargs)
+    except requests.exceptions.SSLError:
+        if os.environ.get("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "1") == "0":
+            raise
+        kwargs["verify"] = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, **kwargs)
 
 
 _ERA_TO_LETTER = {"明": "M", "大": "T", "昭": "S", "平": "H", "令": "R"}
@@ -348,8 +372,8 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
         # Step 1: Google Patents ページを取得して PDF URL を抽出
         try:
             google_patents_throttle.wait()
-            page_resp = requests.get(google_url, headers=_HEADERS, timeout=timeout,
-                                     allow_redirects=True)
+            page_resp = _requests_get(google_url, headers=_HEADERS, timeout=timeout,
+                                      allow_redirects=True)
             if page_resp.status_code != 200:
                 last_error = f"Google Patents ページ取得失敗 (status={page_resp.status_code})"
                 continue
@@ -367,8 +391,8 @@ def download_patent_pdf(patent_id, save_dir, timeout=30):
         # Step 2: PDF をダウンロード（patentimages も同じドメイン群なので throttle 対象）
         try:
             google_patents_throttle.wait()
-            pdf_resp = requests.get(pdf_url, headers=_HEADERS, timeout=timeout,
-                                    allow_redirects=True)
+            pdf_resp = _requests_get(pdf_url, headers=_HEADERS, timeout=timeout,
+                                     allow_redirects=True)
             if (pdf_resp.status_code == 200 and
                     "pdf" in pdf_resp.headers.get("content-type", "").lower()):
                 path = save_dir / f"{safe_name}.pdf"

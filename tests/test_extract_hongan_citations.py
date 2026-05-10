@@ -181,6 +181,9 @@ JP 2030-000001 A 2030.1.1
     def test_opd_dossier_candidates_are_added(self, case_with_hongan, monkeypatch):
         from services import opd_dossier_service
 
+        dossier_dir = case_service.get_case_dir(case_with_hongan) / "dossier"
+        dossier_dir.mkdir(parents=True, exist_ok=True)
+        (dossier_dir / "opd_index.json").write_text("{}", encoding="utf-8")
         monkeypatch.setattr(case_service, "_extract_isr_citation_refs_from_hongan_pdf", lambda *_a, **_k: [])
         monkeypatch.setattr(
             opd_dossier_service,
@@ -203,6 +206,37 @@ JP 2030-000001 A 2030.1.1
         assert len(opd_refs) == 1
         assert opd_refs[0]["label"] == "ドシエ引用1"
         assert opd_refs[0]["patent_id"] == "US2016175445A1"
+
+    def test_saved_opd_dossier_candidates_take_precedence_over_embedded_isr(self, case_with_hongan, monkeypatch):
+        from services import opd_dossier_service
+
+        dossier_dir = case_service.get_case_dir(case_with_hongan) / "dossier"
+        dossier_dir.mkdir(parents=True, exist_ok=True)
+        (dossier_dir / "opd_ocr_reports.json").write_text('{"reports":[]}', encoding="utf-8")
+        monkeypatch.setattr(
+            opd_dossier_service,
+            "extract_citation_candidates",
+            lambda case_id: ({
+                "candidates": [
+                    {"patent_id": "US2016175445A1", "label": "ドシエ引用1", "source": "opd_dossier_ocr"},
+                    {"patent_id": "JP5980304B2", "label": "本ISRD2易読1", "source": "opd_dossier_ocr_family"},
+                ]
+            }, 200),
+        )
+        monkeypatch.setattr(
+            case_service,
+            "_extract_isr_citation_refs_from_hongan_pdf",
+            lambda *_a, **_k: [
+                {"ref_no": 10, "patent_id": "US2016175445A1", "label": "ISR引用1", "source": "isr"},
+                {"ref_no": 11, "patent_id": "JP5980304B2", "label": "本ISRD2易読1", "source": "isr_family"},
+            ],
+        )
+
+        refs = case_service.extract_hongan_citations(case_with_hongan)[0]["refs"]
+
+        opd_refs = [r for r in refs if r["source"].startswith("opd_dossier")]
+        assert [r["source"] for r in opd_refs] == ["opd_dossier_ocr", "opd_dossier_ocr_family"]
+        assert [r["patent_id"] for r in opd_refs] == ["US2016175445A1", "JP5980304B2"]
 
 
 class TestErrors:
