@@ -757,6 +757,85 @@ function _honganDossierMsg(text, kind) {
                    kind === 'success' ? '#86efac' : 'var(--text2)';
 }
 
+function _opdRejectionStatus(text, kind) {
+  _honganDossierMsg(text, kind);
+  const el = document.getElementById('opd-rejection-status');
+  if (!el) return;
+  el.style.display = text ? '' : 'none';
+  el.textContent = text || '';
+  el.style.color = kind === 'error' ? '#fca5a5' :
+                   kind === 'success' ? '#86efac' :
+                   kind === 'warn' ? '#fbbf24' : '#bfdbfe';
+}
+
+function _startOpdRejectionProgress(baseText) {
+  const started = Date.now();
+  _opdRejectionStatus(`${baseText} (0秒)`, 'info');
+  return window.setInterval(() => {
+    const sec = Math.max(1, Math.floor((Date.now() - started) / 1000));
+    _opdRejectionStatus(`${baseText} (${sec}秒経過)`, 'info');
+  }, 1000);
+}
+
+function _opdSessionGuide(prefix) {
+  const lead = prefix ? `${prefix}: ` : '';
+  return `${lead}OPDセッションが開かれていません。サーバー再起動後は可視ブラウザが閉じるため、「OPDを開く」→必要ならOPD画面で「書類情報をすべて開く」→「OPD書類を収集」の順に進めてください。`;
+}
+
+function _setOpdSessionStatus(status) {
+  const el = document.getElementById('hongan-opd-session-status');
+  if (!el) return;
+  if (status && status.alive) {
+    el.textContent = 'OPDセッション: 起動中';
+    el.style.color = '#86efac';
+    el.title = status.url || '';
+  } else {
+    el.textContent = 'OPDセッション: 未起動';
+    el.style.color = '#fbbf24';
+    el.title = 'OPDを開くと可視ブラウザセッションを開始します';
+  }
+}
+
+async function refreshHonganOpdSessionStatus() {
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/status`);
+    const data = await resp.json();
+    _setOpdSessionStatus(data);
+    return data;
+  } catch (_) {
+    _setOpdSessionStatus({alive: false});
+    return {alive: false};
+  }
+}
+
+async function _requireHonganOpdSession(messageTarget, options = {}) {
+  const status = await refreshHonganOpdSessionStatus();
+  if (status && status.alive) return true;
+  if (options.autoOpen) {
+    const setMsg = messageTarget === 'rejection' ? _opdRejectionStatus : _honganDossierMsg;
+    setMsg('OPDセッションが未起動なので、可視ブラウザでOPDを開いてから続行します...', 'info');
+    _setDossierButtonLoading('btn-opd-open', true, 'OPD起動中...');
+    try {
+      const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/open`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+      await refreshHonganOpdSessionStatus();
+      setMsg(`OPD画面を開きました。続けて対象の添付PDFを探します。${data.hint ? ' ' + data.hint : ''}`, data.opd_clicked ? 'success' : 'info');
+      return true;
+    } catch (e) {
+      await refreshHonganOpdSessionStatus();
+      setMsg('OPDを自動起動できませんでした: ' + (e.message || e), 'error');
+      return false;
+    } finally {
+      _setDossierButtonLoading('btn-opd-open', false);
+    }
+  }
+  const msg = _opdSessionGuide('');
+  if (messageTarget === 'rejection') _opdRejectionStatus(msg, 'warn');
+  else _honganDossierMsg(msg, 'error');
+  return false;
+}
+
 function openHonganFixedUrl() {
   const b = window.CASE_BOOTSTRAP || {};
   const patentNumber = (b.hongan_patent_number || b.case_id || '').trim();
@@ -782,6 +861,15 @@ function _setDossierButtonLoading(id, loading, text) {
   }
 }
 
+function _opdTargetHasSafeAttachment(t) {
+  const labels = t && t.attachment_labels ? t.attachment_labels : [];
+  return labels.some(a => /添付書類|Attached\s+Document/i.test(a || ''));
+}
+
+function _opdTargetIsRejectionKind(t) {
+  return ['IPER', 'US Non Final Rejection', 'US Final Rejection', 'CN拒絶理由'].includes((t && t.kind) || '');
+}
+
 function _renderOpdTargets(data) {
   const wrap = document.getElementById('hongan-opd-targets');
   if (!wrap) return;
@@ -789,6 +877,7 @@ function _renderOpdTargets(data) {
   const docs = (data && data.documents) || [];
   const citations = (data && data.citation_candidates) || [];
   const ocrReports = (data && data.ocr_reports) || [];
+  const opdPdfReports = (data && data.opd_pdf_reports) || [];
   const rejections = (data && data.rejection_documents) || [];
   const warnings = (data && data.warnings) || [];
   if (!targets.length && !docs.length && !citations.length && !ocrReports.length && !rejections.length && !warnings.length) {
@@ -797,16 +886,24 @@ function _renderOpdTargets(data) {
     return;
   }
   const warnHtml = warnings.map(w =>
-    `<div style="color:#fbbf24; font-size:0.78rem; margin-bottom:0.25rem;">${_hrefEsc(w)}</div>`
+    `<div style="color:#fbbf24; font-size:0.78rem; margin-bottom:0.25rem;">前回収集時の注意: ${_hrefEsc((w || '').replace('書類情報をすべて開く', '書類情報を全て開く'))}</div>`
   ).join('');
-  const rows = targets.map(t => {
+  const rows = targets.map((t, idx) => {
     const note = t.note ? `<div style="color:#94a3b8; font-size:0.74rem; margin-top:0.15rem;">${_hrefEsc(t.note)}</div>` : '';
     const attachments = (t.attachment_labels || []).map(a =>
       `<div style="color:#86efac; font-size:0.74rem; margin-top:0.15rem;">添付: ${_hrefEsc(a)}</div>`
     ).join('');
+    const canDownload = _opdTargetIsRejectionKind(t) && _opdTargetHasSafeAttachment(t);
+    const action = canDownload
+      ? `<button type="button" class="btn btn-outline" data-opd-target-download="${idx}"
+                 style="font-size:0.74rem; padding:0.18rem 0.45rem;">この添付を保存/OCR</button>`
+      : (_opdTargetIsRejectionKind(t)
+          ? `<span style="color:#fbbf24; font-size:0.74rem;">手動取込向き</span>`
+          : '');
     return `<tr>
       <td style="padding:0.25rem 0.45rem; white-space:nowrap; color:#bfdbfe;">${_hrefEsc(t.kind || '')}</td>
       <td style="padding:0.25rem 0.45rem;">${_hrefEsc(t.label || t.text || '')}${attachments}${note}</td>
+      <td style="padding:0.25rem 0.45rem; white-space:nowrap;">${action}</td>
     </tr>`;
   }).join('');
   const citationRows = citations.map(c => `<tr>
@@ -818,6 +915,26 @@ function _renderOpdTargets(data) {
     <td style="padding:0.22rem 0.45rem; white-space:nowrap; color:#94a3b8;">${_hrefEsc(d.kind || '')}</td>
     <td style="padding:0.22rem 0.45rem;">${_hrefEsc(d.label || d.text || '')}</td>
   </tr>`).join('');
+  const embeddedOcrChars = ocrReports.reduce((sum, r) => sum + Number(r.raw_text_length || (r.raw_text || '').length || 0), 0);
+  const embeddedOcrCitations = ocrReports.reduce((sum, r) =>
+    sum + ((r.citations || []).length) + ((r.family_citations || []).length), 0);
+  const opdPdfChars = opdPdfReports.reduce((sum, r) => sum + Number(r.raw_text_length || (r.raw_text || '').length || 0), 0);
+  const sourceStatusHtml = `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(14rem,1fr)); gap:0.4rem; margin-top:0.55rem;">
+    <div style="padding:0.45rem 0.55rem; border:1px solid var(--border); border-radius:6px; background:rgba(15,23,42,0.35); font-size:0.78rem;">
+      <div style="color:#bfdbfe; font-weight:700;">本願PDF内ISR OCR</div>
+      <div style="margin-top:0.15rem; color:${ocrReports.length ? '#86efac' : '#fbbf24'};">
+        ${ocrReports.length ? `保存済み ${ocrReports.length}件 / 引用候補 ${embeddedOcrCitations}件 / ${embeddedOcrChars.toLocaleString()}字` : '未実行'}
+      </div>
+      <div style="margin-top:0.15rem; color:#94a3b8;">Step 4 のドシエ引用候補と翻訳・要約に使います。</div>
+    </div>
+    <div style="padding:0.45rem 0.55rem; border:1px solid var(--border); border-radius:6px; background:rgba(15,23,42,0.35); font-size:0.78rem;">
+      <div style="color:#bfdbfe; font-weight:700;">OPD添付PDF OCR</div>
+      <div style="margin-top:0.15rem; color:${opdPdfReports.length ? '#86efac' : '#fbbf24'};">
+        ${opdPdfReports.length ? `保存済み ${opdPdfReports.length}件 / ${opdPdfChars.toLocaleString()}字` : '未取得'}
+      </div>
+      <div style="margin-top:0.15rem; color:#94a3b8;">IPER・拒絶理由の翻訳/要約に使います。</div>
+    </div>
+  </div>`;
   const rejectionRows = rejections.map(d => {
     const status = d.status === 'summarized'
       ? '<span class="badge badge-green">要約済</span>'
@@ -871,10 +988,12 @@ function _renderOpdTargets(data) {
       <thead><tr style="color:#94a3b8;">
         <th style="text-align:left; padding:0.25rem 0.45rem;">対象</th>
         <th style="text-align:left; padding:0.25rem 0.45rem;">OPD書類候補</th>
+        <th style="text-align:left; padding:0.25rem 0.45rem;">操作</th>
       </tr></thead>
-      <tbody>${rows || '<tr><td colspan="2" style="padding:0.4rem; color:#94a3b8;">対象書類候補なし</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan="3" style="padding:0.4rem; color:#94a3b8;">対象書類候補なし</td></tr>'}</tbody>
     </table>
     <div style="margin-top:0.55rem; color:#94a3b8; font-size:0.78rem;">ドシエ引用候補は Step 4 の本願引用抽出にも追加されます。</div>
+    ${sourceStatusHtml}
     <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-top:0.3rem; background:rgba(15,23,42,0.35); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
       <thead><tr style="color:#94a3b8;">
         <th style="text-align:left; padding:0.25rem 0.45rem;">ラベル</th>
@@ -892,17 +1011,19 @@ function _renderOpdTargets(data) {
       <div style="display:flex; gap:0.4rem; align-items:center; margin:0.4rem 0;">
         <select class="model-picker" data-model-key="opd-rejection-summary" data-model-default="sonnet"
                 style="padding:0.28rem 0.4rem; font-size:0.76rem; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:4px;"></select>
-        <button class="btn btn-primary" id="btn-opd-rejection-download"
-                style="font-size:0.78rem; padding:0.25rem 0.6rem;"
-                onclick="downloadOpdRejectionPdfs()">OPD添付PDFを保存/OCR</button>
+        <button type="button" class="btn btn-primary" id="btn-opd-rejection-download"
+                data-opd-rejection-action="download"
+                style="font-size:0.78rem; padding:0.25rem 0.6rem;">OPD添付PDFを保存/OCR</button>
         <label class="btn btn-outline" style="font-size:0.78rem; padding:0.25rem 0.6rem; cursor:pointer;">
           PDF手動取込
           <input type="file" accept=".pdf" multiple style="display:none;" onchange="uploadOpdRejectionPdfs(this.files); this.value='';">
         </label>
-        <button class="btn btn-outline" id="btn-opd-rejection-summary"
-                style="font-size:0.78rem; padding:0.25rem 0.6rem;"
-                onclick="summarizeOpdRejections()">翻訳・要約</button>
+        <button type="button" class="btn btn-outline" id="btn-opd-rejection-summary"
+                data-opd-rejection-action="summarize"
+                style="font-size:0.78rem; padding:0.25rem 0.6rem;">翻訳・要約</button>
       </div>
+      <div id="opd-rejection-status"
+           style="display:none; margin:0.35rem 0 0.45rem; padding:0.38rem 0.55rem; border:1px solid var(--border); border-radius:6px; background:rgba(15,23,42,0.45); color:#bfdbfe; font-size:0.78rem;"></div>
       <table style="width:100%; border-collapse:collapse; font-size:0.78rem; margin-top:0.35rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
         <thead><tr style="color:#94a3b8;">
           <th style="text-align:left; padding:0.22rem 0.45rem;">種別</th>
@@ -927,38 +1048,60 @@ function _renderOpdTargets(data) {
 }
 
 async function downloadOpdRejectionPdfs() {
-  _honganDossierMsg('OPD添付PDFを保存してOCR解析しています...', 'info');
+  return downloadOpdRejectionPdfsForTargets(null);
+}
+
+async function downloadOpdRejectionPdfsForTargets(targetIndices, options = {}) {
+  if (!await _requireHonganOpdSession('rejection', {autoOpen: true})) return;
+  const single = Array.isArray(targetIndices) && targetIndices.length === 1;
+  const progressTimer = _startOpdRejectionProgress(single
+    ? '収集済みOPD候補から指定した添付PDFだけを保存してOCR解析しています'
+    : '収集済みOPD候補から安全な添付PDFだけを保存してOCR解析しています');
   _setDossierButtonLoading('btn-opd-rejection-download', true, '保存/OCR中...');
   try {
-    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/rejections/download`, { method: 'POST' });
+    _opdRejectionStatus('OPD収集結果を使って添付PDF保存APIを呼び出しています...', 'info');
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/rejections/download`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(Array.isArray(targetIndices) ? {target_indices: targetIndices} : {}),
+    });
+    _opdRejectionStatus('サーバーから応答を受信しました。結果を解析しています...', 'info');
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     const downloads = data.downloads || [];
     const ok = downloads.filter(d => d.success).length;
     const ng = downloads.length - ok;
+    _opdRejectionStatus('保存/OCR結果を画面に反映しています...', 'info');
     const currentResp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
     const current = await currentResp.json();
     if (currentResp.ok) _renderOpdTargets(current);
     if (ng) {
       const errs = downloads.filter(d => !d.success).map(d => `${d.kind || ''}: ${d.error || '失敗'}`).join(' / ');
-      _honganDossierMsg(`OPD添付PDF: 保存/OCR ${ok}件 / 失敗 ${ng}件。${errs}`, ok ? 'success' : 'error');
+      _opdRejectionStatus(`OPD添付PDF: 保存/OCR ${ok}件 / 失敗 ${ng}件。${errs}`, ok ? 'success' : 'error');
     } else {
-      _honganDossierMsg(`OPD添付PDFを保存/OCRしました: ${ok}件`, 'success');
+      _opdRejectionStatus(`OPD添付PDFを保存/OCRしました: ${ok}件`, 'success');
     }
+    return data;
   } catch (e) {
-    _honganDossierMsg('OPD添付PDFの保存/OCRに失敗しました: ' + (e.message || e), 'error');
+    const msg = (e.message || e || '').toString();
+    _opdRejectionStatus(msg.includes('OPDセッション') ? _opdSessionGuide('OPD添付PDFの保存/OCRに失敗しました') : 'OPD添付PDFの保存/OCRに失敗しました: ' + msg, 'error');
+    if (!options.ignoreErrors) throw e;
+    return null;
   } finally {
+    window.clearInterval(progressTimer);
     _setDossierButtonLoading('btn-opd-rejection-download', false);
+    await refreshHonganOpdSessionStatus();
   }
 }
 
 async function uploadOpdRejectionPdfs(files) {
   const pdfs = Array.from(files || []).filter(f => f.name.toLowerCase().endsWith('.pdf'));
   if (!pdfs.length) return;
-  _honganDossierMsg(`OPD添付PDFを手動取込中です... (${pdfs.length}件)`, 'info');
+  _opdRejectionStatus(`OPD添付PDFを手動取込中です... (${pdfs.length}件)`, 'info');
   try {
     const results = [];
     for (const file of pdfs) {
+      _opdRejectionStatus(`OPD添付PDFを手動取込中です: ${file.name}`, 'info');
       const fd = new FormData();
       fd.append('file', file);
       fd.append('label', file.name);
@@ -975,17 +1118,17 @@ async function uploadOpdRejectionPdfs(files) {
     const current = await currentResp.json();
     if (currentResp.ok) _renderOpdTargets(current);
     if (ng) {
-      _honganDossierMsg(`手動取込: 成功 ${ok}件 / 失敗 ${ng}件`, ok ? 'success' : 'error');
+      _opdRejectionStatus(`手動取込: 成功 ${ok}件 / 失敗 ${ng}件`, ok ? 'success' : 'error');
     } else {
-      _honganDossierMsg(`手動取込しました: ${ok}件`, 'success');
+      _opdRejectionStatus(`手動取込しました: ${ok}件`, 'success');
     }
   } catch (e) {
-    _honganDossierMsg('OPD添付PDFの手動取込に失敗しました: ' + (e.message || e), 'error');
+    _opdRejectionStatus('OPD添付PDFの手動取込に失敗しました: ' + (e.message || e), 'error');
   }
 }
 
 async function summarizeOpdRejections() {
-  _honganDossierMsg('拒絶理由・見解を翻訳・要約しています...', 'info');
+  const progressTimer = _startOpdRejectionProgress('拒絶理由・見解を翻訳・要約しています');
   _setDossierButtonLoading('btn-opd-rejection-summary', true, '要約中...');
   try {
     if (typeof initModelPickers === 'function') initModelPickers();
@@ -998,18 +1141,85 @@ async function summarizeOpdRejections() {
     });
     const data = await resp.json();
     if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
-    const ok = (data.results || []).filter(r => r.status === 'summarized' || r.status === 'cached').length;
-    const wait = (data.results || []).filter(r => r.status === 'needs_pdf_ocr').length;
+    const results = data.results || [];
+    const ok = results.filter(r => r.status === 'summarized' || r.status === 'cached').length;
+    const wait = results.filter(r => r.status === 'needs_pdf_ocr').length;
+    const errors = results.filter(r => r.status === 'error');
+    const readyErrors = errors.filter(r => r.has_text);
     const currentResp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
     const current = await currentResp.json();
     if (currentResp.ok) _renderOpdTargets(current);
-    _honganDossierMsg(`翻訳・要約を更新しました: ${ok}件 / PDF・OCR待ち ${wait}件`, 'success');
+    if (errors.length) {
+      const detail = errors.slice(0, 3).map(r =>
+        `${r.kind || ''} ${r.label || ''}: ${r.error || 'エラー'}`
+      ).join(' / ');
+      _opdRejectionStatus(
+        `翻訳・要約: 成功 ${ok}件 / エラー ${errors.length}件 / PDF・OCR待ち ${wait}件。${detail}`,
+        readyErrors.length ? 'error' : 'warn'
+      );
+    } else {
+      _opdRejectionStatus(`翻訳・要約を更新しました: ${ok}件 / PDF・OCR待ち ${wait}件`, 'success');
+    }
+    return data;
   } catch (e) {
-    _honganDossierMsg('拒絶理由・見解の要約に失敗しました: ' + (e.message || e), 'error');
+    _opdRejectionStatus('拒絶理由・見解の要約に失敗しました: ' + (e.message || e), 'error');
+    throw e;
   } finally {
+    window.clearInterval(progressTimer);
     _setDossierButtonLoading('btn-opd-rejection-summary', false);
   }
 }
+
+async function autoProcessCollectedOpd(data) {
+  const targets = (data && data.targets) || [];
+  const safeTargetIndices = targets
+    .map((t, idx) => ({t, idx}))
+    .filter(x => _opdTargetIsRejectionKind(x.t) && _opdTargetHasSafeAttachment(x.t))
+    .map(x => x.idx);
+  const existingReady = ((data && data.rejection_documents) || []).filter(d => d.has_text || d.status === 'summarized').length;
+
+  if (!safeTargetIndices.length && !existingReady) {
+    _opdRejectionStatus('OPD書類候補を保存しました。自動処理できる添付PDFまたは保存済みOCR本文はありません。', 'warn');
+    return;
+  }
+
+  _opdRejectionStatus(`OPD収集後の自動処理を開始します: 添付PDF ${safeTargetIndices.length}件 / 保存済みOCR ${existingReady}件`, 'info');
+  if (safeTargetIndices.length) {
+    try {
+      await downloadOpdRejectionPdfsForTargets(safeTargetIndices, {ignoreErrors: true});
+    } catch (_) {
+      /* downloadOpdRejectionPdfsForTargets handles display */
+    }
+  }
+  try {
+    await summarizeOpdRejections();
+  } catch (_) {
+    /* summarizeOpdRejections handles display */
+  }
+}
+
+window.downloadOpdRejectionPdfs = downloadOpdRejectionPdfs;
+window.downloadOpdRejectionPdfsForTargets = downloadOpdRejectionPdfsForTargets;
+window.uploadOpdRejectionPdfs = uploadOpdRejectionPdfs;
+window.summarizeOpdRejections = summarizeOpdRejections;
+
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-opd-rejection-action]');
+  if (!btn) return;
+  ev.preventDefault();
+  const action = btn.dataset.opdRejectionAction;
+  if (action === 'download') downloadOpdRejectionPdfs();
+  if (action === 'summarize') summarizeOpdRejections();
+});
+
+document.addEventListener('click', (ev) => {
+  const btn = ev.target.closest('[data-opd-target-download]');
+  if (!btn) return;
+  ev.preventDefault();
+  const idx = Number(btn.dataset.opdTargetDownload);
+  if (!Number.isFinite(idx)) return;
+  downloadOpdRejectionPdfsForTargets([idx]);
+});
 
 async function rebuildHonganOpdOcr() {
   _honganDossierMsg('本願PDF内ISRをOCR解析しています...', 'info');
@@ -1040,14 +1250,17 @@ async function openHonganOpd() {
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     const hint = data.hint ? ` ${data.hint}` : '';
     _honganDossierMsg(`OPD画面を開きました。${hint}`, data.opd_clicked ? 'success' : 'info');
+    await refreshHonganOpdSessionStatus();
   } catch (e) {
     _honganDossierMsg('OPDを開けませんでした: ' + (e.message || e), 'error');
+    await refreshHonganOpdSessionStatus();
   } finally {
     _setDossierButtonLoading('btn-opd-open', false);
   }
 }
 
 async function collectHonganOpdDocuments() {
+  if (!await _requireHonganOpdSession('collect')) return;
   _honganDossierMsg('OPD書類情報を収集中です...', 'info');
   _setDossierButtonLoading('btn-opd-collect', true, '収集中...');
   try {
@@ -1056,8 +1269,12 @@ async function collectHonganOpdDocuments() {
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     _renderOpdTargets(data);
     _honganDossierMsg(`OPD書類候補を保存しました: 対象 ${((data.targets || []).length)} 件`, 'success');
+    await refreshHonganOpdSessionStatus();
+    await autoProcessCollectedOpd(data);
   } catch (e) {
-    _honganDossierMsg('OPD書類収集に失敗しました: ' + (e.message || e), 'error');
+    const msg = (e.message || e || '').toString();
+    _honganDossierMsg(msg.includes('OPDセッション') ? _opdSessionGuide('OPD書類収集に失敗しました') : 'OPD書類収集に失敗しました: ' + msg, 'error');
+    await refreshHonganOpdSessionStatus();
   } finally {
     _setDossierButtonLoading('btn-opd-collect', false);
   }
@@ -1076,6 +1293,7 @@ async function loadHonganOpdIndex() {
 }
 
 document.addEventListener('DOMContentLoaded', loadHonganOpdIndex);
+document.addEventListener('DOMContentLoaded', refreshHonganOpdSessionStatus);
 
 // 特許番号入力 → J-PlatPat 固定URLを別タブで開く (拒絶理由からコピペ想定)
 function jumpToJplatpatByQuery(q) {

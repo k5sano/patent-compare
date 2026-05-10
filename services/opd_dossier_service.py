@@ -11,6 +11,7 @@ import threading
 import time
 import hashlib
 import shutil
+from urllib.parse import urljoin, urlparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -18,6 +19,14 @@ from typing import Any, Dict, Optional
 from services.case_service import get_case_dir, load_case_meta, load_json_file
 
 logger = logging.getLogger(__name__)
+
+JPLATPAT_ORIGIN = "https://www.j-platpat.inpit.go.jp"
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+}
 
 _DISMISS_SELECTORS = [
     'button:has-text("閉じる")',
@@ -39,12 +48,19 @@ _OPD_SELECTORS = [
 
 _EXPAND_ALL_SELECTORS = [
     'text="書類情報をすべて開く"',
+    'text="書類情報を全て開く"',
     'button:has-text("書類情報をすべて開く")',
+    'button:has-text("書類情報を全て開く")',
     'a:has-text("書類情報をすべて開く")',
+    'a:has-text("書類情報を全て開く")',
     '[role="button"]:has-text("書類情報をすべて開く")',
+    '[role="button"]:has-text("書類情報を全て開く")',
     'button:has-text("すべて開く")',
+    'button:has-text("全て開く")',
     'a:has-text("すべて開く")',
+    'a:has-text("全て開く")',
     '[role="button"]:has-text("すべて開く")',
+    '[role="button"]:has-text("全て開く")',
     'button:has-text("Open all")',
     'a:has-text("Open all")',
     '[role="button"]:has-text("Open all")',
@@ -97,6 +113,15 @@ _OPD_DOWNLOAD_CLICK_SELECTORS = [
     '[role="button"]:has-text("原文")',
     '[role="button"]:has-text("PDF")',
 ]
+_OPD_ATTACHMENT_DOWNLOAD_SELECTORS = [
+    'a:has-text("原文")',
+    'button:has-text("原文")',
+    '[role="button"]:has-text("原文")',
+]
+_OPD_ATTACHMENT_EXCLUDE_PAT = re.compile(
+    r"国内書面|National\s+Entry|明細書|Description|請求の範囲|Claims|要約|Abstract|図面|Drawings|出願書類|分類情報|一括|最大10|PDFダウンロード",
+    re.I,
+)
 _PATENT_CITATION_RE = re.compile(
     r"\b(WO|JP|US|EP|CN|KR|DE|GB|FR|CA|AU|TW)"
     r"[\s\-/]*"
@@ -206,8 +231,38 @@ def _link_attached_documents(documents: list[dict]) -> list[dict]:
             doc["target"] = False
             doc["attachment_for"] = last_target.get("kind")
             doc["attachment_for_date"] = last_target.get("date", "")
-            last_target.setdefault("attachment_labels", []).append(_normalize_doc_text(text)[:180])
+            label = _normalize_doc_text(text)[:180]
+            last_target.setdefault("attachment_labels", [])
+            if label not in last_target["attachment_labels"]:
+                last_target["attachment_labels"].append(label)
     return targets
+
+
+def _has_downloadable_attachment(target: dict) -> bool:
+    for label in target.get("attachment_labels") or []:
+        if _ATTACHED_PAT.search(label or "") and not _OPD_ATTACHMENT_EXCLUDE_PAT.search(label or ""):
+            return True
+    return False
+
+
+def _downloadable_rejection_targets(targets: list[dict]) -> tuple[list[dict], list[dict]]:
+    downloadable = []
+    skipped = []
+    for target in targets:
+        if target.get("kind") not in _REJECTION_KINDS:
+            continue
+        if _has_downloadable_attachment(target):
+            downloadable.append(target)
+        else:
+            skipped.append({
+                "kind": target.get("kind") or "",
+                "label": target.get("label") or target.get("text") or "",
+                "date": target.get("date") or _extract_doc_date(target.get("label") or target.get("text") or ""),
+                "success": False,
+                "skipped": True,
+                "error": "OPD上で安全に取得できる添付書類行を検出できませんでした。原文/英訳リンクは表紙や別書類の場合があるため、手動取込を使ってください。",
+            })
+    return downloadable, skipped
 
 
 def save_opd_index(case_id: str, payload: dict) -> Path:
@@ -282,6 +337,10 @@ def _refresh_targets_from_documents(data: dict, case_id: str | None = None) -> d
 
 def _rejection_summary_path(case_id: str) -> Path:
     return get_case_dir(case_id) / "dossier" / "opd_rejection_summaries.json"
+
+
+def _opd_download_signals_path(case_id: str) -> Path:
+    return get_case_dir(case_id) / "dossier" / "opd_download_signals.json"
 
 
 def _opd_pdf_dir(case_id: str) -> Path:
@@ -362,11 +421,27 @@ def _rejection_doc_id(kind: str, label: str, source: str) -> str:
     return hashlib.sha1(src.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
+def _rejection_cover_key(label: str, date: str = "") -> str:
+    norm = re.sub(r"\s+", " ", label or "").strip().lower()
+    norm = re.sub(r"\s+", "", norm)
+    return f"{date or ''}|{norm}"
+
+
 def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
     cache = _load_rejection_summary_cache(case_id)
     cached_items = cache.get("items") or {}
     items: list[dict] = []
     seen: set[str] = set()
+    covered_opd_document_keys: set[str] = set()
+
+    for report in data.get("opd_pdf_reports") or []:
+        text = report.get("box_v") or report.get("raw_text") or ""
+        if not text.strip():
+            continue
+        kind = report.get("kind") or ""
+        label = report.get("label") or report.get("filename") or kind
+        if kind in ("IPER", "WOSA") or kind in _REJECTION_KINDS or re.search(r"IPER|Written Opinion|書面意見|予備報告|Rejection|Office Action|拒絶理由", label, re.I):
+            covered_opd_document_keys.add(_rejection_cover_key(label, report.get("date", "")))
 
     def add_item(kind: str, label: str, *, source: str, text: str = "", date: str = "", note: str = "") -> None:
         label = re.sub(r"\s+", " ", label or "").strip()
@@ -403,14 +478,24 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
         if kind not in _REJECTION_KINDS:
             continue
         text = doc.get("text") or doc.get("label") or ""
-        add_item(kind, text, source="opd_document", date=doc.get("date") or _extract_doc_date(text))
+        date = doc.get("date") or _extract_doc_date(text)
+        if _rejection_cover_key(text, date) in covered_opd_document_keys:
+            continue
+        add_item(kind, text, source="opd_document", date=date)
 
     for report in data.get("ocr_reports") or []:
         kind = report.get("kind") or ""
         label = report.get("label") or report.get("filename") or kind
         text = report.get("box_v") or report.get("raw_text") or ""
-        if kind in ("IPER", "WOSA") or re.search(r"IPER|Written Opinion|書面意見|予備報告", label, re.I):
-            add_item(kind or "IPER", label, source=report.get("source") or "opd_ocr", text=text)
+        if not text.strip():
+            continue
+        if (
+            kind in ("ISR", "IPER", "WOSA")
+            or report.get("source") == "hongan_pdf_embedded_isr"
+            or re.search(r"ISR|International Search Report|IPER|Written Opinion|書面意見|予備報告|国際調査報告", label, re.I)
+        ):
+            note = "引用抽出に使用した保存済みOCR本文です。この本文をそのまま翻訳・要約に使います。"
+            add_item(kind or "OCR", label, source=report.get("source") or "opd_ocr", text=text, note=note)
 
     for report in data.get("opd_pdf_reports") or []:
         kind = report.get("kind") or ""
@@ -459,24 +544,30 @@ def summarize_rejection_documents(case_id: str, model: str | None = None, force:
     cache.setdefault("items", {})
     results = []
     for doc in docs:
+        base_result = {
+            "id": doc.get("id"),
+            "kind": doc.get("kind", ""),
+            "label": doc.get("label", ""),
+            "has_text": bool(doc.get("has_text")),
+        }
         if not doc.get("has_text"):
-            results.append({"id": doc.get("id"), "status": "needs_pdf_ocr"})
+            results.append({**base_result, "status": "needs_pdf_ocr"})
             continue
         if doc.get("ja_summary") and not force:
-            results.append({"id": doc.get("id"), "status": "cached"})
+            results.append({**base_result, "status": "cached"})
             continue
         prompt = _build_rejection_summary_prompt(doc)
         try:
             ja_summary = call_claude(prompt, timeout=300, model=model)
         except ClaudeClientError as e:
-            results.append({"id": doc.get("id"), "status": "error", "error": str(e)})
+            results.append({**base_result, "status": "error", "error": str(e)})
             continue
         cache["items"][doc["id"]] = {
             "ja_summary": ja_summary,
             "summarized_at": datetime.now(timezone.utc).isoformat(),
             "model": model or "",
         }
-        results.append({"id": doc.get("id"), "status": "summarized"})
+        results.append({**base_result, "status": "summarized"})
     _save_rejection_summary_cache(case_id, cache)
     refreshed, _ = load_opd_index(case_id)
     return {
@@ -516,7 +607,7 @@ def ingest_opd_pdf_file(case_id: str, src_path: str | Path, *, label: str = "", 
 
 
 def _build_rejection_summary_prompt(doc: dict) -> str:
-    text = (doc.get("source_text") or doc.get("text_preview") or "").strip()
+    text = _focus_rejection_summary_text(doc.get("source_text") or doc.get("text_preview") or "")
     return f"""以下は特許ドシエ中の拒絶理由・見解系書類です。
 
 書類種別: {doc.get('kind')}
@@ -534,6 +625,29 @@ def _build_rejection_summary_prompt(doc: dict) -> str:
 5. 本願対応で確認すべきポイント
 
 原文にない推測は避け、不明な点は不明と書いてください。"""
+
+
+def _focus_rejection_summary_text(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return ""
+    patterns = [
+        r"Box\s+No\.?\s*V.*?Reasoned\s+statement",
+        r"Reasoned\s+statement\s+with\s+regard\s+to\s+novelty",
+        r"Re\s+Item\s+V",
+        r"Statement\s+Novelty",
+        r"1\.\s*Statement\s+Novelty",
+    ]
+    starts = []
+    for pat in patterns:
+        m = re.search(pat, text, re.I | re.S)
+        if m:
+            starts.append(max(0, m.start() - 500))
+    if starts:
+        focused = text[min(starts):]
+        if len(focused) >= 3000:
+            return focused[:12000]
+    return text[:12000]
 
 
 def _extract_citation_candidates_from_index(data: dict) -> list[dict]:
@@ -601,6 +715,27 @@ def _extract_citation_candidates_from_index(data: dict) -> list[dict]:
                 "raw_text": (cit.get("raw_text") or "")[:180],
                 "category": cit.get("category", ""),
                 "family_of": cit.get("family_of", ""),
+            })
+    for report in data.get("opd_pdf_reports") or []:
+        for cit in report.get("citations") or []:
+            pid = cit.get("doc_id") or ""
+            key = _canonical_patent_id(pid)
+            if not key or key in own_keys or key in seen:
+                continue
+            seen.add(key)
+            raw_parts = [
+                cit.get("category", ""),
+                cit.get("doc_label", ""),
+                f"claims {cit.get('claims', '')}" if cit.get("claims") else "",
+                cit.get("passages", ""),
+            ]
+            candidates.append({
+                "patent_id": pid,
+                "label": f"ドシエ引用{len(candidates) + 1}",
+                "source": "opd_attached_pdf_ocr",
+                "source_label": report.get("label") or report.get("kind") or "OPD添付PDF OCR",
+                "raw_text": " / ".join(part for part in raw_parts if part)[:180],
+                "category": cit.get("category", ""),
             })
     return candidates
 
@@ -824,22 +959,40 @@ class OpdDossierSession:
             result.update(payload)
         return result
 
-    def download_rejection_pdfs(self, case_id: str, *, timeout: int = 120) -> dict:
+    def download_rejection_pdfs(self, case_id: str, *, target_indices: list[int] | None = None, timeout: int = 120) -> dict:
         if not self.is_alive():
             return {"ok": False, "error": "OPDセッションが開かれていません。先に OPD を開いてください。"}
         data, code = load_opd_index(case_id)
         if code != 200:
             return {"ok": False, "error": data.get("error", "OPDインデックス読込失敗")}
-        targets = [
-            t for t in (data.get("targets") or data.get("documents") or [])
-            if (t.get("kind") in _REJECTION_KINDS)
-        ]
+        all_targets = data.get("targets") or data.get("documents") or []
+        if target_indices is not None:
+            wanted = set()
+            for idx in target_indices:
+                try:
+                    wanted.add(int(idx))
+                except (TypeError, ValueError):
+                    continue
+            raw_targets = [
+                t for i, t in enumerate(all_targets)
+                if i in wanted and t.get("kind") in _REJECTION_KINDS
+            ]
+        else:
+            raw_targets = [t for t in all_targets if t.get("kind") in _REJECTION_KINDS]
+        targets, skipped = _downloadable_rejection_targets(raw_targets)
         if not targets:
-            return {"ok": False, "error": "保存対象のIPER/拒絶理由書類候補がありません。先にOPD書類を収集してください。"}
+            return {
+                "ok": False,
+                "error": "収集結果の中に安全に自動保存できるOPD添付書類がありません。対象行に添付がない場合は、OPDで対象PDFを開いて保存し、PDF手動取込を使ってください。",
+                "downloads": skipped,
+            }
         result = self._submit("download_rejection_pdfs", {
             "case_id": case_id,
             "targets": targets,
         }, timeout=timeout)
+        if skipped:
+            result.setdefault("downloads", [])
+            result["downloads"].extend(skipped)
         if result.get("ok"):
             reports = _load_opd_pdf_reports(case_id)
             for item in result.get("downloads") or []:
@@ -850,6 +1003,10 @@ class OpdDossierSession:
                 except Exception as e:
                     item["success"] = False
                     item["error"] = f"OCR/解析失敗: {e}"
+                    continue
+                if not (report.get("raw_text") or "").strip() and not (report.get("box_v") or "").strip():
+                    item["success"] = False
+                    item["error"] = "PDFは保存できましたが、OCRテキストが0字でした。表紙/ビューアHTML/空PDFの可能性があります。"
                     continue
                 reports = [r for r in reports if r.get("filename") != report.get("filename")]
                 reports.append(report)
@@ -989,7 +1146,7 @@ class OpdDossierSession:
     def _op_collect(self) -> dict:
         page = self._page
         _dismiss_modals(page)
-        expanded = _click_first_visible(page, _EXPAND_ALL_SELECTORS, timeout=1500)
+        expanded = _click_expand_all_documents(page)
         if expanded:
             page.wait_for_timeout(2500)
         documents = _scrape_documents(page)
@@ -999,7 +1156,7 @@ class OpdDossierSession:
         targets.sort(key=lambda d: (-int(d.get("priority") or 0), d.get("kind", ""), d.get("label", "")))
         warnings = []
         if not expanded:
-            warnings.append("「書類情報をすべて開く」ボタンを自動クリックできませんでした。未展開なら手動で開いて再収集してください。")
+            warnings.append("「書類情報を全て開く」ボタンを自動クリックできませんでした。未展開なら手動で開いて再収集してください。")
         if not targets:
             warnings.append("対象書類候補が見つかりませんでした。OPD画面が開かれているか確認してください。")
         targets = _link_attached_documents(documents)
@@ -1023,6 +1180,10 @@ class OpdDossierSession:
     def _op_download_rejection_pdfs(self, case_id: str, targets: list[dict]) -> dict:
         page = self._page
         _dismiss_modals(page)
+        expanded = _click_expand_all_documents(page)
+        if expanded:
+            page.wait_for_timeout(2500)
+            _dismiss_modals(page)
         downloads = []
         for target in targets:
             label = target.get("label") or target.get("text") or ""
@@ -1030,14 +1191,14 @@ class OpdDossierSession:
             date = target.get("date") or _extract_doc_date(label)
             item = {"kind": kind, "label": label, "date": date, "success": False}
             try:
-                row = _find_opd_row_for_target(page, target)
+                row = _find_opd_attachment_row_for_target(page, target)
                 if row is None:
-                    item["error"] = "OPD画面上で対象行を見つけられませんでした"
+                    item["error"] = "OPD画面上で対象の添付書類行を見つけられませんでした"
                     downloads.append(item)
                     continue
                 clicked, path = _click_row_pdf_and_capture_download(page, row, case_id, target)
                 if not clicked:
-                    item["error"] = "対象行の原文/PDF/添付書類ボタンをクリックできませんでした"
+                    item["error"] = "添付書類行の原文ボタンをクリックできませんでした"
                     downloads.append(item)
                     continue
                 item["success"] = True
@@ -1070,6 +1231,55 @@ def _click_first_visible(page, selectors: list[str], *, timeout: int) -> bool:
         except Exception:
             continue
     return False
+
+
+def _click_expand_all_documents(page) -> bool:
+    if _click_first_visible(page, _EXPAND_ALL_SELECTORS, timeout=1200):
+        return True
+    try:
+        return bool(page.evaluate(
+            """() => {
+                const labels = ['書類情報を全て開く', '書類情報をすべて開く', '全て開く', 'すべて開く', 'Open all'];
+                const isVisible = (el) => {
+                  const r = el.getBoundingClientRect();
+                  const s = window.getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+                };
+                const score = (el) => {
+                  const tag = (el.tagName || '').toLowerCase();
+                  let v = 0;
+                  if (tag === 'button' || tag === 'a') v += 4;
+                  if (el.getAttribute('role') === 'button') v += 3;
+                  if (typeof el.onclick === 'function') v += 2;
+                  if (el.tabIndex >= 0) v += 1;
+                  return v;
+                };
+                const candidates = [];
+                for (const el of document.querySelectorAll('button,a,[role=\"button\"],span,div,li')) {
+                  if (!isVisible(el)) continue;
+                  const text = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                  if (!text) continue;
+                  for (const label of labels) {
+                    if (text === label.replace(/\\s+/g, '') || text.includes(label.replace(/\\s+/g, ''))) {
+                      candidates.push(el);
+                      break;
+                    }
+                  }
+                }
+                candidates.sort((a, b) => {
+                  const ar = a.getBoundingClientRect();
+                  const br = b.getBoundingClientRect();
+                  return score(b) - score(a) || (ar.width * ar.height) - (br.width * br.height);
+                });
+                const target = candidates[0];
+                if (!target) return false;
+                target.scrollIntoView({block: 'center', inline: 'center'});
+                target.click();
+                return true;
+            }"""
+        ))
+    except Exception:
+        return False
 
 
 def _target_needles(target: dict) -> list[str]:
@@ -1114,6 +1324,40 @@ def _find_opd_row_for_target(page, target: dict):
     return None
 
 
+def _find_opd_attachment_row_for_target(page, target: dict):
+    date = target.get("date") or _extract_doc_date(target.get("label") or target.get("text") or "")
+    labels = [
+        _normalize_doc_text(label)
+        for label in (target.get("attachment_labels") or [])
+        if _ATTACHED_PAT.search(label or "") and not _OPD_ATTACHMENT_EXCLUDE_PAT.search(label or "")
+    ]
+    selectors = ["table tbody tr", "mat-row, .mat-row", "li", "div"]
+    for sel in selectors:
+        try:
+            locs = page.locator(sel).all()
+        except Exception:
+            continue
+        for loc in locs[:1000]:
+            try:
+                text = _normalize_doc_text(loc.inner_text(timeout=250))
+            except Exception:
+                continue
+            if len(text) > 1200:
+                continue
+            if not _ATTACHED_PAT.search(text):
+                continue
+            if _OPD_ATTACHMENT_EXCLUDE_PAT.search(text):
+                continue
+            if date and date not in text:
+                continue
+            if labels:
+                low = text.lower()
+                if not any(label[:80].lower() in low or low[:120] in label.lower() for label in labels):
+                    continue
+            return loc
+    return None
+
+
 def _safe_opd_pdf_name(target: dict, suggested: str = "") -> str:
     base = suggested or "_".join(part for part in [
         target.get("date") or _extract_doc_date(target.get("label") or ""),
@@ -1125,29 +1369,455 @@ def _safe_opd_pdf_name(target: dict, suggested: str = "") -> str:
     return re.sub(r'[<>:"/\\|?*]', "_", base)
 
 
+def _unique_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    for i in range(2, 1000):
+        candidate = path.with_name(f"{stem}_{i}{suffix}")
+        if not candidate.exists():
+            return candidate
+    return path.with_name(f"{stem}_{int(time.time())}{suffix}")
+
+
+def _is_pdf_bytes(body: bytes | None, content_type: str = "") -> bool:
+    if not body:
+        return False
+    # J-PlatPat/Chrome can report application/pdf while Playwright exposes the
+    # Chrome PDF viewer HTML shell. Only the PDF magic is reliable here.
+    return body[:5] == b"%PDF-"
+
+
+def _filename_from_url(url: str) -> str:
+    try:
+        name = Path(urlparse(url).path).name
+    except Exception:
+        return ""
+    return name if name.lower().endswith(".pdf") else ""
+
+
+def _walk_json_values(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield k, v
+            yield from _walk_json_values(v)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_json_values(item)
+
+
+def _iter_pdf_url_candidates(payload) -> list[str]:
+    urls = []
+    seen = set()
+    for key, value in _walk_json_values(payload):
+        if not isinstance(value, str):
+            continue
+        text = value.strip()
+        if not text:
+            continue
+        key_text = str(key or "").lower()
+        looks_like = (
+            ".pdf" in text.lower()
+            or key_text in {"docu_url", "pdf_url", "url"}
+            or key_text.endswith("url")
+        )
+        if not looks_like:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        urls.append(text)
+    return urls
+
+
+def _response_signal_entry(response) -> dict:
+    req = response.request
+    post_data = ""
+    try:
+        post_data = req.post_data or ""
+    except Exception:
+        pass
+    return {
+        "url": response.url,
+        "status": getattr(response, "status", 0),
+        "method": getattr(req, "method", ""),
+        "content_type": (response.headers or {}).get("content-type", ""),
+        "post_data": post_data[:5000] if isinstance(post_data, str) else "",
+    }
+
+
+def _save_opd_download_signal(case_id: str, target: dict, entries: list[dict], *, saved_path: str = "", error: str = "") -> None:
+    path = _opd_download_signals_path(case_id)
+    try:
+        if path.exists():
+            with path.open(encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = {"case_id": case_id, "signals": []}
+    except (OSError, json.JSONDecodeError):
+        data = {"case_id": case_id, "signals": []}
+    data.setdefault("signals", []).append({
+        "captured_at": datetime.now(timezone.utc).isoformat(),
+        "kind": target.get("kind", ""),
+        "label": target.get("label") or target.get("text") or "",
+        "date": target.get("date") or _extract_doc_date(target.get("label") or target.get("text") or ""),
+        "saved_path": saved_path,
+        "error": error,
+        "entries": entries[-40:],
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_opd_download_signals(case_id: str) -> list[dict]:
+    path = _opd_download_signals_path(case_id)
+    if not path.exists():
+        return []
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("signals") if isinstance(data.get("signals"), list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _find_opd_download_recipe(case_id: str, target: dict) -> dict | None:
+    target_label = target.get("label") or target.get("text") or ""
+    target_date = target.get("date") or _extract_doc_date(target_label)
+    target_kind = target.get("kind") or ""
+    for signal in reversed(_load_opd_download_signals(case_id)):
+        label = signal.get("label") or ""
+        date = signal.get("date") or _extract_doc_date(label)
+        kind = signal.get("kind") or ""
+        if target_date and date and target_date != date:
+            continue
+        if target_kind and kind and target_kind != kind:
+            continue
+        if target_label and label and _rejection_cover_key(label, date) != _rejection_cover_key(target_label, target_date):
+            continue
+        for entry in signal.get("entries") or []:
+            if not str(entry.get("url", "")).endswith("/app/opdgw/wsh0901"):
+                continue
+            post_data = entry.get("post_data") or ""
+            try:
+                body = json.loads(post_data)
+            except json.JSONDecodeError:
+                continue
+            if body.get("DOC_ID") and body.get("FILE_TYPE") == "PDF":
+                return {"endpoint": entry.get("url"), "body": body, "source_signal": signal.get("captured_at", "")}
+    return None
+
+
+def _try_direct_opd_recipe_download(page, case_id: str, target: dict) -> tuple[bool, str]:
+    recipe = _find_opd_download_recipe(case_id, target)
+    if not recipe:
+        return False, ""
+    entry = {
+        "signal_type": "direct_recipe",
+        "url": recipe["endpoint"],
+        "method": "POST",
+        "post_data": json.dumps(recipe["body"], ensure_ascii=False),
+        "source_signal": recipe.get("source_signal", ""),
+    }
+    try:
+        payload = page.evaluate(
+            """async ({url, body}) => {
+                const u = new URL(url);
+                const path = u.pathname;
+                const res = await fetch(path, {
+                    method: 'POST',
+                    headers: {'content-type': 'application/json;charset=UTF-8'},
+                    body: JSON.stringify(body),
+                    credentials: 'include'
+                });
+                return {ok: res.ok, status: res.status, json: await res.json()};
+            }""",
+            {"url": recipe["endpoint"], "body": recipe["body"]},
+        )
+        entry["status"] = payload.get("status")
+        entry["ok"] = payload.get("ok")
+        candidates = _iter_pdf_url_candidates(payload.get("json") or {})
+        entry["pdf_url_candidates"] = candidates[:20]
+        dest_dir = _opd_pdf_dir(case_id)
+        for url in candidates:
+            full_url = url if re.match(r"^https?://", url, re.I) else urljoin(JPLATPAT_ORIGIN, url)
+            ok, path, err = _fetch_pdf_url_with_requests(page, full_url, target, dest_dir)
+            if ok:
+                entry["resolved_pdf_url"] = full_url
+                entry["resolved_by"] = "direct_recipe_requests_cookie"
+                entry["saved_as"] = path
+                _save_opd_download_signal(case_id, target, [entry], saved_path=path)
+                return True, path
+            entry.setdefault("resolve_errors", []).append(f"{full_url}: {err}")
+        _save_opd_download_signal(case_id, target, [entry], error="direct recipe did not resolve a real PDF")
+    except Exception as e:
+        entry["error"] = f"{type(e).__name__}: {e}"
+        _save_opd_download_signal(case_id, target, [entry], error=entry["error"])
+    return False, ""
+
+
+def _save_pdf_body_from_signal(dest_dir: Path, target: dict, body: bytes, *, suggested: str = "") -> Path:
+    dest = _unique_path(dest_dir / _safe_opd_pdf_name(target, suggested))
+    dest.write_bytes(body)
+    return dest
+
+
+def _cookie_header_from_context(page, url: str) -> str:
+    try:
+        cookies = page.context.cookies(url)
+    except Exception:
+        cookies = []
+    return "; ".join(f"{c.get('name')}={c.get('value')}" for c in cookies if c.get("name"))
+
+
+def _requests_get_with_tls_fallback(url: str, *, headers: dict, timeout: int = 30):
+    import os
+    import requests
+    import urllib3
+
+    kwargs = {"headers": headers, "timeout": timeout}
+    try:
+        import certifi
+        kwargs["verify"] = certifi.where()
+    except Exception:
+        pass
+    try:
+        return requests.get(url, **kwargs)
+    except requests.exceptions.SSLError:
+        if os.environ.get("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "1") == "0":
+            raise
+        kwargs["verify"] = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, **kwargs)
+
+
+def _fetch_pdf_url_with_requests(page, url: str, target: dict, dest_dir: Path) -> tuple[bool, str, str]:
+    headers = dict(_HTTP_HEADERS)
+    cookie = _cookie_header_from_context(page, url)
+    if cookie:
+        headers["Cookie"] = cookie
+    headers["Referer"] = JPLATPAT_ORIGIN + "/h0400"
+    resp = _requests_get_with_tls_fallback(url, headers=headers, timeout=30)
+    body = resp.content or b""
+    if resp.status_code == 200 and _is_pdf_bytes(body, resp.headers.get("content-type", "")):
+        dest = _save_pdf_body_from_signal(dest_dir, target, body, suggested=_filename_from_url(url))
+        return True, str(dest), ""
+    sample = body[:80].decode("utf-8", errors="ignore").replace("\n", " ")
+    return False, "", f"requests status={resp.status_code}, content-type={resp.headers.get('content-type','')}, head={sample}"
+
+
+def _try_save_pdf_from_response(page, response, case_id: str, target: dict) -> tuple[bool, str, dict]:
+    dest_dir = _opd_pdf_dir(case_id)
+    entry = _response_signal_entry(response)
+    content_type = entry.get("content_type", "")
+    url_low = (response.url or "").lower()
+    likely = (
+        "pdf" in content_type.lower()
+        or ".pdf" in url_low
+        or "/wsp" in url_low
+        or "json" in content_type.lower()
+        or "download" in url_low
+        or "docu" in url_low
+        or "opd" in url_low
+    )
+    if not likely:
+        return False, "", entry
+    try:
+        body = response.body()
+    except Exception:
+        body = b""
+    if _is_pdf_bytes(body, content_type):
+        suggested = _filename_from_url(response.url)
+        dest = _save_pdf_body_from_signal(dest_dir, target, body, suggested=suggested)
+        entry["saved_as"] = str(dest)
+        entry["signal_type"] = "pdf_response"
+        return True, str(dest), entry
+
+    payload = None
+    if "json" in content_type.lower() or url_low.endswith(("wsp0701", "wsp1101", "wsp1201")) or "/wsp" in url_low:
+        try:
+            payload = response.json()
+        except Exception:
+            try:
+                payload = json.loads(response.text())
+            except Exception:
+                payload = None
+    if payload is None:
+        return False, "", entry
+
+    candidates = _iter_pdf_url_candidates(payload)
+    entry["signal_type"] = "json_response"
+    entry["pdf_url_candidates"] = candidates[:20]
+    for url in candidates:
+        full_url = url if re.match(r"^https?://", url, re.I) else urljoin(JPLATPAT_ORIGIN, url)
+        try:
+            resp = page.context.request.get(full_url, timeout=30000)
+            ct = (resp.headers or {}).get("content-type", "")
+            pdf_body = resp.body()
+            if not resp.ok or not _is_pdf_bytes(pdf_body, ct):
+                ok, path, err = _fetch_pdf_url_with_requests(page, full_url, target, dest_dir)
+                if ok:
+                    entry["saved_as"] = path
+                    entry["resolved_pdf_url"] = full_url
+                    entry["resolved_by"] = "requests_cookie"
+                    return True, path, entry
+                entry.setdefault("resolve_errors", []).append(f"{full_url}: not a real PDF via browser/request ({err})")
+                continue
+            suggested = _filename_from_url(full_url)
+            dest = _save_pdf_body_from_signal(dest_dir, target, pdf_body, suggested=suggested)
+            entry["saved_as"] = str(dest)
+            entry["resolved_pdf_url"] = full_url
+            entry["resolved_by"] = "playwright_request"
+            return True, str(dest), entry
+        except Exception as e:
+            try:
+                ok, path, err = _fetch_pdf_url_with_requests(page, full_url, target, dest_dir)
+                if ok:
+                    entry["saved_as"] = path
+                    entry["resolved_pdf_url"] = full_url
+                    entry["resolved_by"] = "requests_cookie_after_playwright_error"
+                    return True, path, entry
+                entry.setdefault("resolve_errors", []).append(f"{full_url}: {type(e).__name__}: {e}; requests fallback: {err}")
+            except Exception as e2:
+                entry.setdefault("resolve_errors", []).append(f"{full_url}: {type(e).__name__}: {e}; requests fallback {type(e2).__name__}: {e2}")
+            continue
+    return False, "", entry
+
+
 def _click_row_pdf_and_capture_download(page, row, case_id: str, target: dict) -> tuple[bool, str]:
     dest_dir = _opd_pdf_dir(case_id)
+    direct_ok, direct_path = _try_direct_opd_recipe_download(page, case_id, target)
+    if direct_ok:
+        return True, direct_path
     clickers = []
-    for sel in _OPD_DOWNLOAD_CLICK_SELECTORS:
+    for sel in _OPD_ATTACHMENT_DOWNLOAD_SELECTORS:
         try:
-            count = min(row.locator(sel).count(), 5)
+            count = min(row.locator(sel).count(), 3)
         except Exception:
             continue
         for idx in range(count):
-            clickers.append(row.locator(sel).nth(idx))
+            loc = row.locator(sel).nth(idx)
+            try:
+                text = _normalize_doc_text(loc.inner_text(timeout=250))
+            except Exception:
+                text = ""
+            if re.search(r"英訳|English|一括|PDFダウンロード", text, re.I):
+                continue
+            clickers.append(loc)
     if not clickers:
-        clickers = [row]
+        return False, ""
 
     for loc in clickers:
+        responses = []
+        downloads = []
+
+        def on_response(response):
+            try:
+                responses.append(response)
+            except Exception:
+                pass
+
+        def on_download(download):
+            try:
+                downloads.append(download)
+            except Exception:
+                pass
+
         try:
-            with page.expect_download(timeout=8000) as dl_info:
-                loc.click(timeout=2000)
-            download = dl_info.value
-            name = _safe_opd_pdf_name(target, download.suggested_filename)
-            dest = dest_dir / name
-            download.save_as(str(dest))
-            return True, str(dest)
-        except Exception:
+            page.context.on("response", on_response)
+            page.on("download", on_download)
+            before_pages = list(page.context.pages)
+            loc.click(timeout=2500)
+            page.wait_for_timeout(6500)
+
+            for download in downloads:
+                try:
+                    name = _safe_opd_pdf_name(target, download.suggested_filename)
+                    dest = _unique_path(dest_dir / name)
+                    download.save_as(str(dest))
+                    _save_opd_download_signal(case_id, target, [{
+                        "signal_type": "browser_download",
+                        "suggested_filename": download.suggested_filename,
+                        "saved_as": str(dest),
+                    }], saved_path=str(dest))
+                    return True, str(dest)
+                except Exception:
+                    continue
+
+            signal_entries = []
+            for response in responses:
+                try:
+                    ok, path, entry = _try_save_pdf_from_response(page, response, case_id, target)
+                    signal_entries.append(entry)
+                    if ok:
+                        _save_opd_download_signal(case_id, target, signal_entries, saved_path=path)
+                        return True, path
+                except Exception as e:
+                    try:
+                        entry = _response_signal_entry(response)
+                    except Exception:
+                        entry = {"url": getattr(response, "url", ""), "error": f"{type(e).__name__}: {e}"}
+                    entry["error"] = f"{type(e).__name__}: {e}"
+                    signal_entries.append(entry)
+
+            after_pages = list(page.context.pages)
+            if len(after_pages) > len(before_pages):
+                for new_page in after_pages[len(before_pages):]:
+                    try:
+                        new_page.wait_for_load_state("domcontentloaded", timeout=6000)
+                    except Exception:
+                        pass
+                    url = new_page.url or ""
+                    signal_entries.append({"signal_type": "popup", "url": url})
+                    if ".pdf" in url.lower():
+                        try:
+                            resp = page.context.request.get(url, timeout=30000)
+                            body = resp.body()
+                            ct = (resp.headers or {}).get("content-type", "")
+                            if resp.ok and _is_pdf_bytes(body, ct):
+                                dest = _save_pdf_body_from_signal(dest_dir, target, body, suggested=_filename_from_url(url))
+                                signal_entries[-1]["saved_as"] = str(dest)
+                                _save_opd_download_signal(case_id, target, signal_entries, saved_path=str(dest))
+                                try:
+                                    new_page.close()
+                                except Exception:
+                                    pass
+                                return True, str(dest)
+                            ok, path, err = _fetch_pdf_url_with_requests(page, url, target, dest_dir)
+                            if ok:
+                                signal_entries[-1]["saved_as"] = path
+                                signal_entries[-1]["resolved_by"] = "requests_cookie"
+                                _save_opd_download_signal(case_id, target, signal_entries, saved_path=path)
+                                try:
+                                    new_page.close()
+                                except Exception:
+                                    pass
+                                return True, path
+                            signal_entries[-1]["error"] = err
+                        except Exception as e:
+                            try:
+                                ok, path, err = _fetch_pdf_url_with_requests(page, url, target, dest_dir)
+                                if ok:
+                                    signal_entries[-1]["saved_as"] = path
+                                    signal_entries[-1]["resolved_by"] = "requests_cookie_after_playwright_error"
+                                    _save_opd_download_signal(case_id, target, signal_entries, saved_path=path)
+                                    try:
+                                        new_page.close()
+                                    except Exception:
+                                        pass
+                                    return True, path
+                                signal_entries[-1]["error"] = f"{type(e).__name__}: {e}; requests fallback: {err}"
+                            except Exception as e2:
+                                signal_entries[-1]["error"] = f"{type(e).__name__}: {e}; requests fallback {type(e2).__name__}: {e2}"
+                    try:
+                        new_page.close()
+                    except Exception:
+                        pass
+            _save_opd_download_signal(case_id, target, signal_entries, error="PDFレスポンスを特定できませんでした")
+        except Exception as e:
+            _save_opd_download_signal(case_id, target, [], error=f"{type(e).__name__}: {e}")
             # Some OPD actions open a new page instead of a download.
             try:
                 before_pages = list(page.context.pages)
@@ -1177,6 +1847,15 @@ def _click_row_pdf_and_capture_download(page, row, case_id: str, target: dict) -
                         pass
             except Exception:
                 continue
+        finally:
+            try:
+                page.context.remove_listener("response", on_response)
+            except Exception:
+                pass
+            try:
+                page.remove_listener("download", on_download)
+            except Exception:
+                pass
     return False, ""
 
 

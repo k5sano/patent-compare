@@ -68,6 +68,114 @@ def test_links_attached_document_to_previous_isr():
     assert docs[1]["attachment_for"] == "ISR"
 
 
+def test_downloadable_rejection_targets_require_safe_attachment():
+    targets = [
+        {
+            "kind": "IPER",
+            "label": "2024-05-20 特許性に関する国際予備報告 原文 英訳",
+            "attachment_labels": [
+                "2024-05-20 添付書類（Attached Document） 受理書類 原文 英訳",
+                "2024-05-20 添付書類（Attached Document） 出願書類 受理書類 分類情報 原文 英訳",
+            ],
+        },
+        {
+            "kind": "IPER",
+            "label": "2023-12-03 International Preliminary Report on Patentability Chapter I 原文",
+            "attachment_labels": [],
+        },
+        {
+            "kind": "ISR",
+            "label": "2024-05-20 International Search Report",
+            "attachment_labels": ["2024-05-20 添付書類（Attached Document） 受理書類 原文 英訳"],
+        },
+    ]
+
+    downloadable, skipped = opd._downloadable_rejection_targets(targets)
+
+    assert [t["label"] for t in downloadable] == ["2024-05-20 特許性に関する国際予備報告 原文 英訳"]
+    assert len(skipped) == 1
+    assert skipped[0]["skipped"] is True
+
+
+def test_downloadable_rejection_targets_exclude_application_attachment():
+    targets = [{
+        "kind": "IPER",
+        "label": "2024-05-20 特許性に関する国際予備報告 原文 英訳",
+        "attachment_labels": [
+            "2024-05-20 添付書類（Attached Document） 出願書類 受理書類 分類情報 原文 英訳",
+        ],
+    }]
+
+    downloadable, skipped = opd._downloadable_rejection_targets(targets)
+
+    assert downloadable == []
+    assert skipped[0]["error"].startswith("OPD上で安全に取得できる添付書類行")
+
+
+def test_iter_pdf_url_candidates_finds_docu_url_and_pdf_values():
+    payload = {
+        "DOCU_INFO_PART": {"DOCU_URL": "/app/pdf/opd-doc.pdf"},
+        "items": [
+            {"name": "cover", "url": "/not-pdf"},
+            {"pdfUrl": "https://example.test/file.pdf"},
+        ],
+    }
+
+    urls = opd._iter_pdf_url_candidates(payload)
+
+    assert "/app/pdf/opd-doc.pdf" in urls
+    assert "https://example.test/file.pdf" in urls
+
+
+def test_is_pdf_bytes_accepts_magic_or_content_type():
+    assert opd._is_pdf_bytes(b"%PDF-1.7\n", "")
+    assert not opd._is_pdf_bytes(b"data", "application/pdf")
+    assert not opd._is_pdf_bytes(b"<!doctype html>", "application/pdf")
+    assert not opd._is_pdf_bytes(b"html", "text/html")
+
+
+def test_focus_rejection_summary_text_prefers_box_v():
+    text = "cover " * 1000 + "Box No.V__ Reasoned statement under Rule 43bis.1(a)(i)\n" + "important " * 1000
+
+    focused = opd._focus_rejection_summary_text(text)
+
+    assert "Box No.V__ Reasoned statement" in focused
+    assert len(focused) < len(text)
+
+
+def test_find_opd_download_recipe_matches_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    (tmp_path / "cases" / "2030-opd" / "dossier").mkdir(parents=True)
+    body = {
+        "DOC_ID": "Attached_Document_123_JP",
+        "FILE_TYPE": "PDF",
+        "INPUT": {"CNTRY_CD_PART": "JP", "NUM_PART": "2030123456", "KIND_CD_PART": "A"},
+    }
+    (tmp_path / "cases" / "2030-opd" / "dossier" / "opd_download_signals.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "signals": [{
+            "captured_at": "2030-01-01T00:00:00+00:00",
+            "kind": "IPER",
+            "label": "2030-01-02 International Preliminary Report 原文",
+            "date": "2030-01-02",
+            "entries": [{
+                "url": "https://www.j-platpat.inpit.go.jp/app/opdgw/wsh0901",
+                "post_data": json.dumps(body),
+            }],
+        }],
+    }), encoding="utf-8")
+
+    recipe = opd._find_opd_download_recipe("2030-opd", {
+        "kind": "IPER",
+        "label": "2030-01-02 International Preliminary Report 原文",
+        "date": "2030-01-02",
+    })
+
+    assert recipe["body"]["DOC_ID"] == "Attached_Document_123_JP"
+    assert recipe["endpoint"].endswith("/app/opdgw/wsh0901")
+
+
 def test_citation_candidates_ignore_page_text_family_and_use_citation_info():
     data = {
         "case_id": "2024-533284",
@@ -131,6 +239,28 @@ def test_citation_candidates_include_ocr_family_reports():
     assert [c["patent_id"] for c in candidates] == ["US2016175445A1", "JP5980304B2"]
     assert candidates[1]["label"] == "本ISRD2易読1"
     assert candidates[1]["source"] == "opd_dossier_ocr_family"
+
+
+def test_citation_candidates_include_opd_attached_pdf_reports():
+    data = {
+        "case_id": "2024-533284",
+        "patent_number": "特開2024-533284",
+        "documents": [],
+        "opd_pdf_reports": [{
+            "label": "IPER attached PDF",
+            "kind": "WOSA",
+            "citations": [
+                {"category": "D1", "doc_id": "WO2020112595A1", "doc_label": "WO 2020/112595 A1"},
+                {"category": "D2", "doc_id": "US2016175445A1", "doc_label": "US 2016/175445 A1"},
+            ],
+        }],
+    }
+
+    candidates = opd._extract_citation_candidates_from_index(data)
+
+    assert [c["patent_id"] for c in candidates] == ["WO2020112595A1", "US2016175445A1"]
+    assert candidates[0]["source"] == "opd_attached_pdf_ocr"
+    assert candidates[0]["source_label"] == "IPER attached PDF"
 
 
 def test_save_and_load_opd_index(tmp_path, monkeypatch):
@@ -244,6 +374,76 @@ def test_rejection_documents_list_opd_targets_and_search_report_text(tmp_path, m
     assert "本願内ISR OCRでは処理されません" in by_kind["US Final Rejection"]["note"]
     assert by_kind["IPER"]["status"] == "ready"
     assert by_kind["IPER"]["has_text"] is True
+
+
+def test_rejection_documents_use_embedded_isr_ocr_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    monkeypatch.setattr(opd, "load_case_meta", case_service.load_case_meta)
+    monkeypatch.setattr(opd, "_load_or_build_ocr_reports", lambda case_id: [{
+        "kind": "ISR",
+        "label": "本願PDF内ISR OCR",
+        "source": "hongan_pdf_embedded_isr",
+        "raw_text": "INTERNATIONAL SEARCH REPORT\nC. DOCUMENTS CONSIDERED TO BE RELEVANT\nWO 2020/112595 A1",
+        "raw_text_length": 86,
+        "citations": [{"doc_id": "WO2020112595A1"}],
+    }])
+    (tmp_path / "cases").mkdir()
+    case_service.create_minimal_case("2030-opd", title="x")
+    dossier_dir = case_service.get_case_dir("2030-opd") / "dossier"
+    dossier_dir.mkdir()
+    (dossier_dir / "opd_index.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "documents": [],
+    }), encoding="utf-8")
+
+    data, code = opd.get_rejection_documents("2030-opd")
+
+    assert code == 200
+    isr = next(d for d in data["documents"] if d["kind"] == "ISR")
+    assert isr["status"] == "ready"
+    assert isr["has_text"] is True
+    assert "引用抽出に使用した保存済みOCR本文" in isr["note"]
+
+
+def test_rejection_documents_hide_opd_candidate_covered_by_attached_pdf(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    monkeypatch.setattr(opd, "load_case_meta", case_service.load_case_meta)
+    monkeypatch.setattr(opd, "_load_or_build_ocr_reports", lambda case_id: [])
+    (tmp_path / "cases").mkdir()
+    case_service.create_minimal_case("2030-opd", title="x")
+    case_dir = case_service.get_case_dir("2030-opd")
+    dossier_dir = case_dir / "dossier"
+    dossier_dir.mkdir()
+    label = "2024-05-20 International Preliminary Report on Patentability 原文"
+    (dossier_dir / "opd_index.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "documents": [{
+            "kind": "IPER",
+            "label": label,
+            "text": label,
+            "target": True,
+            "date": "2024-05-20",
+        }],
+    }), encoding="utf-8")
+    (dossier_dir / "opd_pdf_reports.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "reports": [{
+            "kind": "WOSA",
+            "label": label,
+            "date": "2024-05-20",
+            "raw_text": "Reasoned statement. Inventive step: No.",
+            "raw_text_length": 40,
+        }],
+    }), encoding="utf-8")
+
+    data, code = opd.get_rejection_documents("2030-opd")
+
+    assert code == 200
+    assert len(data["documents"]) == 1
+    assert data["documents"][0]["kind"] == "WOSA"
+    assert data["documents"][0]["status"] == "ready"
 
 
 def test_summarize_rejection_documents_caches_llm_result(tmp_path, monkeypatch):

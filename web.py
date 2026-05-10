@@ -575,8 +575,13 @@ def opd_dossier_rejections_summarize(case_id):
 @app.route("/case/<case_id>/dossier/opd/rejections/download", methods=["POST"])
 def opd_dossier_rejections_download(case_id):
     from services.opd_dossier_service import get_session
+    data = request.get_json(silent=True) or {}
     sess = get_session()
-    result = sess.download_rejection_pdfs(case_id, timeout=180)
+    result = sess.download_rejection_pdfs(
+        case_id,
+        target_indices=data.get("target_indices"),
+        timeout=180,
+    )
     return jsonify(result), (200 if result.get("ok") else 400)
 
 
