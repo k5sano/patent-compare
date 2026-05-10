@@ -12,6 +12,8 @@
 """
 
 import re
+import json
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +21,8 @@ from modules.claim_segmenter import (
     segment_single_claim,
     segment_claims,
 )
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def _ids(segments):
@@ -125,6 +129,15 @@ class TestSegmentSingleClaim:
 
 
 class TestSegmentClaims:
+    def test_representative_claim_fixture_segments_without_losing_ranges(self):
+        claims = json.loads((FIXTURES / "claims" / "representative_claims.json").read_text(encoding="utf-8"))
+        result = segment_claims(claims)
+
+        assert [c["claim_number"] for c in result] == [1, 2]
+        all_text = " ".join(seg["text"] for claim in result for seg in claim["segments"])
+        assert "0.1〜5質量%" in all_text
+        assert any(seg["id"] == "2A" and "油剤" in seg["text"] for seg in result[1]["segments"])
+
     def test_segments_multiple_claims(self):
         claims = [
             {"number": 1, "text": "(A)と(B)を含有する化粧料。", "is_independent": True},

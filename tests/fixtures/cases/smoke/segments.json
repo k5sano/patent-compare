@@ -1,0 +1,10 @@
+[
+  {
+    "claim_number": 1,
+    "is_independent": true,
+    "segments": [
+      {"id": "1A", "text": "成分Aを含む"},
+      {"id": "1B", "text": "成分Bを含む"}
+    ]
+  }
+]

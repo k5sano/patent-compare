@@ -1,0 +1,9 @@
+case_id: smoke
+patent_number: 特開2030-000001
+patent_title: テスト組成物
+title: テスト組成物
+field: cosmetics
+citations:
+  - id: JP2030000002A
+    role: 主引例
+    label: JP2030000002A

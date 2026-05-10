@@ -1,0 +1,19 @@
+{
+  "document_id": "JP2030000002A",
+  "comparisons": [
+    {
+      "requirement_id": "1A",
+      "judgment": "○",
+      "cited_location": "10",
+      "judgment_reason": "段落0010に成分Aが記載されている。"
+    },
+    {
+      "requirement_id": "1B",
+      "judgment": "○",
+      "cited_location": "11",
+      "judgment_reason": "段落0011に成分Bが記載されている。"
+    }
+  ],
+  "overall_summary": "主要構成はいずれも開示されている。",
+  "category_suggestion": "X"
+}

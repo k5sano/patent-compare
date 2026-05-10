@@ -90,6 +90,22 @@ class TestParseResponseSingleDoc:
         assert data is None
         assert errors and any("JSON" in e for e in errors)
 
+    def test_broken_json_returns_error(self):
+        raw = "```json\n{\"comparisons\": [}]\n```"
+        data, errors = parse_response(raw, REQUIRED_IDS)
+        assert data is None
+        assert errors and any("JSON" in e for e in errors)
+
+    def test_missing_comparisons_section_is_flagged(self):
+        raw = json.dumps({
+            "document_id": "WO2019180364",
+            "comparisons": [],
+            "overall_summary": "comparisons が空の回答",
+        }, ensure_ascii=False)
+        data, errors = parse_response(raw, REQUIRED_IDS)
+        assert data is not None
+        assert any("comparisons" in e and "空" in e for e in errors), errors
+
 
 class TestParseResponseMultiDoc:
     def test_multi_json_blocks_merged_to_results(self):

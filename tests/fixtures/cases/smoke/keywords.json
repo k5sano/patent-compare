@@ -1,0 +1,12 @@
+[
+  {
+    "group_id": 1,
+    "label": "成分",
+    "keywords": [
+      {"term": "成分A", "type": "technical", "source": "fixture"},
+      {"term": "成分B", "type": "technical", "source": "fixture"}
+    ],
+    "terms": ["成分A", "成分B"],
+    "segment_ids": ["1A", "1B"]
+  }
+]

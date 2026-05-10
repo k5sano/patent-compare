@@ -1,0 +1,10 @@
+{
+  "patent_number": "特開2030-000001",
+  "patent_title": "テスト組成物",
+  "claims": [
+    {"number": 1, "text": "成分Aと成分Bを含むテスト組成物。"}
+  ],
+  "paragraphs": [
+    {"id": "0001", "text": "本発明はテスト組成物に関する。"}
+  ]
+}

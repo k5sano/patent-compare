@@ -1,0 +1,13 @@
+[
+  {
+    "number": 1,
+    "text": "(A)ポリマーを0.1〜5質量%含有し、(B)界面活性剤を含有し、水を含む化粧料。",
+    "is_independent": true
+  },
+  {
+    "number": 2,
+    "text": "請求項1に記載の化粧料であって、さらに(C)油剤を含む化粧料。",
+    "is_independent": false,
+    "dependencies": [1]
+  }
+]
