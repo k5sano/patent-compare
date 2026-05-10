@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import requests
+
 from modules import jplatpat_bibliography as jb
 from modules.jplatpat_client import parse_classifications_from_raw
 
@@ -79,6 +81,18 @@ class _Session:
         return _Resp({"RESULT_CD": 0})
 
 
+class _SslThenOkSession:
+    def __init__(self):
+        self.verify = "certifi.pem"
+        self.calls = 0
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise requests.exceptions.SSLError("certificate verify failed")
+        return _Resp({"ok": True})
+
+
 def test_parse_bibliography_text_extracts_names_dates_and_classifications():
     parsed = jb.parse_bibliography_text(SAMPLE_TEXT_DATA)
     assert parsed["patent_number"] == "特開2024-108988"
@@ -126,3 +140,14 @@ def test_registration_number_uses_registration_num_type():
         type("T", (), {"kind": "registration", "number": "7250676"})()
     )
     assert body["NUM_INQRY_DISP"]["NUM_INFO"][0]["NUM_TYPE"] == "PATENT_NUM_B_PATENT_INVENT_DESCRIPT_NUM_C"
+
+
+def test_post_json_retries_without_verify_on_ssl_error(monkeypatch):
+    monkeypatch.delenv("PATENT_COMPARE_TLS_VERIFY", raising=False)
+    sess = _SslThenOkSession()
+
+    out = jb._post_json(sess, jb.WSP0102_URL, {}, {}, 1)
+
+    assert out == {"ok": True}
+    assert sess.calls == 2
+    assert sess.verify == "certifi.pem"

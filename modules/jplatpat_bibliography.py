@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import datetime as _dt
 import html
+import os
 import re
 from dataclasses import asdict
 from typing import Any
 
 import requests
+from requests.exceptions import SSLError
+import urllib3
 
 from modules.jplatpat_client import parse_classifications_from_raw
 from modules.jplatpat_pdf_downloader import (
@@ -31,6 +34,7 @@ WSP1201_URL = f"{JPLATPAT_ORIGIN}/app/comdocu/wsp1201"
 AUTH_URL = f"{JPLATPAT_ORIGIN}/app/auth/wsc0401"
 
 DEFAULT_TIMEOUT = 30
+_ALLOW_TLS_FALLBACK = "PATENT_COMPARE_JPLATPAT_ALLOW_INSECURE_FALLBACK"
 
 _HEADERS = {
     "User-Agent": (
@@ -80,6 +84,8 @@ def fetch_jplatpat_bibliography(
     """
     target = normalize_jp_patent_number(patent_id)
     sess = session or requests.Session()
+    if session is None:
+        _configure_session_tls(sess)
     headers = dict(_HEADERS)
     headers["Referer"] = target.fixed_url or JPLATPAT_NUMBER_INQUIRY_URL
 
@@ -160,6 +166,22 @@ def fetch_jplatpat_bibliography(
     return out
 
 
+def _configure_session_tls(session: requests.Session) -> None:
+    """Windows 環境で J-PlatPat の証明書検証が失敗しないよう CA を明示する。"""
+    verify = os.environ.get("PATENT_COMPARE_TLS_VERIFY", "").strip()
+    if verify:
+        if verify.lower() in ("0", "false", "no", "off"):
+            session.verify = False
+        else:
+            session.verify = verify
+        return
+    try:
+        import certifi
+        session.verify = certifi.where()
+    except Exception:
+        pass
+
+
 def parse_bibliography_text(text_data: str) -> dict[str, Any]:
     """`wsp1201.DOCU_DATA.TEXT_DATA` から書誌事項を抽出する。"""
     text = _clean_text_data(text_data)
@@ -196,11 +218,43 @@ def _post_json(session: requests.Session, url: str, body: dict, headers: dict, t
         resp = session.post(url, headers=headers, json=body, timeout=timeout)
         resp.raise_for_status()
         payload = resp.json()
+    except SSLError as e:
+        if _allow_insecure_tls_fallback(session):
+            try:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                old_verify = session.verify
+                session.verify = False
+                resp = session.post(url, headers=headers, json=body, timeout=timeout)
+                resp.raise_for_status()
+                payload = resp.json()
+                session.verify = old_verify
+                return payload
+            except Exception as retry_e:
+                try:
+                    session.verify = old_verify
+                except Exception:
+                    pass
+                raise JplatpatBibliographyError(
+                    f"{url} SSL証明書検証に失敗し、検証なしリトライも失敗しました: {retry_e}\n"
+                    "社内プロキシ環境では PATENT_COMPARE_TLS_VERIFY に社内CA証明書ファイルのパスを設定してください。"
+                ) from retry_e
+        raise JplatpatBibliographyError(
+            f"{url} SSL証明書検証に失敗しました: {e}\n"
+            "対処: `pip install -U certifi` を実行してください。社内プロキシ環境では "
+            "PATENT_COMPARE_TLS_VERIFY に社内CA証明書ファイルのパスを設定してください。"
+        ) from e
     except requests.RequestException as e:
         raise JplatpatBibliographyError(f"{url} request failed: {e}") from e
     except ValueError as e:
         raise JplatpatBibliographyError(f"{url} JSON decode failed") from e
     return payload
+
+
+def _allow_insecure_tls_fallback(session: requests.Session) -> bool:
+    if os.environ.get("PATENT_COMPARE_TLS_VERIFY", "").strip():
+        return False
+    v = os.environ.get(_ALLOW_TLS_FALLBACK, "1").strip().lower()
+    return v not in ("0", "false", "no", "off")
 
 
 def _build_wsp0102_body(target) -> dict:

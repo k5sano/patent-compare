@@ -10,7 +10,7 @@
   (function () {
     try {
       var m = localStorage.getItem('pc-width-mode') || 'wide';
-      if (m !== 'narrow' && m !== 'wide' && m !== 'ultra') m = 'wide';
+      if (m !== 'narrow' && m !== 'wide' && m !== 'landscape' && m !== 'ultra') m = 'wide';
       document.documentElement.dataset.widthMode = m;  // body 未生成のため html に仮置き
       document.addEventListener('DOMContentLoaded', function () {
         document.body.dataset.widthMode = m;
@@ -19,7 +19,7 @@
   })();
 </script>
 </head>
-<body>
+<body class="{{ 'compact-ref' if compact_ref else '' }}">
 <!-- ページ全体ドロップオーバーレイ -->
 <div class="page-drop-overlay" id="page-drop-overlay">
   <div class="inner">
@@ -41,6 +41,7 @@
     <div class="width-toggle" title="画面幅モード (ワイドディスプレイ向け)">
       <button id="wm-narrow" type="button" onclick="setWidthMode('narrow')" title="標準 (1100px)">⬜</button>
       <button id="wm-wide"   type="button" onclick="setWidthMode('wide')"   title="ワイド (1600px)">⬛</button>
+      <button id="wm-landscape" type="button" onclick="setWidthMode('landscape')" title="横広 (画面幅いっぱい・3ペイン優先)">▭▭</button>
       <button id="wm-ultra"  type="button" onclick="setWidthMode('ultra')"  title="ウルトラワイド (画面幅 98%)">⬛⬛</button>
     </div>
     <button class="btn btn-outline" style="padding:0.3rem 0.6rem; font-size:0.75rem;" onclick="editCaseMeta()">編集</button>
@@ -71,6 +72,9 @@
   {% endfor %}
   {% endwith %}
 
+  <div class="workspace-shell" id="workspace-shell">
+    <main class="workspace-main" aria-label="メイン作業エリア">
+  <div class="workspace-pane-label">ステップシーケンス</div>
   <!-- ステップナビゲーション -->
   <div class="steps">
     <div class="step {{ 'done' if hongan else 'active' }}" onclick="showPanel(0)">
@@ -119,6 +123,40 @@
           </button>
         </div>
         <div id="classification-msg" style="display:none; margin-top:0.6rem; padding:0.5rem 0.8rem; border-radius:6px; font-size:0.82rem;"></div>
+        <div style="margin-top:0.8rem; padding-top:0.8rem; border-top:1px dashed var(--border);">
+          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+            <strong style="font-size:0.9rem;">ドシエ情報</strong>
+            <span style="color:var(--text2); font-size:0.8rem;">J-PlatPat の本願ページを開きます</span>
+          </div>
+          <div style="margin-top:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+            <button type="button" class="btn btn-outline"
+                    style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                    onclick="openHonganFixedUrl()"
+                    title="本願番号から J-PlatPat の公報固定URLを開きます">
+              &#128279; 本願固定URL
+            </button>
+            <button type="button" class="btn btn-outline" id="btn-opd-open"
+                    style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                    onclick="openHonganOpd()"
+                    title="可視ブラウザでJ-PlatPat本願ページを開き、OPDボタンのクリックを試みます">
+              OPDを開く
+            </button>
+            <button type="button" class="btn btn-primary" id="btn-opd-collect"
+                    style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                    onclick="collectHonganOpdDocuments()"
+                    title="OPD画面で書類情報をすべて開き、ISR/IPER/拒絶理由系の候補を収集します">
+              OPD書類を収集
+            </button>
+            <button type="button" class="btn btn-outline"
+                    style="font-size:0.85rem; padding:0.3rem 0.8rem;"
+                    onclick="loadHonganOpdIndex()"
+                    title="保存済みのOPD収集結果とドシエ引用候補を表示します">
+              収集結果を表示
+            </button>
+          </div>
+          <div id="hongan-dossier-msg" style="display:none; margin-top:0.5rem; font-size:0.82rem; color:var(--text2);"></div>
+          <div id="hongan-opd-targets" style="display:none; margin-top:0.6rem;"></div>
+        </div>
       </div>
       <p style="color:var(--text2); font-size:0.85rem;">再度アップロードすると上書きされます。</p>
       {% endif %}
@@ -1209,6 +1247,153 @@
       </form>
     </div>
   </div>
+
+    </main>
+
+    <div class="workspace-resizer" id="workspace-resizer" role="separator" aria-orientation="vertical" title="ドラッグして参照ペインの幅を変更"></div>
+
+    <aside class="workspace-ref-pane" id="workspace-ref-pane" aria-label="参照ペイン">
+      <div class="ref-pane-head">
+        <div>
+          <div class="ref-pane-title">ワークプレイス</div>
+          <div class="ref-pane-subtitle">引用参照と作業画面を横に置く</div>
+        </div>
+        <div class="ref-pane-tools">
+          <button type="button" class="ref-mode-btn" id="workspace-split-btn" onclick="toggleWorkspaceSplitMode()" title="左作業ペインと右参照ペインを 1:1 にします">2分割</button>
+          <button type="button" class="ref-mode-btn" onclick="workspaceLoadCurrentStep()" title="現在左で開いているStepを右ペインにも表示します">作業表示</button>
+          <button type="button" class="ref-icon-btn" onclick="toggleWorkspaceRefPane()" title="参照ペインを閉じる">×</button>
+        </div>
+      </div>
+
+      <div class="ref-switch-row">
+        <span class="ref-section-label">引用</span>
+        <div class="ref-tabs" role="tablist" aria-label="引用参照切替">
+          <button type="button" class="ref-tab active" data-ref-tab="hongan" onclick="setWorkspaceTab('hongan')">本願</button>
+          <button type="button" class="ref-tab" data-ref-tab="citation" onclick="setWorkspaceTab('citation')">引例</button>
+          <button type="button" class="ref-tab" data-ref-tab="hit" onclick="setWorkspaceTab('hit')">全文</button>
+          <button type="button" class="ref-tab" data-ref-tab="compare" onclick="setWorkspaceTab('compare')">対比</button>
+        </div>
+      </div>
+
+      <div class="ref-workbar">
+        <span class="ref-section-label">作業</span>
+        <div class="ref-step-grid">
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(0)">1 本願</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(1)">2 分節</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(2)">3 KW</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(3)">4 引例</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(4)">4.5 検索</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(5)">5 対比</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(6)">6 出力</button>
+          <button type="button" class="ref-step-btn" onclick="workspaceLoadCaseStep(1, 3)">本願分析</button>
+        </div>
+      </div>
+
+      <div class="ref-panel active" data-ref-panel="hongan">
+        <div class="ref-actions">
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceLoadHonganPdf()">本願注釈PDFを表示</button>
+          <button type="button" class="btn btn-execute ref-action-btn" id="workspace-hongan-annotate-btn" style="display:none;" onclick="workspaceCreateHonganAnnotation()">注釈PDF作成</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep(1)">分節へ</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep2Sub(3)">本願分析へ</button>
+        </div>
+        <div class="ref-status" id="workspace-hongan-annotate-status" style="display:none;"></div>
+        {% if not hongan %}
+        <div class="ref-empty">本願PDFを登録すると、ここに表示できます。</div>
+        {% endif %}
+      </div>
+
+      <div class="ref-panel" data-ref-panel="citation">
+        <div class="ref-field">
+          <label for="workspace-citation-select">引用文献</label>
+          <select id="workspace-citation-select" onchange="workspaceLoadCitationPdf()">
+            {% for cit in citations %}
+            <option value="{{ cit.id|e }}">{{ cit.label }} ({{ cit.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="ref-actions">
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceLoadCitationPdf()">注釈PDFを表示</button>
+          <button type="button" class="btn btn-execute ref-action-btn" id="workspace-citation-annotate-btn" style="display:none;" onclick="workspaceCreateCitationAnnotation(this)">注釈PDF作成</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceOpenSelectedJplatpat()">J-PlatPat</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep(5)">Step 5へ</button>
+        </div>
+        <div class="ref-status" id="workspace-citation-annotate-status" style="display:none;"></div>
+        <div class="ref-field ref-backup-field">
+          <label for="workspace-citation-backup-select">旧版注釈PDF</label>
+          <select id="workspace-citation-backup-select" onchange="workspaceLoadCitationBackup()">
+            <option value="">旧版なし</option>
+          </select>
+        </div>
+        {% if not citations %}
+        <div class="ref-empty">引用文献を登録すると、ここでPDFを切り替えられます。</div>
+        {% endif %}
+      </div>
+
+      <div class="ref-panel" data-ref-panel="hit">
+        <div class="ref-field">
+          <label for="workspace-hit-select">全文ビュー</label>
+          <select id="workspace-hit-select" onchange="workspaceLoadHitView()">
+            {% for cit in citations %}
+            <option value="{{ cit.id|e }}">{{ cit.label }} ({{ cit.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="ref-actions">
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceStepHitView(-1)" title="前の文献を全文ビューで表示">← 前</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceLoadHitView()">全文を表示</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceStepHitView(1)" title="次の文献を全文ビューで表示">次 →</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep(4)">Step 4.5へ</button>
+        </div>
+        {% if not citations %}
+        <div class="ref-empty">検索候補や引用文献の全文ビューをここに表示します。</div>
+        {% endif %}
+      </div>
+
+      <div class="ref-panel" data-ref-panel="work">
+        <div class="ref-empty">下の表示領域に作業画面を表示しています。</div>
+      </div>
+
+      <div class="ref-panel" data-ref-panel="compare">
+        <div class="ref-mini-list">
+          {% if citations %}
+            {% for cit in citations %}
+            <button type="button" class="ref-cit-chip" onclick='workspaceFocusCitation({{ cit.id | tojson }})'>
+              <span>{{ cit.label }}</span>
+              {% if cit._has_response %}<strong>回答済</strong>{% else %}<em>未回答</em>{% endif %}
+            </button>
+            {% endfor %}
+          {% else %}
+            <div class="ref-empty">引用文献を登録すると、対比状況をここに並べます。</div>
+          {% endif %}
+        </div>
+        <div class="ref-actions">
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep(6)">対比表へ</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep(5)">対比実行へ</button>
+          <button type="button" class="btn btn-outline ref-action-btn" onclick="workspaceShowStep2Sub(4)">本願chatへ</button>
+        </div>
+      </div>
+
+      <div class="ref-frame-wrap" id="workspace-frame-wrap">
+        <div class="ref-frame-placeholder" id="workspace-frame-placeholder">
+          左のStepで作業しながら、ここに本願PDF・引用PDF・全文ビューを固定表示できます。
+        </div>
+        <iframe id="workspace-ref-frame" title="参照ビュー" loading="lazy"></iframe>
+      </div>
+    </aside>
+
+    <button type="button" class="ref-rail-button" id="workspace-ref-open" onclick="toggleWorkspaceRefPane()" title="参照ペインを開く">
+      参照
+    </button>
+
+    <section class="workspace-log" id="workspace-log" aria-label="作業ログ">
+      <div class="workspace-log-head" onclick="toggleWorkspaceLog()">
+        <strong>作業ログ</strong>
+        <span id="workspace-log-summary">待機中</span>
+        <button type="button" class="ref-icon-btn" onclick="event.stopPropagation(); workspaceClearLog()" title="ログをクリア">消</button>
+      </div>
+      <div class="workspace-log-body" id="workspace-log-body"></div>
+    </section>
+  </div>
 </div>
 
 <!-- Step 4 Stage 1 (tech_analysis) からのキーワード候補モーダル -->
@@ -1315,6 +1500,7 @@ window.CASE_BOOTSTRAP = {
   has_segments: {{ 'true' if segments else 'false' }},
   has_keywords: {{ 'true' if keywords else 'false' }},
   has_citations: {{ 'true' if citations else 'false' }},
+  hongan_patent_number: {{ (hongan.patent_number if hongan else meta.patent_number or case_id) | tojson }},
   segments: {{ segments | tojson if segments else '[]' }},
   keywords: {{ keywords | tojson if keywords else '[]' }},
   related_paragraphs: {{ related_paragraphs | tojson if related_paragraphs else '{}' }},
@@ -1327,6 +1513,10 @@ window.CASE_BOOTSTRAP = {
   ],
   freshness: {{ freshness | tojson if freshness else '{}' }},
   inventive_step: {{ inventive_step | tojson if inventive_step else 'null' }}
+  ,
+  compact_ref: {{ 'true' if compact_ref else 'false' }},
+  compact_panel: {{ compact_panel | tojson }},
+  compact_sub: {{ compact_sub | tojson }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/case.js') }}"></script>

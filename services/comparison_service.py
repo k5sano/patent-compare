@@ -7,6 +7,7 @@ import re
 import json
 import hashlib
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,26 @@ from services.case_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _backup_existing_annotated_pdf(target):
+    """再注釈前の現行注釈PDFを日付+BU付きで退避する。"""
+    from modules.pdf_annotation_meta import annotation_meta_path
+
+    target = Path(target)
+    if not target.exists():
+        return None
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = target.with_name(f"{target.stem}_{ts}_BU{target.suffix}")
+    i = 2
+    while backup.exists():
+        backup = target.with_name(f"{target.stem}_{ts}_BU{i}{target.suffix}")
+        i += 1
+    shutil.copy2(target, backup)
+    meta = annotation_meta_path(target)
+    if meta.exists():
+        shutil.copy2(meta, annotation_meta_path(backup))
+    return backup
 
 
 def _safe_prompt_filename(label, suffix="_prompt.txt", max_stem_chars=80):
@@ -29,18 +50,47 @@ def _safe_prompt_filename(label, suffix="_prompt.txt", max_stem_chars=80):
     return f"{safe}{suffix}"
 
 
-def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citation_data, keywords):
+def _write_annotated_pdf(
+    pdf_path,
+    output_dir,
+    safe_name,
+    response_data,
+    citation_data,
+    keywords,
+    migrate_bookmarks_from=None,
+    case_id=None,
+    citation_id=None,
+):
     """注釈PDFを書き出す。出力先がロック中なら別名にフォールバック。
 
     Returns: (result_dict, actual_path)
     """
     from modules.pdf_annotator import annotate_citation_pdf
+    from modules.pdf_annotation_meta import write_annotation_meta
 
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_dir / f"{safe_name}_annotated.pdf"
+    migrate_from = Path(migrate_bookmarks_from) if migrate_bookmarks_from else target
+    if not migrate_from.exists():
+        migrate_from = None
+    backup_path = None
+    if target.exists():
+        backup_path = _backup_existing_annotated_pdf(target)
     try:
         result = annotate_citation_pdf(
-            pdf_path, target, response_data, citation_data, keywords)
+            pdf_path, target, response_data, citation_data, keywords,
+            migrate_bookmarks_from=migrate_from)
+        if case_id and citation_id:
+            write_annotation_meta(
+                target,
+                case_id=case_id,
+                kind="citation",
+                case_dir=Path(output_dir).parent,
+                citation_id=citation_id,
+                source_pdf=str(pdf_path),
+            )
+        if backup_path:
+            result["backup_filename"] = backup_path.name
         return result, target
     except Exception as e:
         msg = str(e).lower()
@@ -48,8 +98,20 @@ def _write_annotated_pdf(pdf_path, output_dir, safe_name, response_data, citatio
             ts = datetime.now().strftime("%H%M%S%f")
             alt = output_dir / f"{safe_name}_annotated_{ts}.pdf"
             result = annotate_citation_pdf(
-                pdf_path, alt, response_data, citation_data, keywords)
+                pdf_path, alt, response_data, citation_data, keywords,
+                migrate_bookmarks_from=migrate_from)
+            if case_id and citation_id:
+                write_annotation_meta(
+                    alt,
+                    case_id=case_id,
+                    kind="citation",
+                    case_dir=Path(output_dir).parent,
+                    citation_id=citation_id,
+                    source_pdf=str(pdf_path),
+                )
             result["alt_filename"] = True
+            if backup_path:
+                result["backup_filename"] = backup_path.name
             return result, alt
         raise
 
@@ -136,14 +198,18 @@ def _load_citation_for_prompt(case_id, cit_id, case_dir):
 def _annotate_worker(job):
     """プロセスプールのワーカー。ピックル可能にするためモジュールトップレベルに置く。
 
-    job: (cit_id, pdf_path, output_dir, response_data, citation_data, keywords)
+    job: (case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords)
     """
-    cit_id, pdf_path, output_dir, response_data, citation_data, keywords = job
+    case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords = job
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', cit_id)
+    migrate_from = Path(output_dir) / f"{safe_name}_annotated.pdf"
     try:
         result, actual_path = _write_annotated_pdf(
             Path(pdf_path), Path(output_dir), safe_name,
-            response_data, citation_data, keywords)
+            response_data, citation_data, keywords,
+            migrate_bookmarks_from=migrate_from,
+            case_id=case_id,
+            citation_id=cit_id)
         return {"citation_id": cit_id, "success": True,
                 "filename": actual_path.name, **result}
     except Exception as e:
@@ -1081,7 +1147,9 @@ def annotate_citation(case_id, citation_id, force_new_file=False):
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
 
-    safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
+    base_safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
+    migrate_from = case_dir / "output" / f"{base_safe_name}_annotated.pdf"
+    safe_name = base_safe_name
     if force_new_file:
         # 強制再生成: タイムスタンプ付きで別名 (確実に新規ファイル)
         ts = datetime.now().strftime("%H%M%S")
@@ -1090,13 +1158,18 @@ def annotate_citation(case_id, citation_id, force_new_file=False):
     try:
         result, actual_path = _write_annotated_pdf(
             pdf_path, case_dir / "output", safe_name,
-            response_data, citation_data, keywords)
+            response_data, citation_data, keywords,
+            migrate_bookmarks_from=migrate_from,
+            case_id=case_id,
+            citation_id=citation_id)
         return {
             "success": True,
             "filename": actual_path.name,
             "labels": result["labels"],
             "highlights": result["highlights"],
             "bookmarks": result["bookmarks"],
+            "migrated_bookmarks": result.get("migrated_bookmarks", 0),
+            "backup_filename": result.get("backup_filename"),
             "alt_filename": result.get("alt_filename", False),
         }, 200
     except Exception as e:
@@ -1152,7 +1225,7 @@ def annotate_all_citations(case_id, max_workers=None):
         with open(cit_path, "r", encoding="utf-8") as f:
             citation_data = json.load(f)
         # ProcessPool にピックルして渡すため Path は str 化
-        jobs.append((cit_id, str(pdf_path), str(output_dir),
+        jobs.append((case_id, cit_id, str(pdf_path), str(output_dir),
                      response_data, citation_data, keywords))
 
     results = list(pre_results)

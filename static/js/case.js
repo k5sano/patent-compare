@@ -164,11 +164,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
 // === 画面幅モード切替 (3440x1440 / 2560x1440 のワイドディスプレイ向け) ===
 function setWidthMode(mode) {
-  if (mode !== 'narrow' && mode !== 'wide' && mode !== 'ultra') mode = 'wide';
+  const modes = ['narrow', 'wide', 'landscape', 'ultra'];
+  if (!modes.includes(mode)) mode = 'wide';
   try { localStorage.setItem('pc-width-mode', mode); } catch (e) { /* noop */ }
   document.documentElement.dataset.widthMode = mode;
   document.body.dataset.widthMode = mode;
-  ['narrow', 'wide', 'ultra'].forEach(function (m) {
+  modes.forEach(function (m) {
     const btn = document.getElementById('wm-' + m);
     if (btn) btn.classList.toggle('active', m === mode);
   });
@@ -177,6 +178,526 @@ document.addEventListener('DOMContentLoaded', function () {
   let m = 'wide';
   try { m = localStorage.getItem('pc-width-mode') || 'wide'; } catch (e) { /* noop */ }
   setWidthMode(m);
+});
+
+// === ドック型ワークスペース (右参照ペイン + 下ログ) ===
+const _WORKSPACE_STEP_LABELS = ['Step 1 本願PDF', 'Step 2 分節', 'Step 3 キーワード', 'Step 4 引用文献', 'Step 4.5 検索', 'Step 5 対比', 'Step 6 出力'];
+
+function _workspaceStore(key, value) {
+  try { localStorage.setItem(`pc-workspace:${key}`, value); } catch (_) { /* noop */ }
+}
+
+function _workspaceLoad(key, fallback = '') {
+  try { return localStorage.getItem(`pc-workspace:${key}`) || fallback; } catch (_) { return fallback; }
+}
+
+function workspaceLog(message, kind = 'info') {
+  const body = document.getElementById('workspace-log-body');
+  const summary = document.getElementById('workspace-log-summary');
+  if (!body || !summary || !message) return;
+  const now = new Date();
+  const time = now.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const line = document.createElement('div');
+  line.className = `workspace-log-line ${kind || 'info'}`;
+  line.innerHTML = `<span class="time">${time}</span>${_escapeHtml(String(message))}`;
+  body.prepend(line);
+  while (body.children.length > 80) body.removeChild(body.lastElementChild);
+  summary.textContent = message;
+}
+
+function workspaceClearLog() {
+  const body = document.getElementById('workspace-log-body');
+  const summary = document.getElementById('workspace-log-summary');
+  if (body) body.innerHTML = '';
+  if (summary) summary.textContent = '待機中';
+}
+
+function toggleWorkspaceLog() {
+  const log = document.getElementById('workspace-log');
+  if (!log) return;
+  log.classList.toggle('open');
+  _workspaceStore('log-open', log.classList.contains('open') ? '1' : '0');
+}
+
+function toggleWorkspaceRefPane(forceOpen = null) {
+  const collapsed = forceOpen === null
+    ? !document.body.classList.contains('workspace-ref-collapsed')
+    : !forceOpen;
+  document.body.classList.toggle('workspace-ref-collapsed', collapsed);
+  _workspaceStore('ref-collapsed', collapsed ? '1' : '0');
+  workspaceLog(collapsed ? '参照ペインを閉じました' : '参照ペインを開きました');
+}
+
+function setWorkspaceTab(tab, openPane = true) {
+  const target = tab || 'hongan';
+  document.querySelectorAll('.ref-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.refTab === target);
+  });
+  document.querySelectorAll('.ref-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.dataset.refPanel === target);
+  });
+  _workspaceStore('tab', target);
+  if (openPane) toggleWorkspaceRefPane(true);
+  if (target === 'hongan') workspaceRefreshHonganAnnotationStatus();
+  if (target === 'citation') {
+    const id = _workspaceSelectedValue('workspace-citation-select');
+    workspaceRefreshCitationAnnotationStatus(id);
+    workspaceRefreshCitationBackups(id);
+  }
+}
+
+function workspaceOpenFrame(url, label) {
+  const wrap = document.getElementById('workspace-frame-wrap');
+  const frame = document.getElementById('workspace-ref-frame');
+  if (!wrap || !frame || !url) return;
+  frame.src = url;
+  wrap.classList.add('has-frame');
+  workspaceLog(`${label || '参照'}を右ペインに表示しました`);
+}
+
+function _workspaceSelectedValue(selectId) {
+  const sel = document.getElementById(selectId);
+  return sel ? (sel.value || '').trim() : '';
+}
+
+function _workspaceSyncCitationSelect(value) {
+  if (!value) return;
+  ['workspace-citation-select', 'workspace-hit-select'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel && Array.from(sel.options).some(o => o.value === value)) sel.value = value;
+  });
+}
+
+let _workspaceHonganAnnotationStatus = null;
+let _workspaceCitationAnnotationStatus = {};
+
+function _workspaceReasonLabel(reason) {
+  const labels = {
+    segments: '分節',
+    keywords: 'キーワード',
+    hongan: '本願データ',
+    related_paragraphs: '関連段落',
+    response: '対比回答',
+    citation: '引用文献データ',
+  };
+  return labels[reason] || reason;
+}
+
+function _workspaceRenderAnnotationStatus(el, data, label) {
+  if (!el || !data) return;
+  el.className = `ref-status ${data.state || 'missing'}`;
+  el.style.display = '';
+  const reasons = (data.reasons || []).map(_workspaceReasonLabel).join(' / ');
+  if (data.state === 'latest') {
+    el.textContent = `${label}は最新です: ${data.filename || ''}`;
+  } else if (data.state === 'stale') {
+    el.textContent = `${label}は古い可能性があります。変更: ${reasons || '不明'}。再注釈を推奨します。`;
+  } else if (data.state === 'unknown') {
+    el.textContent = `${label}は作成時情報がないため鮮度不明です。必要なら再注釈してください。`;
+  } else {
+    el.textContent = `${label}は未作成です。`;
+  }
+}
+
+function _workspaceConfirmStaleAnnotation(data, label) {
+  if (!data || data.state === 'latest' || data.state === 'missing') return true;
+  const reasons = (data.reasons || []).map(_workspaceReasonLabel).join(' / ');
+  const msg = data.state === 'stale'
+    ? `${label}は古い可能性があります。\n変更: ${reasons || '不明'}\n\n旧PDFをそのまま開きますか？`
+    : `${label}は作成時情報がないため鮮度不明です。\n\nそのまま開きますか？`;
+  return confirm(msg);
+}
+
+async function workspaceLoadHonganPdf() {
+  setWorkspaceTab('hongan');
+  const status = _workspaceHonganAnnotationStatus || await workspaceRefreshHonganAnnotationStatus();
+  if (!_workspaceConfirmStaleAnnotation(status, '本願注釈PDF')) return;
+  workspaceOpenFrame(`/case/${encodeURIComponent(CASE_ID)}/hongan/pdf`, '本願注釈PDF');
+}
+
+async function workspaceRefreshHonganAnnotationStatus() {
+  const btn = document.getElementById('workspace-hongan-annotate-btn');
+  const box = document.getElementById('workspace-hongan-annotate-status');
+  if (btn) btn.style.display = 'none';
+  if (box) box.style.display = 'none';
+  if (!window.CASE_BOOTSTRAP || !window.CASE_BOOTSTRAP.has_hongan) return null;
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/hongan/annotated/status`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _workspaceHonganAnnotationStatus = data;
+    if (btn) {
+      btn.style.display = (data.state === 'latest') ? 'none' : '';
+      btn.textContent = data.exists ? '再注釈' : '注釈PDF作成';
+    }
+    _workspaceRenderAnnotationStatus(box, data, '本願注釈PDF');
+    return data;
+  } catch (e) {
+    workspaceLog(`本願注釈PDFの状態確認に失敗しました: ${e.message || e}`, 'warn');
+    return null;
+  }
+}
+
+async function workspaceCreateHonganAnnotation() {
+  const btn = document.getElementById('workspace-hongan-annotate-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '作成中...';
+  }
+  try {
+    if (typeof bookmarkHongan === 'function') {
+      const created = await bookmarkHongan();
+      if (created === false) return;
+    } else {
+      const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/hongan/bookmark`, { method: 'POST' });
+      const data = await resp.json();
+      if (!resp.ok || !data.success) throw new Error(data.error || '本願注釈PDF作成失敗');
+    }
+    await workspaceRefreshHonganAnnotationStatus();
+    workspaceLoadHonganPdf();
+  } catch (e) {
+    workspaceLog(`本願注釈PDFの作成に失敗しました: ${e.message || e}`, 'error');
+    alert('本願注釈PDFの作成に失敗しました: ' + (e.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '注釈PDF作成';
+    }
+  }
+}
+
+async function workspaceLoadCitationPdf(citationId) {
+  const id = (citationId || _workspaceSelectedValue('workspace-citation-select')).trim();
+  if (!id) {
+    workspaceLog('表示する引用文献がありません', 'warn');
+    return;
+  }
+  _workspaceSyncCitationSelect(id);
+  setWorkspaceTab('citation');
+  const status = await workspaceRefreshCitationAnnotationStatus(id);
+  workspaceRefreshCitationBackups(id);
+  if (!_workspaceConfirmStaleAnnotation(status, '引用注釈PDF')) return;
+  workspaceOpenFrame(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(id)}/pdf`, `注釈PDF ${id}`);
+}
+
+async function workspaceRefreshCitationAnnotationStatus(citationId) {
+  const btn = document.getElementById('workspace-citation-annotate-btn');
+  const box = document.getElementById('workspace-citation-annotate-status');
+  if (btn) btn.style.display = 'none';
+  if (box) box.style.display = 'none';
+  const id = (citationId || _workspaceSelectedValue('workspace-citation-select')).trim();
+  if (!id) return null;
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(id)}/annotated/status`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    _workspaceCitationAnnotationStatus[id] = data;
+    if (btn) {
+      btn.style.display = ((data.state !== 'latest') && data.can_create) ? '' : 'none';
+      btn.textContent = data.exists ? '再注釈' : '注釈PDF作成';
+      btn.title = data.can_create
+        ? 'この引用文献の注釈PDFを作成します'
+        : 'Step 5で対比回答を取り込むと注釈PDFを作成できます';
+    }
+    _workspaceRenderAnnotationStatus(box, data, '引用注釈PDF');
+    return data;
+  } catch (e) {
+    workspaceLog(`引用注釈PDFの状態確認に失敗しました: ${e.message || e}`, 'warn');
+    return null;
+  }
+}
+
+async function workspaceCreateCitationAnnotation(btn) {
+  const id = _workspaceSelectedValue('workspace-citation-select');
+  if (!id) return;
+  const oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '作成中...';
+  }
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/annotate/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({force_new_file: false}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) throw new Error(data.error || '注釈PDF作成失敗');
+    workspaceLog(`注釈PDFを作成しました: ${data.filename}`);
+    await workspaceRefreshCitationAnnotationStatus(id);
+    await workspaceRefreshCitationBackups(id);
+    workspaceLoadCitationPdf(id);
+  } catch (e) {
+    alert('注釈PDFの作成に失敗しました: ' + (e.message || e));
+    workspaceLog(`注釈PDFの作成に失敗しました: ${e.message || e}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || '注釈PDF作成';
+    }
+  }
+}
+
+async function workspaceRefreshCitationBackups(citationId) {
+  const id = (citationId || _workspaceSelectedValue('workspace-citation-select')).trim();
+  const sel = document.getElementById('workspace-citation-backup-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">旧版なし</option>';
+  if (!id) return;
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(id)}/annotated/backups`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    const backups = data.backups || [];
+    if (!backups.length) return;
+    sel.innerHTML = '<option value="">現行版を表示</option>';
+    backups.forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.filename || '';
+      const dt = b.mtime ? new Date(b.mtime * 1000) : null;
+      const stamp = dt ? dt.toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+      opt.textContent = stamp ? `${stamp} ${b.filename}` : b.filename;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    workspaceLog(`旧版注釈PDFの取得に失敗しました: ${e.message || e}`, 'warn');
+  }
+}
+
+function workspaceLoadCitationBackup() {
+  const id = _workspaceSelectedValue('workspace-citation-select');
+  const filename = _workspaceSelectedValue('workspace-citation-backup-select');
+  if (!id || !filename) {
+    workspaceLoadCitationPdf(id);
+    return;
+  }
+  setWorkspaceTab('citation');
+  workspaceOpenFrame(
+    `/case/${encodeURIComponent(CASE_ID)}/citation/${encodeURIComponent(id)}/annotated/backup/${encodeURIComponent(filename)}`,
+    `旧版注釈PDF ${filename}`
+  );
+}
+
+function workspaceLoadHitView(citationId) {
+  const id = (citationId || _workspaceSelectedValue('workspace-hit-select')).trim();
+  if (!id) {
+    workspaceLog('表示する全文ビューがありません', 'warn');
+    return;
+  }
+  _workspaceSyncCitationSelect(id);
+  setWorkspaceTab('hit');
+  const params = new URLSearchParams();
+  params.set('nav', 'workspace');
+  const sel = document.getElementById('workspace-hit-select');
+  if (sel) {
+    Array.from(sel.options)
+      .map(opt => (opt.value || '').trim())
+      .filter(Boolean)
+      .forEach(value => params.append('nav_id', value));
+  }
+  const qs = params.toString();
+  workspaceOpenFrame(
+    `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(id)}/view${qs ? `?${qs}` : ''}`,
+    `全文ビュー ${id}`
+  );
+}
+
+function workspaceStepHitView(delta) {
+  const sel = document.getElementById('workspace-hit-select');
+  if (!sel || !sel.options.length) {
+    workspaceLog('切り替える全文ビューの文献がありません', 'warn');
+    return false;
+  }
+  const nextIndex = sel.selectedIndex + (delta < 0 ? -1 : 1);
+  if (nextIndex < 0 || nextIndex >= sel.options.length) {
+    workspaceLog(delta < 0 ? '先頭の文献です' : '末尾の文献です', 'warn');
+    return false;
+  }
+  sel.selectedIndex = nextIndex;
+  workspaceLoadHitView(sel.value);
+  return true;
+}
+
+function _workspaceIsHitViewActive() {
+  const activeTab = document.querySelector('.ref-tab.active');
+  const frame = document.getElementById('workspace-ref-frame');
+  return !!(
+    activeTab && activeTab.dataset.refTab === 'hit' &&
+    frame && frame.src && frame.src.includes('/search-run/hit/')
+  );
+}
+
+function _workspacePostHitViewKey(key) {
+  const frame = document.getElementById('workspace-ref-frame');
+  if (!frame || !frame.contentWindow) return false;
+  try {
+    frame.contentWindow.postMessage({ type: 'pc-hit-view-key', key }, window.location.origin);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function workspaceLoadCaseStep(idx, sub = 0) {
+  const step = Number.isFinite(Number(idx)) ? Number(idx) : 0;
+  const subParam = sub ? `&sub=${encodeURIComponent(sub)}` : '';
+  setWorkspaceTab('work');
+  workspaceOpenFrame(
+    `/case/${encodeURIComponent(CASE_ID)}?compact=1&panel=${encodeURIComponent(step)}${subParam}`,
+    `${_WORKSPACE_STEP_LABELS[step] || 'Step'}`
+  );
+}
+
+function workspaceLoadCurrentStep() {
+  workspaceLoadCaseStep(currentPanel || 0);
+}
+
+function workspaceOpenSelectedJplatpat() {
+  const id = _workspaceSelectedValue('workspace-citation-select') || _workspaceSelectedValue('workspace-hit-select');
+  if (!id) {
+    workspaceLog('J-PlatPatで開く文献がありません', 'warn');
+    return;
+  }
+  const url = buildJplatpatUrl(id);
+  if (!url) {
+    workspaceLog(`固定URLを生成できません: ${id}`, 'warn');
+    alert('この文献IDではJ-PlatPatの固定URLを生成できません（例: 特開・JP・WO・US 形式の番号）');
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+  workspaceLog(`J-PlatPatを開きました: ${id}`);
+}
+
+function workspaceShowStep(idx) {
+  showPanel(idx);
+  workspaceLog(`${_WORKSPACE_STEP_LABELS[idx] || 'Step'}を左ペインに表示しました`);
+}
+
+function workspaceShowStep2Sub(n) {
+  showPanel(1);
+  if (typeof showStep2Sub === 'function') showStep2Sub(n);
+  const labels = { 3: '本願分析', 4: '本願chat' };
+  workspaceLog(`${labels[n] || 'Step 2'}を左ペインに表示しました`);
+}
+
+function workspaceFocusCitation(citationId) {
+  if (!citationId) return;
+  _workspaceSyncCitationSelect(citationId);
+  setWorkspaceTab('citation');
+  workspaceLoadCitationPdf(citationId);
+}
+
+function _workspaceSetRefWidth(px, persist = true) {
+  const shell = document.getElementById('workspace-shell');
+  if (!shell || !px) return;
+  const rect = shell.getBoundingClientRect();
+  const min = Math.min(340, Math.max(300, rect.width * 0.16));
+  const minMain = Math.min(620, Math.max(420, rect.width * 0.18));
+  const max = Math.max(min, rect.width - minMain - 8);
+  const width = Math.round(Math.max(min, Math.min(max, px)));
+  document.documentElement.style.setProperty('--workspace-ref-width', `${width}px`);
+  document.body.style.setProperty('--workspace-ref-width', `${width}px`);
+  shell.style.setProperty('--workspace-ref-width', `${width}px`);
+  if (persist) _workspaceStore('ref-width', String(width));
+}
+
+function _workspaceSetSplitMode(on, persist = true) {
+  document.body.classList.toggle('workspace-split-mode', !!on);
+  const btn = document.getElementById('workspace-split-btn');
+  if (btn) {
+    btn.classList.toggle('active', !!on);
+    btn.textContent = on ? '通常' : '2分割';
+    btn.title = on
+      ? '通常の参照ペイン幅に戻します'
+      : '左作業ペインと右参照ペインを 1:1 にします';
+  }
+  if (persist) _workspaceStore('layout-mode', on ? 'split' : 'dock');
+}
+
+function toggleWorkspaceSplitMode(force = null) {
+  const next = force === null
+    ? !document.body.classList.contains('workspace-split-mode')
+    : !!force;
+  const shell = document.getElementById('workspace-shell');
+  if (!shell) return;
+  toggleWorkspaceRefPane(true);
+  _workspaceSetSplitMode(next);
+  const rect = shell.getBoundingClientRect();
+  if (next) {
+    _workspaceSetRefWidth((rect.width - 8) / 2);
+    workspaceLog('2分割モードにしました');
+  } else {
+    _workspaceSetRefWidth(Math.min(Math.max(rect.width * 0.3, 420), 720));
+    workspaceLog('通常の参照ペイン幅に戻しました');
+  }
+}
+
+function initWorkspaceResizer() {
+  const handle = document.getElementById('workspace-resizer');
+  const shell = document.getElementById('workspace-shell');
+  if (!handle || !shell) return;
+  _workspaceSetSplitMode(_workspaceLoad('layout-mode', 'dock') === 'split', false);
+  const saved = parseInt(_workspaceLoad('ref-width', ''), 10);
+  if (Number.isFinite(saved) && saved > 0) {
+    _workspaceSetRefWidth(saved, false);
+  } else if (document.body.classList.contains('workspace-split-mode')) {
+    const rect = shell.getBoundingClientRect();
+    _workspaceSetRefWidth((rect.width - 8) / 2, false);
+  }
+
+  handle.addEventListener('pointerdown', (ev) => {
+    if (document.body.classList.contains('workspace-ref-collapsed')) return;
+    ev.preventDefault();
+    handle.setPointerCapture?.(ev.pointerId);
+    document.body.classList.add('workspace-resizing');
+
+    const onMove = (moveEv) => {
+      const rect = shell.getBoundingClientRect();
+      _workspaceSetRefWidth(rect.right - moveEv.clientX);
+    };
+    const onUp = () => {
+      document.body.classList.remove('workspace-resizing');
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      _workspaceSetSplitMode(false);
+      workspaceLog('参照ペイン幅を変更しました');
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  const collapsed = _workspaceLoad('ref-collapsed', '0') === '1';
+  document.body.classList.toggle('workspace-ref-collapsed', collapsed);
+  const log = document.getElementById('workspace-log');
+  if (log && _workspaceLoad('log-open', '0') === '1') log.classList.add('open');
+  setWorkspaceTab(_workspaceLoad('tab', 'hongan'), false);
+  initWorkspaceResizer();
+  workspaceLog('ワークスペースを初期化しました');
+});
+
+document.addEventListener('keydown', function (e) {
+  if (e.altKey || e.ctrlKey || e.metaKey || !_workspaceIsHitViewActive()) return;
+  const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+  if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    workspaceStepHitView(-1);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    workspaceStepHitView(1);
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    _workspacePostHitViewKey(e.key);
+  }
+});
+
+window.addEventListener('message', function (e) {
+  if (e.origin && e.origin !== window.location.origin) return;
+  const data = e.data || {};
+  if (data.type !== 'pc-hit-view-loaded' || data.case_id !== CASE_ID || !data.patent_id) return;
+  _workspaceSyncCitationSelect(String(data.patent_id));
 });
 
 
@@ -210,6 +731,8 @@ function buildJplatpatUrl(pid) {
   if ((m = pid.match(/特許(?:第)?\s*(\d+)/))) return `${B}/JP-${m[1]}/15/ja`;
   // JP2023-123456A / JP2023123456A
   if ((m = pid.match(/JP\s*(\d{4})\s*[-]?\s*(\d{3,6})\s*A/i))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
+  // yyyy-nnnnnn (本願 case_id など、公開番号の接頭辞が落ちた形)
+  if ((m = pid.match(/^(\d{4})\s*[-]\s*(\d{3,6})$/))) return `${B}/JP-${m[1]}-${m[2].padStart(6,'0')}/11/ja`;
   // JPnnnnnnnB
   if ((m = pid.match(/JP\s*(\d{5,8})\s*B\d?/i))) return `${B}/JP-${m[1]}/15/ja`;
   // WO2022/030405
@@ -224,6 +747,150 @@ function buildJplatpatUrl(pid) {
   if ((m = pid.match(/CN\s*(\d+)/i))) return `${B}/CN-${m[1]}/50/ja`;
   return '';
 }
+
+function _honganDossierMsg(text, kind) {
+  const el = document.getElementById('hongan-dossier-msg');
+  if (!el) return;
+  el.style.display = text ? '' : 'none';
+  el.textContent = text || '';
+  el.style.color = kind === 'error' ? '#fca5a5' :
+                   kind === 'success' ? '#86efac' : 'var(--text2)';
+}
+
+function openHonganFixedUrl() {
+  const b = window.CASE_BOOTSTRAP || {};
+  const patentNumber = (b.hongan_patent_number || b.case_id || '').trim();
+  const url = buildJplatpatUrl(patentNumber);
+  if (!url) {
+    _honganDossierMsg(`固定URLを生成できませんでした: ${patentNumber || '番号なし'}`, 'error');
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+  _honganDossierMsg(`本願固定URLを開きました: ${_jppNormalize(patentNumber)}`, 'success');
+}
+
+function _setDossierButtonLoading(id, loading, text) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.oldText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = text || '処理中...';
+  } else {
+    btn.disabled = false;
+    btn.textContent = btn.dataset.oldText || btn.textContent;
+  }
+}
+
+function _renderOpdTargets(data) {
+  const wrap = document.getElementById('hongan-opd-targets');
+  if (!wrap) return;
+  const targets = (data && data.targets) || [];
+  const docs = (data && data.documents) || [];
+  const citations = (data && data.citation_candidates) || [];
+  const warnings = (data && data.warnings) || [];
+  if (!targets.length && !docs.length && !citations.length && !warnings.length) {
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  const warnHtml = warnings.map(w =>
+    `<div style="color:#fbbf24; font-size:0.78rem; margin-bottom:0.25rem;">${_hrefEsc(w)}</div>`
+  ).join('');
+  const rows = targets.map(t => {
+    const note = t.note ? `<div style="color:#94a3b8; font-size:0.74rem; margin-top:0.15rem;">${_hrefEsc(t.note)}</div>` : '';
+    const attachments = (t.attachment_labels || []).map(a =>
+      `<div style="color:#86efac; font-size:0.74rem; margin-top:0.15rem;">添付: ${_hrefEsc(a)}</div>`
+    ).join('');
+    return `<tr>
+      <td style="padding:0.25rem 0.45rem; white-space:nowrap; color:#bfdbfe;">${_hrefEsc(t.kind || '')}</td>
+      <td style="padding:0.25rem 0.45rem;">${_hrefEsc(t.label || t.text || '')}${attachments}${note}</td>
+    </tr>`;
+  }).join('');
+  const citationRows = citations.map(c => `<tr>
+    <td style="padding:0.25rem 0.45rem; color:#bfdbfe;">${_hrefEsc(c.label || '')}</td>
+    <td style="padding:0.25rem 0.45rem; font-family:ui-monospace,monospace;">${_hrefEsc(c.patent_id || '')}</td>
+    <td style="padding:0.25rem 0.45rem; color:#94a3b8;">${_hrefEsc((c.raw_text || '').slice(0, 120))}</td>
+  </tr>`).join('');
+  const docRows = docs.map(d => `<tr>
+    <td style="padding:0.22rem 0.45rem; white-space:nowrap; color:#94a3b8;">${_hrefEsc(d.kind || '')}</td>
+    <td style="padding:0.22rem 0.45rem;">${_hrefEsc(d.label || d.text || '')}</td>
+  </tr>`).join('');
+  wrap.innerHTML = `${warnHtml}
+    <table style="width:100%; border-collapse:collapse; font-size:0.8rem; background:rgba(15,23,42,0.35); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
+      <thead><tr style="color:#94a3b8;">
+        <th style="text-align:left; padding:0.25rem 0.45rem;">対象</th>
+        <th style="text-align:left; padding:0.25rem 0.45rem;">OPD書類候補</th>
+      </tr></thead>
+      <tbody>${rows || '<tr><td colspan="2" style="padding:0.4rem; color:#94a3b8;">対象書類候補なし</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:0.55rem; color:#94a3b8; font-size:0.78rem;">ドシエ引用候補は Step 4 の本願引用抽出にも追加されます。</div>
+    <table style="width:100%; border-collapse:collapse; font-size:0.8rem; margin-top:0.3rem; background:rgba(15,23,42,0.35); border:1px solid var(--border); border-radius:6px; overflow:hidden;">
+      <thead><tr style="color:#94a3b8;">
+        <th style="text-align:left; padding:0.25rem 0.45rem;">ラベル</th>
+        <th style="text-align:left; padding:0.25rem 0.45rem;">公報番号</th>
+        <th style="text-align:left; padding:0.25rem 0.45rem;">前後文</th>
+      </tr></thead>
+      <tbody>${citationRows || '<tr><td colspan="3" style="padding:0.4rem; color:#94a3b8;">ドシエ引用候補なし</td></tr>'}</tbody>
+    </table>
+    <details style="margin-top:0.5rem;">
+      <summary style="cursor:pointer; color:#bfdbfe; font-size:0.82rem;">収集された書類情報を表示 (${docs.length}件)</summary>
+      <table style="width:100%; border-collapse:collapse; font-size:0.78rem; margin-top:0.35rem; background:rgba(15,23,42,0.25); border:1px solid var(--border);">
+        <thead><tr style="color:#94a3b8;">
+          <th style="text-align:left; padding:0.22rem 0.45rem;">種別</th>
+          <th style="text-align:left; padding:0.22rem 0.45rem;">書類情報</th>
+        </tr></thead>
+        <tbody>${docRows || '<tr><td colspan="2" style="padding:0.4rem; color:#94a3b8;">収集済み書類なし</td></tr>'}</tbody>
+      </table>
+    </details>`;
+  wrap.style.display = '';
+}
+
+async function openHonganOpd() {
+  _honganDossierMsg('OPDを可視ブラウザで開いています...', 'info');
+  _setDossierButtonLoading('btn-opd-open', true, 'OPD起動中...');
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/open`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    const hint = data.hint ? ` ${data.hint}` : '';
+    _honganDossierMsg(`OPD画面を開きました。${hint}`, data.opd_clicked ? 'success' : 'info');
+  } catch (e) {
+    _honganDossierMsg('OPDを開けませんでした: ' + (e.message || e), 'error');
+  } finally {
+    _setDossierButtonLoading('btn-opd-open', false);
+  }
+}
+
+async function collectHonganOpdDocuments() {
+  _honganDossierMsg('OPD書類情報を収集中です...', 'info');
+  _setDossierButtonLoading('btn-opd-collect', true, '収集中...');
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/collect`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    _renderOpdTargets(data);
+    _honganDossierMsg(`OPD書類候補を保存しました: 対象 ${((data.targets || []).length)} 件`, 'success');
+  } catch (e) {
+    _honganDossierMsg('OPD書類収集に失敗しました: ' + (e.message || e), 'error');
+  } finally {
+    _setDossierButtonLoading('btn-opd-collect', false);
+  }
+}
+
+async function loadHonganOpdIndex() {
+  const wrap = document.getElementById('hongan-opd-targets');
+  if (!wrap || !(window.CASE_BOOTSTRAP || {}).has_hongan) return;
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/index`);
+    const data = await resp.json();
+    if (resp.ok && data.exists) _renderOpdTargets(data);
+  } catch (_) {
+    /* 既存インデックス表示は補助なので静かに無視 */
+  }
+}
+
+document.addEventListener('DOMContentLoaded', loadHonganOpdIndex);
 
 // 特許番号入力 → J-PlatPat 固定URLを別タブで開く (拒絶理由からコピペ想定)
 function jumpToJplatpatByQuery(q) {
@@ -325,12 +992,23 @@ function showPanel(idx) {
   if (idx === 4) { loadSearchRuns(); srJppCheckStatus(); srEnsureSnippetsLoaded(); }
   if (idx === 5) { if (typeof refreshCitationBadges === 'function') refreshCitationBadges(); }
   if (idx === 6) loadComparisonSummary();
+  if (typeof workspaceLog === 'function') {
+    workspaceLog(`${_WORKSPACE_STEP_LABELS[idx] || 'Step'}を表示しました`);
+  }
 }
 
 // 初期表示: 最初の未完了ステップ
 (function() {
   const b = window.CASE_BOOTSTRAP;
-  if (!b.has_hongan) showPanel(0);
+  if (b.compact_ref && Number.isInteger(b.compact_panel) && b.compact_panel >= 0 && b.compact_panel <= 6) {
+    showPanel(b.compact_panel);
+    if (b.compact_sub) {
+      // showStep2Sub はテンプレート末尾で定義されるため、DOMContentLoaded 後に再試行する。
+      document.addEventListener('DOMContentLoaded', () => {
+        if (typeof showStep2Sub === 'function') showStep2Sub(b.compact_sub);
+      });
+    }
+  } else if (!b.has_hongan) showPanel(0);
   else if (!b.has_segments) showPanel(1);
   else if (!b.has_keywords) showPanel(2);
   else if (!b.has_citations) showPanel(3);
@@ -558,10 +1236,11 @@ async function extractHonganRefs() {
       return;
     }
     const rows = refs.map(r => {
-      const pid = r.patent_id || '<span style="color:#fca5a5;">未抽出</span>';
+      const pid = r.patent_id ? _hrefEsc(r.patent_id) : '<span style="color:#fca5a5;">未抽出</span>';
       const raw = (r.raw_text || '').slice(0, 60);
+      const label = r.label || `本願引用${r.ref_no}`;
       return `<tr>
-        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">本願引用${r.ref_no}</td>
+        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">${_hrefEsc(label)}</td>
         <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${pid}</td>
         <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(raw)}</td>
         <td style="padding:0.2rem 0.5rem; color:#64748b; font-size:0.78rem;">${_hrefEsc(r.para_id || '')}</td>
@@ -613,8 +1292,9 @@ async function downloadHonganRefs() {
         }
         status = `<span style="color:#fca5a5;">❌ ${_hrefEsc(r.error || '失敗')}</span>${links.join('')}`;
       }
+      const label = r.label || `本願引用${r.ref_no}`;
       return `<tr>
-        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">本願引用${r.ref_no}</td>
+        <td style="padding:0.2rem 0.5rem; color:#94a3b8;">${_hrefEsc(label)}</td>
         <td style="padding:0.2rem 0.5rem; font-family:ui-monospace,monospace;">${_hrefEsc(r.patent_id || '')}</td>
         <td style="padding:0.2rem 0.5rem;">${status}</td>
       </tr>`;
@@ -1548,7 +2228,7 @@ async function detectRelatedParagraphs() {
 }
 
 async function bookmarkHongan() {
-  if (!confirm('分節の編集内容を保存し、本願PDFにブックマーク付きコピーを作成して PDF-XChange で開きます。よろしいですか？')) return;
+  if (!confirm('分節の編集内容を保存し、本願PDFにブックマーク付きコピーを作成して PDF-XChange で開きます。よろしいですか？')) return false;
   showRelatedMsg('ブックマーク生成中...', 'info');
   // 分節保存 → 本願 PDF 生成 → 開く の順を確実に走らせる。
   // 自動再対比は PDF を開いた後で「実際に不整合がある場合に限り」別途プロンプト
@@ -1557,7 +2237,7 @@ async function bookmarkHongan() {
     const saved = await saveSegmentsFromEditor({skipAutoRecompare: true});
     if (saved === false) {
       showRelatedMsg('保存をキャンセルしました', 'info');
-      return;
+      return false;
     }
     const resp = await fetch(`/case/${CASE_ID}/hongan/bookmark`, { method: 'POST' });
     const data = await resp.json();
@@ -1572,6 +2252,7 @@ async function bookmarkHongan() {
     } catch(_) {}
   } catch(e) {
     showRelatedMsg('ブックマーク作成に失敗: ' + e.message, 'error');
+    return false;
   }
   // PDF を開いた後で「実際に不整合がある場合だけ」再対比を確認
   // (response が存在するだけでは聞かない — 既に整合済なら無音)
@@ -1594,6 +2275,7 @@ async function bookmarkHongan() {
       if (ok) await _runAutoRecompare(targetIds);
     } catch(_) { /* freshness 取得失敗は静かに */ }
   }, 600);
+  return true;
 }
 
 // 初期描画: サーバーから引き渡された関連段落データがあれば表示
@@ -4549,11 +5231,14 @@ async function annotateCitation(citId, btn, opts) {
     const data = await resp.json();
 
     if (data.success) {
+      const backupNote = data.backup_filename ? ` / 旧版BU: ${data.backup_filename}` : '';
       const label = data.opened ? `開いた (${data.filename})` : `生成済 (${data.filename})`;
       btn.textContent = label;
       btn.classList.remove('btn-outline');
       btn.classList.add('btn-success');
       btn.disabled = false;
+      if (typeof workspaceRefreshCitationBackups === 'function') workspaceRefreshCitationBackups(citId);
+      if (backupNote) workspaceLog(`注釈PDFを再生成しました${backupNote}`);
       // 再クリックで通常再生成 (上書き)
       btn.onclick = () => annotateCitation(citId, btn);
       setTimeout(() => { btn.textContent = '注釈PDF再表示'; }, 1800);

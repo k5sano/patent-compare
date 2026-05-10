@@ -77,6 +77,36 @@ def test_get_hit_text_resolves_saihyo_to_wo(case_dir):
     assert "グアニルシステイン" in hit["description"]
 
 
+def test_google_text_language_prefers_english_for_wo():
+    assert srs._google_text_language_for("WO2023012009", "ja") == "en"
+    assert srs._google_text_language_for("WO2023/012009", "ja") == "en"
+
+
+def test_google_text_language_keeps_japanese_for_jp():
+    assert srs._google_text_language_for("特開2024-123456", "ja") == "ja"
+    assert srs._google_text_language_for("JP2024123456A", "ja") == "ja"
+
+
+def test_thin_google_translation_cache_is_detected():
+    assert srs._is_thin_google_translation({
+        "source": "google",
+        "url": "https://patents.google.com/patent/WO2023012009A1/ja",
+        "abstract": "",
+        "description": "translated from",
+        "claims": ["1. A method"],
+    })
+
+
+def test_good_google_english_cache_is_not_thin():
+    assert not srs._is_thin_google_translation({
+        "source": "google",
+        "url": "https://patents.google.com/patent/WO2023012009A1/en",
+        "abstract": "A long enough abstract",
+        "description": "x" * 5000,
+        "claims": ["1. A method"],
+    })
+
+
 def test_create_and_load_run(case_dir):
     hits = [_make_hit("特開2023-123456"), _make_hit("特開2023-654321")]
     data = srs.create_run_from_hits(

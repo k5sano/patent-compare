@@ -82,6 +82,128 @@ class TestExtract:
         ref4 = next(r for r in refs if r["ref_no"] == 4)
         assert "特許第6789012号" in ref4["patent_id"] or "特許6789012" in ref4["patent_id"]
 
+    def test_embedded_isr_citations_are_added(self, case_with_hongan, tmp_path, monkeypatch):
+        pdf_path = tmp_path / "hongan_with_isr.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
+
+        monkeypatch.setattr(
+            case_service,
+            "_resolve_hongan_pdf_for_isr_scan",
+            lambda case_id: pdf_path,
+        )
+        monkeypatch.setattr(
+            case_service,
+            "_parse_embedded_isr_search_report",
+            lambda path: {
+                "form": "ISR",
+                "citations": [
+                    {
+                        "num": 1,
+                        "category": "X",
+                        "doc_label": "WO 2020/112595 A1 (OREAL)",
+                        "doc_id": "WO2020112595A1",
+                        "claims": "1-3",
+                        "passages": "page 38; example 1",
+                    },
+                    {
+                        "num": 2,
+                        "category": "Y",
+                        "doc_label": "US 2016/175445 A1 (LU)",
+                        "doc_id": "US2016175445A1",
+                        "claims": "14-19",
+                        "passages": "paragraphs [0004]-[0055]",
+                    },
+                ],
+            },
+        )
+
+        refs = case_service.extract_hongan_citations(case_with_hongan)[0]["refs"]
+
+        assert [r["label"] for r in refs[-2:]] == ["ISR引用1", "ISR引用2"]
+        assert [r["ref_no"] for r in refs[-2:]] == [5, 6]
+        assert refs[-2]["source"] == "isr"
+        assert refs[-2]["patent_id"] == "WO2020112595A1"
+
+    def test_embedded_isr_jp_family_members_are_added_as_readable_refs(
+        self, case_with_hongan, tmp_path, monkeypatch
+    ):
+        pdf_path = tmp_path / "hongan_with_isr.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
+
+        monkeypatch.setattr(
+            case_service,
+            "_resolve_hongan_pdf_for_isr_scan",
+            lambda case_id: pdf_path,
+        )
+        monkeypatch.setattr(
+            case_service,
+            "_parse_embedded_isr_search_report",
+            lambda path: {
+                "form": "ISR",
+                "citations": [
+                    {
+                        "num": 1,
+                        "category": "X",
+                        "doc_label": "WO 2020/112595 A1 (OREAL)",
+                        "doc_id": "WO2020112595A1",
+                        "claims": "1-3",
+                        "passages": "page 38; example 1",
+                    },
+                    {
+                        "num": 2,
+                        "category": "Y",
+                        "doc_label": "US 2016/175445 A1 (LU)",
+                        "doc_id": "US2016175445A1",
+                        "claims": "14-19",
+                        "passages": "paragraphs [0004]-[0055]",
+                    },
+                ],
+                "raw_text": """
+Information on patent family members
+cited in search repo date member(s) date
+WO 2020112595 Al 04-06-2020 US 2022047469 Al 17-02-2022
+US 2016175445 Al 23-06-2016 CN 102639097 A 15-08-2012
+JP 5980304 B2 31-08-2016
+JP 2014510173 A 24-04-2014
+10
+JP 2030-000001 A 2030.1.1
+""",
+            },
+        )
+
+        refs = case_service.extract_hongan_citations(case_with_hongan)[0]["refs"]
+        family_refs = [r for r in refs if r["source"] == "isr_family"]
+
+        assert [r["label"] for r in family_refs] == ["本ISRD2易読1", "本ISRD2易読2"]
+        assert [r["patent_id"] for r in family_refs] == ["JP5980304B2", "JP2014510173A"]
+        assert all(r["family_of"] == "US2016175445A1" for r in family_refs)
+
+    def test_opd_dossier_candidates_are_added(self, case_with_hongan, monkeypatch):
+        from services import opd_dossier_service
+
+        monkeypatch.setattr(case_service, "_extract_isr_citation_refs_from_hongan_pdf", lambda *_a, **_k: [])
+        monkeypatch.setattr(
+            opd_dossier_service,
+            "extract_citation_candidates",
+            lambda case_id: ({
+                "candidates": [
+                    {
+                        "patent_id": "US2016175445A1",
+                        "label": "ドシエ引用1",
+                        "raw_text": "引用情報 US 2016/175445 A1",
+                        "source_label": "引用情報1",
+                    }
+                ]
+            }, 200),
+        )
+
+        refs = case_service.extract_hongan_citations(case_with_hongan)[0]["refs"]
+        opd_refs = [r for r in refs if r["source"] == "opd_dossier"]
+
+        assert len(opd_refs) == 1
+        assert opd_refs[0]["label"] == "ドシエ引用1"
+        assert opd_refs[0]["patent_id"] == "US2016175445A1"
+
 
 class TestErrors:
     def test_missing_case(self, tmp_path, monkeypatch):

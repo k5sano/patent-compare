@@ -251,12 +251,14 @@
 {% endif %}
 
 <div class="content viewer-grid"
+     data-case-id="{{ case_id }}"
+     data-patent-id="{{ patent_id }}"
      data-prev-url="{{ nav.prev_url if nav else '' }}"
      data-next-url="{{ nav.next_url if nav else '' }}">
   <main class="pane text-pane" id="text-pane">
   <div class="pane-title">
     <strong>テキスト</strong>
-    <span class="kbd-help">←/→ 文献移動　↑/↓ 段落移動</span>
+    <span class="kbd-help">←/→ 文献移動　↑/↓ 本文スクロール</span>
   </div>
   {% if abstract_unit %}
   <h2>要約 <span class="sec-count" id="sec-count-abs"></span></h2>
@@ -667,27 +669,61 @@ document.addEventListener('keydown', (e) => {
   if (e.altKey || e.ctrlKey || e.metaKey) return;
   const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (_viewerHandleArrowKey(e.key)) e.preventDefault();
+});
+
+function _viewerNavigateDoc(delta) {
   const grid = document.querySelector('.viewer-grid');
-  if (!grid) return;
-  if (e.key === 'ArrowLeft') {
-    const url = grid.dataset.prevUrl || '';
-    if (url) {
-      e.preventDefault();
-      location.href = url;
-    }
-  } else if (e.key === 'ArrowRight') {
-    const url = grid.dataset.nextUrl || '';
-    if (url) {
-      e.preventDefault();
-      location.href = url;
-    }
-  } else if (e.key === 'ArrowDown') {
-    e.preventDefault();
-    focusTextUnit(1);
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault();
-    focusTextUnit(-1);
+  if (!grid) return false;
+  const url = delta < 0 ? (grid.dataset.prevUrl || '') : (grid.dataset.nextUrl || '');
+  if (!url) return false;
+  location.href = url;
+  return true;
+}
+
+function _viewerScrollableTextTarget() {
+  const pane = document.getElementById('text-pane');
+  if (!pane) return document.scrollingElement || document.documentElement;
+  const style = getComputedStyle(pane);
+  if (style.overflowY === 'visible' || pane.scrollHeight <= pane.clientHeight + 2) {
+    return document.scrollingElement || document.documentElement;
   }
+  return pane;
+}
+
+function _viewerScrollText(delta) {
+  const target = _viewerScrollableTextTarget();
+  if (!target) return false;
+  const amount = Math.max(120, Math.floor((target.clientHeight || window.innerHeight) * 0.72));
+  target.scrollBy({ top: amount * (delta < 0 ? -1 : 1), behavior: 'smooth' });
+  return true;
+}
+
+function _viewerHandleArrowKey(key) {
+  if (key === 'ArrowLeft') return _viewerNavigateDoc(-1);
+  if (key === 'ArrowRight') return _viewerNavigateDoc(1);
+  if (key === 'ArrowDown') return _viewerScrollText(1);
+  if (key === 'ArrowUp') return _viewerScrollText(-1);
+  return false;
+}
+
+window.addEventListener('message', (e) => {
+  if (e.origin && e.origin !== window.location.origin) return;
+  const data = e.data || {};
+  if (data.type !== 'pc-hit-view-key') return;
+  _viewerHandleArrowKey(data.key);
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+  const grid = document.querySelector('.viewer-grid');
+  if (!grid || !window.parent || window.parent === window) return;
+  try {
+    window.parent.postMessage({
+      type: 'pc-hit-view-loaded',
+      case_id: grid.dataset.caseId || '',
+      patent_id: grid.dataset.patentId || '',
+    }, window.location.origin);
+  } catch (_) { /* ignore */ }
 });
 </script>
 </body>

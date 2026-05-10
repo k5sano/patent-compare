@@ -168,6 +168,45 @@ def _default_text_source(patent_id: str) -> str:
     return "google"
 
 
+def _google_text_language_for(patent_id: str, requested: str = "ja") -> str:
+    """Google Patents の本文取得に使う言語を決める。
+
+    WO/EP/US 等は /ja が機械翻訳スタブだけになることがあるため、全文取得は
+    /en を優先する。JP 系は J-PlatPat か Google /ja の方が読みやすい。
+    """
+    lang = (requested or "ja").lower()
+    if lang != "ja":
+        return lang
+    s = (patent_id or "").strip().upper()
+    if any(p in s for p in ("特開", "特願", "特許", "特表")):
+        return "ja"
+    if re.match(r'^\s*JP[\s\-]?\d', s):
+        return "ja"
+    if re.match(r'^\s*(WO|EP|US|CN|KR|DE|FR|GB|CA|AU)[\s\-\/]?\d', s):
+        return "en"
+    return lang
+
+
+def _is_thin_google_translation(hit: dict) -> bool:
+    """既存キャッシュが Google /ja の痩せた翻訳スタブなら再取得対象にする。"""
+    if not isinstance(hit, dict):
+        return False
+    src = (hit.get("source") or "").lower()
+    url = (hit.get("url") or "").lower()
+    if src not in ("google", "google_fallback") and "patents.google.com" not in url:
+        return False
+    desc = (hit.get("description") or "").strip()
+    claims = hit.get("claims") or []
+    abstract = (hit.get("abstract") or "").strip()
+    if "/ja" not in url:
+        return False
+    if len(desc) < 300 and not abstract:
+        return True
+    if len(desc) < 1200 and len(claims) <= 1 and desc.lower().startswith("translated from"):
+        return True
+    return False
+
+
 _PKM_GROUP_COLORS = [
     '#ef4444', '#a855f7', '#ec4899', '#3b82f6',
     '#22c55e', '#f97316', '#14b8a6', '#6b7280',
@@ -354,20 +393,22 @@ def fetch_and_cache_hit_text(case_id: str, patent_id: str, *, force: bool = Fals
     """
     if not patent_id:
         return {"error": "patent_id が空です"}
+    chosen = source if source in ("google", "jplatpat") else _default_text_source(patent_id)
     cached = get_hit_text(case_id, patent_id)
     if cached and not force:
-        cached["from_cache"] = True
-        return cached
+        if not (chosen == "google" and _is_thin_google_translation(cached)):
+            cached["from_cache"] = True
+            return cached
 
-    chosen = source if source in ("google", "jplatpat") else _default_text_source(patent_id)
     if chosen == "jplatpat":
         from modules.jplatpat_client import fetch_jplatpat_full_text
         from modules.google_patents_scraper import fetch_patent_full_text
         from concurrent.futures import ThreadPoolExecutor
+        google_language = _google_text_language_for(patent_id, language)
         # J-PlatPat (text canonical) と Google Patents (images) を並列取得
         with ThreadPoolExecutor(max_workers=2) as ex:
             f_jp = ex.submit(fetch_jplatpat_full_text, patent_id, language=language)
-            f_g = ex.submit(fetch_patent_full_text, patent_id, language=language)
+            f_g = ex.submit(fetch_patent_full_text, patent_id, language=google_language)
             try:
                 data = f_jp.result(timeout=60)
             except Exception as e:
@@ -387,7 +428,8 @@ def fetch_and_cache_hit_text(case_id: str, patent_id: str, *, force: bool = Fals
                 data["images"] = g_data["images"]
     else:
         from modules.google_patents_scraper import fetch_patent_full_text
-        data = fetch_patent_full_text(patent_id, language=language)
+        google_language = _google_text_language_for(patent_id, language)
+        data = fetch_patent_full_text(patent_id, language=google_language)
         data.setdefault("source", "google")
 
     p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"

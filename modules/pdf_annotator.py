@@ -36,7 +36,14 @@ _GROUP_COLORS = [
 ]
 
 
-def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=None):
+def annotate_citation_pdf(
+    pdf_path,
+    output_path,
+    response,
+    citation,
+    keywords=None,
+    migrate_bookmarks_from=None,
+):
     """引用文献PDFに対比結果の注釈を追加
 
     Parameters:
@@ -45,6 +52,8 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
         response: 対比結果 (responses/{doc_id}.json の内容)
         citation: 引用文献構造化データ (citations/{doc_id}.json の内容)
         keywords: キーワードグループ (keywords.json の内容, optional)
+        migrate_bookmarks_from: 旧注釈PDF。ユーザー作成ブックマークだけを
+            新PDFの「旧版から移行」配下へ移す (optional)
 
     Returns:
         dict: 処理結果
@@ -52,6 +61,7 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
             highlights: キーワードハイライト数
             bookmarks: ブックマーク数
     """
+    migrated_bookmarks = _extract_user_bookmarks_for_migration(migrate_bookmarks_from)
     doc = fitz.open(str(pdf_path))
 
     para_page_map = _build_para_page_map(citation)
@@ -74,6 +84,8 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
 
     # 5. TOC。先頭サマリーページを 1 ページ目にしたので、元 PDF 側は +1。
     toc = _build_toc(response, toc_entries, page_offset=1)
+    if migrated_bookmarks:
+        _append_migrated_bookmarks(toc, migrated_bookmarks, doc.page_count)
     doc.set_toc(toc)
 
     doc.save(str(output_path))
@@ -83,6 +95,7 @@ def annotate_citation_pdf(pdf_path, output_path, response, citation, keywords=No
         "labels": label_count,
         "highlights": hl_count,
         "bookmarks": len(toc),
+        "migrated_bookmarks": len(migrated_bookmarks),
     }
 
 
@@ -493,6 +506,71 @@ def _toc_dest(page_1based, y=0):
         "to": fitz.Point(0, y),
         "zoom": 0,
     }
+
+
+def _is_generated_bookmark_title(title):
+    t = str(title or "").strip()
+    if not t:
+        return True
+    if t.startswith("注釈サマリー:") or t.startswith("対比結果:"):
+        return True
+    # アプリ生成の対比ブックマーク: "1A ○ 【0001】", "請求項2 × ..." 等。
+    if re.match(r"^(?:請求項\s*\d+|[A-Za-z0-9][A-Za-z0-9_.-]*)\s*[○△×]", t):
+        return True
+    return False
+
+
+def _extract_user_bookmarks_for_migration(pdf_path):
+    """旧注釈PDFからユーザー作成らしいブックマークだけを取り出す。"""
+    if not pdf_path:
+        return []
+    try:
+        old = fitz.open(str(pdf_path))
+    except Exception:
+        return []
+    try:
+        toc = old.get_toc(simple=False)
+    finally:
+        old.close()
+
+    user_entries = []
+    for entry in toc or []:
+        if len(entry) < 3:
+            continue
+        level, title, page = entry[:3]
+        if _is_generated_bookmark_title(title):
+            continue
+        dest = entry[3] if len(entry) > 3 and isinstance(entry[3], dict) else None
+        user_entries.append({
+            "level": max(1, int(level or 1)),
+            "title": str(title or "")[:200],
+            "page": max(1, int(page or 1)),
+            "dest": dest,
+        })
+    return user_entries
+
+
+def _append_migrated_bookmarks(toc, migrated_bookmarks, page_count):
+    if not migrated_bookmarks:
+        return
+    toc.append([1, "旧版から移行", 1, _toc_dest(1, 0)])
+    min_level = min(int(e.get("level") or 1) for e in migrated_bookmarks)
+    max_page = max(1, int(page_count or 1))
+    for entry in migrated_bookmarks:
+        page = min(max(1, int(entry.get("page") or 1)), max_page)
+        title = str(entry.get("title") or "")[:200]
+        dest = entry.get("dest")
+        if isinstance(dest, dict):
+            dest = dict(dest)
+            dest["page"] = min(max(0, int(dest.get("page", page - 1))), max_page - 1)
+        else:
+            dest = _toc_dest(page, 0)
+        toc.append([
+            int(entry.get("level") or 1) - min_level + 2,
+            title,
+            page,
+            dest,
+        ])
 
 
 def _build_toc_entries(response, doc, para_page_map, claims_page):

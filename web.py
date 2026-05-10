@@ -12,6 +12,7 @@ import re
 import subprocess
 import yaml
 from pathlib import Path
+from urllib.parse import urlencode
 from flask import (
     Flask, render_template, request, redirect, url_for,
     flash, jsonify, send_file, Response
@@ -222,6 +223,16 @@ def case_detail(case_id):
     if not isinstance(freshness, dict):
         freshness = {}
 
+    compact_ref = request.args.get("compact") == "1"
+    try:
+        compact_panel = int(request.args.get("panel", "-1"))
+    except ValueError:
+        compact_panel = -1
+    try:
+        compact_sub = int(request.args.get("sub", "0"))
+    except ValueError:
+        compact_sub = 0
+
     return render_template("case.html",
                            meta=meta, hongan=hongan, segments=segments,
                            keywords=keywords, citations=citations,
@@ -230,7 +241,10 @@ def case_detail(case_id):
                            prelim_fields=prelim_fields,
                            prelim_default_field=prelim_default_field,
                            freshness=freshness,
-                           inventive_step=inventive_step)
+                           inventive_step=inventive_step,
+                           compact_ref=compact_ref,
+                           compact_panel=compact_panel,
+                           compact_sub=compact_sub)
 
 
 def _load_prelim_default():
@@ -505,6 +519,49 @@ def fetch_hongan_classification(case_id):
     return _svc_response(fetch_hongan_classification_from_jplatpat(case_id))
 
 
+@app.route("/case/<case_id>/dossier/opd/open", methods=["POST"])
+def opd_dossier_open(case_id):
+    """本願のJ-PlatPat固定URLからOPD画面を可視ブラウザで開く。"""
+    from services.opd_dossier_service import get_session
+    sess = get_session()
+    result = sess.open(case_id, timeout=70)
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/case/<case_id>/dossier/opd/collect", methods=["POST"])
+def opd_dossier_collect(case_id):
+    """現在のOPD画面から対象書類候補を収集して dossier/opd_index.json に保存する。"""
+    from services.opd_dossier_service import get_session
+    sess = get_session()
+    result = sess.collect(case_id, timeout=60)
+    return jsonify(result), (200 if result.get("ok") else 400)
+
+
+@app.route("/case/<case_id>/dossier/opd/index", methods=["GET"])
+def opd_dossier_index(case_id):
+    from services.opd_dossier_service import load_opd_index
+    return _svc_response(load_opd_index(case_id))
+
+
+@app.route("/case/<case_id>/dossier/opd/citation-candidates", methods=["GET"])
+def opd_dossier_citation_candidates(case_id):
+    from services.opd_dossier_service import extract_citation_candidates
+    return _svc_response(extract_citation_candidates(case_id))
+
+
+@app.route("/case/<case_id>/dossier/opd/status", methods=["GET"])
+def opd_dossier_status(case_id):
+    from services.opd_dossier_service import get_session
+    return jsonify(get_session().status())
+
+
+@app.route("/case/<case_id>/dossier/opd/close", methods=["POST"])
+def opd_dossier_close(case_id):
+    from services.opd_dossier_service import reset_session
+    reset_session()
+    return jsonify({"ok": True})
+
+
 @app.route("/case/<case_id>/keywords/fterm/add", methods=["POST"])
 def add_fterm(case_id):
     from services.keyword_service import add_fterm
@@ -746,6 +803,38 @@ def _resolve_hongan_pdf_path(case_id):
     return candidates[0]
 
 
+def _resolve_annotated_hongan_pdf_path(case_id):
+    """本願の注釈/ブックマーク済みPDFを解決。BU旧版は除外し最新を返す。"""
+    case_dir = get_case_dir(case_id)
+    output_dir = case_dir / "output"
+    if not output_dir.exists():
+        return None
+
+    patterns = [
+        f"{case_id}_本願_bookmarked.pdf",
+        f"{case_id}_本願_bookmarked_*.pdf",
+        f"{case_id}_本願_annotated.pdf",
+        f"{case_id}_本願_annotated_*.pdf",
+        "*本願*bookmarked*.pdf",
+        "*本願*annotated*.pdf",
+    ]
+    candidates = []
+    for pat in patterns:
+        candidates.extend(output_dir.glob(pat))
+    candidates = [
+        p for p in {p for p in candidates}
+        if p.is_file() and p.suffix.lower() == ".pdf" and "_BU" not in p.stem
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+    return candidates[0]
+
+
+def _resolve_workspace_hongan_pdf_path(case_id):
+    return _resolve_annotated_hongan_pdf_path(case_id) or _resolve_hongan_pdf_path(case_id)
+
+
 PDFXCHANGE_CANDIDATES = [
     r"C:\Program Files\Tracker Software\PDF Editor\PDFXEdit.exe",
     r"C:\Program Files (x86)\Tracker Software\PDF Editor\PDFXEdit.exe",
@@ -754,17 +843,149 @@ PDFXCHANGE_CANDIDATES = [
 
 @app.route("/case/<case_id>/hongan/pdf")
 def view_hongan_pdf(case_id):
-    """本願PDFをブラウザでインライン表示（フォールバック用）"""
-    pdf_path = _resolve_hongan_pdf_path(case_id)
+    """本願PDFをブラウザでインライン表示（注釈済みPDFがあれば優先）。"""
+    pdf_path = _resolve_workspace_hongan_pdf_path(case_id)
     if pdf_path is None:
         return jsonify({"error": "本願PDFが見つかりません"}), 404
     return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
 
 
+@app.route("/case/<case_id>/hongan/annotated/status")
+def hongan_annotated_status(case_id):
+    pdf_path = _resolve_annotated_hongan_pdf_path(case_id)
+    from modules.pdf_annotation_meta import evaluate_annotation_freshness
+    freshness = evaluate_annotation_freshness(
+        pdf_path,
+        case_dir=get_case_dir(case_id),
+        kind="hongan",
+    )
+    return jsonify({
+        "exists": pdf_path is not None,
+        "filename": pdf_path.name if pdf_path else "",
+        "state": freshness["state"],
+        "reasons": freshness["reasons"],
+    })
+
+
+def _safe_annotation_stem(value):
+    return re.sub(r'[<>:"/\\|?*]', '_', str(value or "")).strip()
+
+
+def _resolve_annotated_citation_pdf_path(case_id, citation_id):
+    """引用文献の現行注釈PDFを解決。BU 旧版は通常表示から除外する。"""
+    case_dir = get_case_dir(case_id)
+    output_dir = case_dir / "output"
+    if not output_dir.exists():
+        return None
+
+    meta = load_case_meta(case_id) or {}
+    stems = {_safe_annotation_stem(citation_id)}
+    for cit in meta.get("citations", []):
+        if cit.get("id") == citation_id:
+            stems.add(_safe_annotation_stem(cit.get("label")))
+            stems.add(_safe_annotation_stem(cit.get("patent_number")))
+
+    candidates = []
+    for stem in {s for s in stems if s}:
+        exact = output_dir / f"{stem}_annotated.pdf"
+        if exact.is_file():
+            candidates.append(exact)
+        candidates.extend(
+            p for p in output_dir.glob(f"{stem}_annotated_*.pdf")
+            if "_BU" not in p.stem
+        )
+    candidates = [p for p in candidates if p.is_file()]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
+    return candidates[0]
+
+
+def _list_annotated_citation_backups(case_id, citation_id):
+    case_dir = get_case_dir(case_id)
+    output_dir = case_dir / "output"
+    if not output_dir.exists():
+        return []
+    meta = load_case_meta(case_id) or {}
+    stems = {_safe_annotation_stem(citation_id)}
+    for cit in meta.get("citations", []):
+        if cit.get("id") == citation_id:
+            stems.add(_safe_annotation_stem(cit.get("label")))
+            stems.add(_safe_annotation_stem(cit.get("patent_number")))
+    files = []
+    for stem in {s for s in stems if s}:
+        files.extend(output_dir.glob(f"{stem}_annotated_*_BU*.pdf"))
+    out = []
+    for p in sorted({p for p in files if p.is_file()}, key=lambda p: (p.stat().st_mtime, p.name), reverse=True):
+        out.append({
+            "filename": p.name,
+            "size": p.stat().st_size,
+            "mtime": p.stat().st_mtime,
+        })
+    return out
+
+
+@app.route("/case/<case_id>/citation/<path:citation_id>/pdf")
+def view_citation_pdf(case_id, citation_id):
+    """引用文献PDFをブラウザでインライン表示（注釈PDFがあれば優先）。"""
+    annotated_path = _resolve_annotated_citation_pdf_path(case_id, citation_id)
+    if annotated_path is not None:
+        return send_file(str(annotated_path), mimetype="application/pdf", as_attachment=False)
+
+    case_dir = get_case_dir(case_id)
+    input_dir = case_dir / "input"
+    pdf_path = find_citation_pdf(input_dir, citation_id)
+    if pdf_path is None:
+        meta = load_case_meta(case_id) or {}
+        for cit in meta.get("citations", []):
+            if cit.get("id") == citation_id and cit.get("label") and cit["label"] != citation_id:
+                pdf_path = find_citation_pdf(input_dir, cit["label"])
+                if pdf_path is not None:
+                    break
+    if pdf_path is None:
+        return jsonify({"error": f"引用文献PDFが見つかりません: {citation_id}"}), 404
+    return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
+
+
+@app.route("/case/<case_id>/citation/<path:citation_id>/annotated/status")
+def citation_annotated_status(case_id, citation_id):
+    pdf_path = _resolve_annotated_citation_pdf_path(case_id, citation_id)
+    resp_path = get_case_dir(case_id) / "responses" / f"{citation_id}.json"
+    from modules.pdf_annotation_meta import evaluate_annotation_freshness
+    freshness = evaluate_annotation_freshness(
+        pdf_path,
+        case_dir=get_case_dir(case_id),
+        kind="citation",
+        citation_id=citation_id,
+    )
+    return jsonify({
+        "exists": pdf_path is not None,
+        "filename": pdf_path.name if pdf_path else "",
+        "can_create": resp_path.exists(),
+        "state": freshness["state"],
+        "reasons": freshness["reasons"],
+    })
+
+
+@app.route("/case/<case_id>/citation/<path:citation_id>/annotated/backups")
+def list_citation_annotated_backups(case_id, citation_id):
+    return jsonify({"backups": _list_annotated_citation_backups(case_id, citation_id)})
+
+
+@app.route("/case/<case_id>/citation/<path:citation_id>/annotated/backup/<path:filename>")
+def view_citation_annotated_backup(case_id, citation_id, filename):
+    safe_name = Path(filename).name
+    backups = _list_annotated_citation_backups(case_id, citation_id)
+    if not any(b["filename"] == safe_name for b in backups):
+        return jsonify({"error": "旧版注釈PDFが見つかりません"}), 404
+    pdf_path = get_case_dir(case_id) / "output" / safe_name
+    return send_file(str(pdf_path), mimetype="application/pdf", as_attachment=False)
+
+
 @app.route("/case/<case_id>/hongan/open", methods=["POST"])
 def open_hongan_pdf(case_id):
-    """本願PDFをPDF-XChange Editorで開く（サーバーホスト上で起動）"""
-    pdf_path = _resolve_hongan_pdf_path(case_id)
+    """本願PDFをPDF-XChange Editorで開く（注釈済みPDFがあれば優先）。"""
+    pdf_path = _resolve_workspace_hongan_pdf_path(case_id)
     if pdf_path is None:
         return jsonify({"error": "本願PDFが見つかりません"}), 404
     return _launch_pdf_xchange(pdf_path)
@@ -1393,8 +1614,40 @@ def hit_full_text_view(case_id, patent_id):
         list_runs, load_run, pkm_build_index, pkm_highlight_python, pkm_group_color,
     )
     run_id = request.args.get("run_id") or ""
+    nav_context = request.args.get("nav") or ""
+    nav_ids = [x.strip() for x in request.args.getlist("nav_id") if x and x.strip()]
     nav = {"prev_url": "", "next_url": "", "position": ""}
     hit_card = None
+
+    def _hit_view_url(pid, *, rid=None, ids=None, context=""):
+        values = {
+            "case_id": case_id,
+            "patent_id": pid,
+        }
+        if rid:
+            values["run_id"] = rid
+        if context:
+            values["nav"] = context
+        url = url_for("hit_full_text_view", **values)
+        if ids:
+            prefix = "&" if "?" in url else "?"
+            extra = urlencode([("nav_id", str(nav_id)) for nav_id in ids])
+            url = f"{url}{prefix}{extra}"
+        return url
+
+    def _set_nav_from_ids(hit_ids, context):
+        hit_ids = [str(x).strip() for x in (hit_ids or []) if str(x or "").strip()]
+        if patent_id not in hit_ids:
+            return False
+        pos = hit_ids.index(patent_id)
+        nav["position"] = f"{pos + 1} / {len(hit_ids)}"
+        nav["prev_url"] = ""
+        nav["next_url"] = ""
+        if pos > 0:
+            nav["prev_url"] = _hit_view_url(hit_ids[pos - 1], ids=hit_ids, context=context)
+        if pos + 1 < len(hit_ids):
+            nav["next_url"] = _hit_view_url(hit_ids[pos + 1], ids=hit_ids, context=context)
+        return True
 
     def _set_nav_from_run(run_data, rid):
         nonlocal hit_card
@@ -1425,23 +1678,22 @@ def hit_full_text_view(case_id, patent_id):
         nav["prev_url"] = ""
         nav["next_url"] = ""
         if pos > 0:
-            nav["prev_url"] = url_for(
-                "hit_full_text_view",
-                case_id=case_id,
-                patent_id=hit_ids[pos - 1],
-                run_id=rid,
-            )
+            nav["prev_url"] = _hit_view_url(hit_ids[pos - 1], rid=rid)
         if pos + 1 < len(hit_ids):
-            nav["next_url"] = url_for(
-                "hit_full_text_view",
-                case_id=case_id,
-                patent_id=hit_ids[pos + 1],
-                run_id=rid,
-            )
+            nav["next_url"] = _hit_view_url(hit_ids[pos + 1], rid=rid)
         return True
 
     try:
-        if run_id:
+        if nav_ids:
+            _set_nav_from_ids(nav_ids, nav_context or "workspace")
+        if not nav["position"] and nav_context in ("workspace", "workspace_citations"):
+            meta = load_case_meta(case_id) or {}
+            citation_ids = [
+                c.get("id") for c in (meta.get("citations") or [])
+                if c.get("id")
+            ]
+            _set_nav_from_ids(citation_ids, nav_context)
+        if not nav["position"] and run_id:
             _set_nav_from_run(load_run(case_id, run_id) or {}, run_id)
         if not nav["position"]:
             # 古いタブや直接URLで run_id が無い場合でも、最新の検索runから前後移動を復元する。

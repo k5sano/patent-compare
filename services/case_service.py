@@ -6,7 +6,9 @@ import json
 import logging
 import re
 import shutil
+import tempfile
 import threading
+import unicodedata
 import yaml
 from pathlib import Path
 
@@ -561,6 +563,13 @@ _PATENT_ID_PATTERNS = [
     re.compile(r"WO\s*\d{4}\s*[/／]?\s*\d{4,7}(?:\s*[A-Z]\d?)?"),
     re.compile(r"(?:JP|US|EP|CN|KR)\s*\d{4,12}\s*[A-Z]?\d?"),
 ]
+_FAMILY_PATENT_RE = re.compile(
+    r"\b(WO|JP|UP|US|EP|CN|KR|DE|GB|FR|CA|AU|TW|DK|ES|LT|PL|PT|BR|RU)"
+    r"[\s\-/]*"
+    r"(\d[\d\s\-/]{2,25})"
+    r"\s*([ABC](?:\d|[LI|!])?|T\d?)?",
+    re.I,
+)
 
 
 def _normalize_patent_id(raw: str) -> str:
@@ -588,8 +597,85 @@ def _extract_patent_id_from_tail(text: str) -> str:
     return ""
 
 
+def _canonical_patent_id(raw: str) -> str:
+    s = unicodedata.normalize("NFKC", raw or "").upper()
+    s = re.sub(r"([AB])[LI|!](?=\b|\d)", r"\g<1>1", s)
+    return re.sub(r"[^A-Z0-9]", "", s)
+
+
+def _normalize_family_patent_id(cc: str, num_raw: str, kind_raw: str = "") -> str:
+    cc = (cc or "").upper()
+    if cc == "UP":  # OCRで JP が uP になるケース
+        cc = "JP"
+    digits = re.sub(r"[^\d]", "", unicodedata.normalize("NFKC", num_raw or ""))
+    if not digits:
+        return ""
+    kind = unicodedata.normalize("NFKC", kind_raw or "").upper()
+    kind = re.sub(r"([AB])[LI|!]", r"\g<1>1", kind)
+    return f"{cc}{digits}{kind}"
+
+
+def _extract_family_patent_ids(text: str) -> list[str]:
+    ids = []
+    for m in _FAMILY_PATENT_RE.finditer(unicodedata.normalize("NFKC", text or "")):
+        pid = _normalize_family_patent_id(*m.groups())
+        if pid:
+            ids.append(pid)
+    return ids
+
+
+def _extract_jp_family_members_by_isr_num(parsed: dict) -> dict[int, list[str]]:
+    """ISRのpatent family annexから、D番号ごとのJPファミリー公報を抽出する。"""
+    raw_text = parsed.get("raw_text") or ""
+    marker = re.search(r"Information\s+on\s+patent\s+family\s+members", raw_text, re.I)
+    if not marker:
+        return {}
+
+    cited_by_canonical = {}
+    for cit in parsed.get("citations") or []:
+        num = cit.get("num")
+        if not num:
+            continue
+        if cit.get("doc_id"):
+            cited_by_canonical[_canonical_patent_id(cit["doc_id"])] = int(num)
+        for pid in _extract_family_patent_ids(cit.get("doc_label") or ""):
+            cited_by_canonical[_canonical_patent_id(pid)] = int(num)
+
+    result: dict[int, list[str]] = {}
+    seen_by_num: dict[int, set[str]] = {}
+    current_num = None
+    for line in raw_text[marker.end():].splitlines():
+        normalized_line = unicodedata.normalize("NFKC", line or "")
+        if re.search(
+            r"\bJP\s+\d{4}[\-\s]?\d{5,6}\s*A\s+\d{4}\.\d{1,2}\.\d{1,2}",
+            normalized_line,
+            re.I,
+        ):
+            break
+        ids = _extract_family_patent_ids(line)
+        if not ids:
+            continue
+        member_ids = ids
+        first_key = _canonical_patent_id(ids[0])
+        if first_key in cited_by_canonical:
+            current_num = cited_by_canonical[first_key]
+            member_ids = ids[1:]
+        if current_num is None:
+            continue
+        for pid in member_ids:
+            if not pid.startswith("JP"):
+                continue
+            key = _canonical_patent_id(pid)
+            seen = seen_by_num.setdefault(current_num, set())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.setdefault(current_num, []).append(pid)
+    return result
+
+
 def extract_hongan_citations(case_id):
-    """本願明細書 (hongan.json の paragraphs) を走査して 【特許文献N】 を抽出する。
+    """本願明細書と内包ISRを走査して引用候補を抽出する。
 
     Returns: ({"refs": [{ref_no, patent_id, raw_text, para_id, label}, ...]}, 200)
     """
@@ -630,9 +716,184 @@ def extract_hongan_citations(case_id):
                 "raw_text": tail.strip()[:120],
                 "para_id": para.get("id"),
                 "label": f"本願引用{ref_no}",
+                "source": "hongan",
             })
     refs.sort(key=lambda r: r["ref_no"])
+    next_ref_no = (max((r["ref_no"] for r in refs), default=0) + 1)
+    refs.extend(_extract_isr_citation_refs_from_hongan_pdf(
+        case_id, start_ref_no=next_ref_no, seen_pids=seen_pids
+    ))
+    next_ref_no = (max((r["ref_no"] for r in refs), default=0) + 1)
+    refs.extend(_extract_opd_dossier_refs(case_id, start_ref_no=next_ref_no, seen_pids=seen_pids))
     return {"refs": refs}, 200
+
+
+def _extract_opd_dossier_refs(case_id, start_ref_no=1, seen_pids=None):
+    try:
+        from services.opd_dossier_service import extract_citation_candidates
+        result, code = extract_citation_candidates(case_id)
+    except Exception as e:
+        logger.info("OPDドシエ引用候補の抽出をスキップ (%s): %s", case_id, e)
+        return []
+    if code != 200:
+        return []
+
+    seen = seen_pids if seen_pids is not None else set()
+    seen_keys = {_canonical_patent_id(pid) for pid in seen if pid}
+    refs = []
+    ref_no = int(start_ref_no or 1)
+    for cand in result.get("candidates") or []:
+        patent_id = cand.get("patent_id", "")
+        key = _canonical_patent_id(patent_id)
+        if not patent_id or key in seen_keys:
+            continue
+        seen.add(patent_id)
+        seen_keys.add(key)
+        refs.append({
+            "ref_no": ref_no,
+            "patent_id": patent_id,
+            "raw_text": (cand.get("raw_text") or "")[:160],
+            "para_id": cand.get("source_label") or "OPD",
+            "label": cand.get("label") or f"ドシエ引用{len(refs) + 1}",
+            "source": "opd_dossier",
+        })
+        ref_no += 1
+    return refs
+
+
+def _resolve_hongan_pdf_for_isr_scan(case_id):
+    """ISR検出用の本願PDF。注釈済み/ブックマーク済みを優先し、BUは除外する。"""
+    case_dir = get_case_dir(case_id)
+    output_dir = case_dir / "output"
+    candidates = []
+    if output_dir.exists():
+        for p in output_dir.iterdir():
+            if not p.is_file() or p.suffix.lower() != ".pdf":
+                continue
+            stem_lower = p.stem.lower()
+            if "_bu" in stem_lower:
+                continue
+            if "本願" in p.stem and ("bookmarked" in stem_lower or "annotated" in stem_lower):
+                candidates.append(p)
+    if candidates:
+        return max(candidates, key=lambda p: p.stat().st_mtime)
+    return _resolve_hongan_pdf(case_id)
+
+
+def _parse_embedded_isr_search_report(pdf_path):
+    """本願PDF内のISRページ以降だけを切り出して search_report_parser に渡す。"""
+    if not pdf_path or not Path(pdf_path).exists():
+        return None
+
+    from modules.search_report_parser import detect_form, parse_search_report
+
+    start_page = None
+    tmp_name = None
+    try:
+        import fitz
+        doc = fitz.open(str(pdf_path))
+        try:
+            for idx, page in enumerate(doc):
+                text = page.get_text("text") or ""
+                if detect_form(text) == "ISR":
+                    start_page = idx
+                    break
+            if start_page is not None:
+                subset = fitz.open()
+                try:
+                    subset.insert_pdf(doc, from_page=start_page, to_page=doc.page_count - 1)
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+                    tmp_name = tmp.name
+                    tmp.close()
+                    subset.save(tmp_name)
+                finally:
+                    subset.close()
+        finally:
+            doc.close()
+    except Exception as e:
+        logger.info("本願PDF内ISRページ検出をスキップ (%s): %s", pdf_path, e)
+        tmp_name = None
+
+    try:
+        if tmp_name:
+            parsed = parse_search_report(tmp_name)
+        else:
+            parsed = parse_search_report(str(pdf_path))
+        if parsed.get("form") == "ISR" and parsed.get("citations"):
+            return parsed
+    except Exception as e:
+        logger.info("本願PDF内ISRの解析をスキップ (%s): %s", pdf_path, e)
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return None
+
+
+def _extract_isr_citation_refs_from_hongan_pdf(case_id, start_ref_no=1, seen_pids=None):
+    """本願PDFに含まれるISRの引用文献を extract_hongan_citations 用 refs に変換する。"""
+    pdf_path = _resolve_hongan_pdf_for_isr_scan(case_id)
+    parsed = _parse_embedded_isr_search_report(pdf_path)
+    if not parsed:
+        return []
+
+    seen = seen_pids if seen_pids is not None else set()
+    refs = []
+    ref_no = int(start_ref_no or 1)
+    isr_no = 1
+    jp_family_by_num = _extract_jp_family_members_by_isr_num(parsed)
+    for cit in parsed.get("citations") or []:
+        patent_id = _normalize_patent_id(cit.get("doc_id") or "")
+        if not patent_id:
+            patent_id = _extract_patent_id_from_tail(cit.get("doc_label", ""))
+        if not patent_id or patent_id in seen:
+            continue
+        seen.add(patent_id)
+        raw_parts = [
+            cit.get("category", ""),
+            cit.get("doc_label", ""),
+            f"claims {cit.get('claims', '')}" if cit.get("claims") else "",
+            cit.get("passages", ""),
+        ]
+        raw_text = " / ".join(part for part in raw_parts if part)
+        refs.append({
+            "ref_no": ref_no,
+            "patent_id": patent_id,
+            "raw_text": raw_text[:160],
+            "para_id": "ISR",
+            "label": f"ISR引用{isr_no}",
+            "source": "isr",
+            "isr_num": cit.get("num"),
+            "category": cit.get("category", ""),
+            "claims": cit.get("claims", ""),
+        })
+        ref_no += 1
+        isr_no += 1
+        family_num = cit.get("num")
+        family_jps = jp_family_by_num.get(int(family_num or 0), [])
+        for idx, jp_patent_id in enumerate(family_jps, start=1):
+            if jp_patent_id in seen:
+                continue
+            seen.add(jp_patent_id)
+            label = f"本ISRD{family_num}易読"
+            if len(family_jps) > 1:
+                label = f"{label}{idx}"
+            refs.append({
+                "ref_no": ref_no,
+                "patent_id": jp_patent_id,
+                "raw_text": f"{cit.get('doc_id') or cit.get('doc_label') or ''} のJPファミリー",
+                "para_id": "ISR family",
+                "label": label,
+                "source": "isr_family",
+                "family_of": cit.get("doc_id", ""),
+                "isr_num": family_num,
+                "category": cit.get("category", ""),
+                "claims": cit.get("claims", ""),
+            })
+            ref_no += 1
+    return refs
 
 
 def download_and_register_hongan_refs(case_id, ref_nos=None):
@@ -661,6 +922,7 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
         if not r.get("patent_id"):
             results.append({
                 "ref_no": r["ref_no"], "patent_id": "",
+                "label": r.get("label", f"本願引用{r['ref_no']}"),
                 "success": False, "error": "特許番号が抽出できなかった",
                 "raw_text": r.get("raw_text", ""),
             })
@@ -671,6 +933,7 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
             # (Google Patents は古い特許 / マイナー国の特許で失敗しやすい)
             results.append({
                 "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+                "label": r.get("label", f"本願引用{r['ref_no']}"),
                 "success": False,
                 "error": dl.get("error", "DL 失敗"),
                 "google_patents_url": dl.get("google_patents_url", ""),
@@ -685,11 +948,13 @@ def download_and_register_hongan_refs(case_id, ref_nos=None):
         except Exception as e:
             results.append({
                 "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+                "label": r.get("label", f"本願引用{r['ref_no']}"),
                 "success": False, "error": f"登録失敗: {e}",
             })
             continue
         results.append({
             "ref_no": r["ref_no"], "patent_id": r["patent_id"],
+            "label": r.get("label", f"本願引用{r['ref_no']}"),
             "success": (up_code == 200),
             "doc_id": up_res.get("doc_id"),
             "warning": up_res.get("warning"),
@@ -1421,6 +1686,7 @@ def create_bookmarked_hongan(case_id):
     import fitz
     from modules.pdf_bookmark import apply_toc
     from modules.hongan_annotator import apply_hongan_annotations
+    from modules.pdf_annotation_meta import write_annotation_meta
 
     case_dir = get_case_dir(case_id)
 
@@ -1520,6 +1786,14 @@ def create_bookmarked_hongan(case_id):
                     "\n既存の本願PDFを開いている PDF ビューア (PDF-XChange Editor 等) を閉じてから再試行してください"
                 )
             }, 500
+
+    write_annotation_meta(
+        out_pdf,
+        case_id=case_id,
+        kind="hongan",
+        case_dir=case_dir,
+        source_pdf=str(src_pdf),
+    )
 
     return {
         "success": True,
