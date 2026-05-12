@@ -29,6 +29,11 @@ def test_model_aliases_resolve_to_expected_providers():
     assert cc.model_provider("glm-opus") == "glm"
     assert cc.resolve_model("glm-sonnet") == "glm-5-turbo"
     assert cc.resolve_model("glm-haiku") == "glm-4.5-air"
+    assert cc.resolve_model("local-ai") == "qwen2.5:7b-instruct"
+    assert cc.model_provider("local-ai") == "local"
+    assert cc.resolve_model("local-gemma4-e2b") == "gemma4:e2b"
+    assert cc.resolve_model("ollama:qwen2.5:14b") == "qwen2.5:14b"
+    assert cc.model_provider("ollama:qwen2.5:14b") == "local"
     assert cc.resolve_model("openai:gpt-5.5") == "gpt-5.5"
     assert cc.model_provider("openai:gpt-5.5") == "codex"
     assert cc.model_provider("glm:glm-5") == "glm"
@@ -97,6 +102,41 @@ def test_call_claude_routes_glm_to_zai(monkeypatch):
     assert payload["model"] == "glm-5.1"
     assert "thinking" not in payload
     assert timeout == 9
+
+
+def test_call_claude_routes_local_ai_to_ollama(monkeypatch):
+    monkeypatch.setattr(cc, "is_local_ai_available", lambda: True)
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append((url, json, timeout))
+        return _Resp({"response": "要約しました。"})
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    out = cc.call_claude("hello", model="local-ai", effort="low", timeout=9)
+
+    assert out == "要約しました。"
+    url, payload, timeout = calls[0]
+    assert url == "http://127.0.0.1:11434/api/generate"
+    assert payload["model"] == "qwen2.5:7b-instruct"
+    assert payload["prompt"] == "hello"
+    assert payload["stream"] is False
+    assert timeout == 9
+
+
+def test_call_claude_local_ai_missing_model_is_classified(monkeypatch):
+    monkeypatch.setattr(cc, "is_local_ai_available", lambda: True)
+
+    def fake_post(url, json=None, timeout=None):
+        return _Resp({}, status_code=404, text='{"error":"model not found"}')
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    with pytest.raises(cc.ClaudeExecutionError) as ei:
+        cc.call_claude("hello", model="local-qwen14b", effort="low", timeout=9)
+
+    assert "Ollama モデル 'qwen2.5:14b' が見つかりません" in str(ei.value)
 
 
 def test_glm_retries_without_verify_on_ssl_error(monkeypatch):

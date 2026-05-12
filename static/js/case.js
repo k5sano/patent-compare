@@ -28,6 +28,10 @@ const _MODEL_OPTIONS = [
   { group: 'GLM', value: 'glm-sonnet', label: 'GLM-5-Turbo (バランス)', scopes: ['text'] },
   { group: 'GLM', value: 'glm-fast', label: 'GLM-4.7 (高速・低コスト)', scopes: ['text'] },
   { group: 'GLM', value: 'glm-haiku', label: 'GLM-4.5-Air (最軽量)', scopes: ['text'] },
+  { group: 'Local AI (Ollama)', value: 'local-ai', label: 'Qwen2.5 7B (軽作業)', scopes: ['text'] },
+  { group: 'Local AI (Ollama)', value: 'local-qwen14b', label: 'Qwen2.5 14B (軽作業・高め)', scopes: ['text'] },
+  { group: 'Local AI (Ollama)', value: 'local-coder14b', label: 'Qwen2.5 Coder 14B (コード下書き)', scopes: ['text'] },
+  { group: 'Local AI (Ollama)', value: 'local-gemma4-e2b', label: 'Gemma4 e2b (軽作業・検証用)', scopes: ['text'] },
 ];
 
 let _LLM_STATUS = null;
@@ -36,6 +40,7 @@ function _modelStorageKey(key) { return `pc-model:${key}`; }
 
 function _modelProvider(value) {
   if (!value) return 'claude';
+  if (value === 'local' || value === 'local-ai' || value.startsWith('local-') || value.startsWith('ollama-')) return 'local';
   if (value.startsWith('codex-') || value.startsWith('openai-')) return 'codex';
   if (value.startsWith('glm-')) return 'glm';
   return 'claude';
@@ -45,6 +50,7 @@ function _modelProviderAvailable(provider) {
   if (!_LLM_STATUS) return true;
   if (provider === 'codex') return !!_LLM_STATUS.codex_available;
   if (provider === 'glm') return !!_LLM_STATUS.glm_available;
+  if (provider === 'local') return !!_LLM_STATUS.local_available;
   return !!_LLM_STATUS.claude_available;
 }
 
@@ -52,6 +58,7 @@ function _modelUnavailableSuffix(provider) {
   if (!_LLM_STATUS || _modelProviderAvailable(provider)) return '';
   if (provider === 'glm') return '（ZAI_API_KEY未読込）';
   if (provider === 'codex') return '（Codex未利用）';
+  if (provider === 'local') return '（Ollama未起動）';
   return '（Claude未利用）';
 }
 

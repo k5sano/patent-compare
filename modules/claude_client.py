@@ -3,7 +3,8 @@
 """LLM 呼び出しラッパー。
 
 Claude は Claude Code CLI、Codex は ChatGPT ログイン済みの Codex CLI、
-GLM は API で呼び出す。既存コードとの互換のため関数名 call_claude は残す。
+GLM は API、local-ai は Ollama で呼び出す。既存コードとの互換のため
+関数名 call_claude は残す。
 """
 
 import os
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 DEFAULT_TIMEOUT = 600  # 10分
+DEFAULT_LOCAL_AI_MODEL = "qwen2.5:7b-instruct"
 
 
 def _requests_post_with_tls_fallback(url, **kwargs):
@@ -155,6 +157,20 @@ def _load_zai_base_url():
     )
 
 
+def _load_local_ai_base_url():
+    return (
+        _load_config_value("LOCAL_AI_BASE_URL", "OLLAMA_BASE_URL")
+        or "http://127.0.0.1:11434"
+    )
+
+
+def _load_local_ai_model():
+    return (
+        _load_config_value("LOCAL_AI_MODEL", "OLLAMA_MODEL")
+        or DEFAULT_LOCAL_AI_MODEL
+    )
+
+
 def _build_mcp_config():
     """MCP検索サーバーの設定JSONを一時ファイルに書き出し、パスを返す。
     Playwright直接検索はSerpAPIキー不要で動作する。
@@ -197,6 +213,15 @@ def is_glm_available():
     return bool(_load_zai_api_key())
 
 
+def is_local_ai_available():
+    base_url = _load_local_ai_base_url().rstrip("/")
+    try:
+        resp = requests.get(f"{base_url}/api/tags", timeout=2)
+        return resp.status_code < 400
+    except requests.RequestException:
+        return False
+
+
 # UI / API パラメータで受け取るエイリアスをフルモデル ID に解決する。
 # CLI が直接エイリアス受け付けに対応する版もあるが、ここでは安全のため明示的にマップ。
 MODEL_ALIASES = {
@@ -226,6 +251,15 @@ MODEL_ALIASES = {
     "glm-fast": "glm-4.7",
     "glm-haiku": "glm-4.5-air",
     "glm-air": "glm-4.5-air",
+    # Local AI (Ollama): 低リスクな要約・整形・抽出向け
+    "local-ai": DEFAULT_LOCAL_AI_MODEL,
+    "local": DEFAULT_LOCAL_AI_MODEL,
+    "ollama": DEFAULT_LOCAL_AI_MODEL,
+    "local-qwen7b": "qwen2.5:7b-instruct",
+    "local-qwen14b": "qwen2.5:14b",
+    "local-coder14b": "qwen2.5-coder:14b",
+    "local-mistral12b": "mistral-nemo:12b",
+    "local-gemma4-e2b": "gemma4:e2b",
 }
 
 
@@ -237,7 +271,10 @@ def resolve_model(name):
         return None
     if ":" in name:
         provider, raw_model = name.split(":", 1)
-        if provider.lower() in ("claude", "anthropic", "codex", "openai", "glm", "zai", "z.ai"):
+        if provider.lower() in (
+            "claude", "anthropic", "codex", "openai", "glm", "zai", "z.ai",
+            "local", "local-ai", "ollama",
+        ):
             name = raw_model
     return MODEL_ALIASES.get(name, name)
 
@@ -255,7 +292,11 @@ def model_provider(name):
             return "codex"
         if provider in ("glm", "zai", "z.ai"):
             return "glm"
+        if provider in ("local", "local-ai", "ollama"):
+            return "local"
     resolved = (resolve_model(name) or "").lower()
+    if raw.startswith(("local-", "ollama-")) or raw in ("local", "local-ai", "ollama"):
+        return "local"
     if raw.startswith(("codex-", "openai-")):
         return "codex"
     if resolved.startswith(("gpt-", "o1", "o3", "o4")):
@@ -271,17 +312,26 @@ def is_llm_available(model=None):
         return is_codex_available()
     if provider == "glm":
         return is_glm_available()
+    if provider == "local":
+        return is_local_ai_available()
     return is_claude_available()
 
 
 def llm_status():
     return {
-        "available": is_claude_available() or is_codex_available() or is_glm_available(),
+        "available": (
+            is_claude_available()
+            or is_codex_available()
+            or is_glm_available()
+            or is_local_ai_available()
+        ),
         "claude_available": is_claude_available(),
         "codex_available": is_codex_available(),
         # 旧フロント互換: OpenAI系は Codex CLI 経由
         "openai_available": is_codex_available(),
         "glm_available": is_glm_available(),
+        "local_available": is_local_ai_available(),
+        "local_model": _load_local_ai_model(),
         "search_available": is_claude_available() or is_codex_available() or bool(_load_serpapi_key()),
     }
 
@@ -296,6 +346,11 @@ def provider_setup_hint(provider):
         return (
             "Codex CLI と ChatGPT ログインが必要です。"
             "`codex --version` と `codex login` を確認してください。"
+        )
+    if provider == "local":
+        return (
+            "Ollama が必要です。`ollama serve` が起動していること、"
+            "`ollama pull qwen2.5:7b-instruct` が済んでいることを確認してください。"
         )
     return (
         "Claude Code CLI と Claude ログインが必要です。"
@@ -463,9 +518,56 @@ def _call_glm_chat(prompt_text, timeout, use_search, model, effort):
     return response_text
 
 
+def _call_local_ai(prompt_text, timeout, use_search, model, effort):
+    if not is_local_ai_available():
+        raise ClaudeNotFoundError(
+            "Ollama に接続できません。`ollama serve` または Ollama アプリの起動状態を確認してください。"
+        )
+    if use_search:
+        logger.warning("local-ai では検索ツール連携を行わず、通常のLLM呼び出しとして実行します。")
+
+    base_url = _load_local_ai_base_url().rstrip("/")
+    model = model or _load_local_ai_model()
+    payload = {
+        "model": model,
+        "prompt": prompt_text,
+        "stream": False,
+        "keep_alive": "10m",
+        "system": (
+            "あなたは patent-compare のローカル補助AIです。"
+            "低リスクな要約、整形、抽出、下書きだけを担当し、"
+            "不確かな点は断定せず短く明示してください。"
+        ),
+        "options": {
+            "temperature": 0.2,
+        },
+    }
+    logger.info("local-ai(Ollama) 呼び出し: model=%s prompt=%d文字", model, len(prompt_text))
+    try:
+        resp = requests.post(f"{base_url}/api/generate", json=payload, timeout=timeout)
+    except requests.Timeout as e:
+        raise ClaudeTimeoutError(f"local-ai(Ollama) がタイムアウトしました（{timeout}秒）。") from e
+    except requests.RequestException as e:
+        raise ClaudeExecutionError(f"local-ai(Ollama) 呼び出しに失敗しました: {e}") from e
+
+    text = resp.text or ""
+    if resp.status_code == 404:
+        raise ClaudeExecutionError(f"Ollama モデル '{model}' が見つかりません: {text[:300]}")
+    if resp.status_code >= 400:
+        raise ClaudeExecutionError(f"Ollama API エラー {resp.status_code}: {text[:500]}")
+    try:
+        data = resp.json()
+    except ValueError as e:
+        raise ClaudeExecutionError(f"Ollama API 応答形式を解釈できません: {text[:500]}") from e
+    response_text = data.get("response") or ""
+    if not response_text.strip():
+        raise ClaudeExecutionError("local-ai(Ollama) から空の応答が返されました。")
+    return response_text
+
+
 def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=None,
                 effort=DEFAULT_EFFORT):
-    """選択モデルに応じて Claude CLI / Codex CLI / GLM API を呼び出す。
+    """選択モデルに応じて Claude CLI / Codex CLI / GLM API / Ollama を呼び出す。
 
     Parameters:
         prompt_text: プロンプト文字列
@@ -493,6 +595,8 @@ def call_claude(prompt_text, timeout=DEFAULT_TIMEOUT, use_search=False, model=No
         )
     if provider == "glm":
         return _call_glm_chat(prompt_text, timeout, use_search, resolved_model, effort)
+    if provider == "local":
+        return _call_local_ai(prompt_text, timeout, use_search, resolved_model, effort)
 
     if not is_claude_available():
         raise ClaudeNotFoundError(

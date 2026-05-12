@@ -99,7 +99,9 @@ if __name__ == "__main__":
             "LLM status: "
             f"claude={_st.get('claude_available')} "
             f"codex={_st.get('codex_available')} "
-            f"glm={_st.get('glm_available')}"
+            f"glm={_st.get('glm_available')} "
+            f"local={_st.get('local_available')} "
+            f"local_model={_st.get('local_model')}"
         )
     except Exception as e:
         print(f"LLM status: unavailable ({e})")
