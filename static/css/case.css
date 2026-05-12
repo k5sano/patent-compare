@@ -150,6 +150,24 @@
   }
   .ref-mode-btn:hover { border-color: var(--accent); color: #bfdbfe; }
   .ref-mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ref-mode-btn.is-muted { background: #0f172a; color: var(--text2); border-color: rgba(148,163,184,0.35); }
+  .workspace-comp-view {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 28px;
+    padding: 0 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #0f172a;
+    color: var(--text);
+    font-size: 0.74rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .workspace-comp-view span { color: var(--text2); font-size: 0.72rem; }
+  .workspace-comp-view label { display: inline-flex; align-items: center; gap: 0.18rem; cursor: pointer; }
+  .workspace-comp-view input { width: 12px; height: 12px; accent-color: var(--accent); }
   .ref-icon-btn {
     width: 28px;
     height: 28px;
@@ -211,6 +229,11 @@
     background: #111827;
   }
   .ref-panel.active { display: block; }
+  body.workspace-controls-collapsed .ref-switch-row,
+  body.workspace-controls-collapsed .ref-workbar,
+  body.workspace-controls-collapsed .workspace-ref-pane > .ref-panel {
+    display: none !important;
+  }
   .ref-field { display: grid; gap: 0.3rem; margin-bottom: 0.55rem; }
   .ref-field label { font-size: 0.74rem; color: var(--text2); font-weight: 700; }
   .ref-field select { width: 100%; font-size: 0.78rem; padding: 0.34rem 0.45rem; }
@@ -525,9 +548,9 @@
     transition: background 0.12s, box-shadow 0.12s; user-select: none; }
   .kw-tag:hover { background: var(--surface); }
   .kw-tag .kw-term-text { cursor: pointer; padding: 0 1px; }
-  .kw-tag.kw-marked { background: rgba(239, 68, 68, 0.18);
-    box-shadow: inset 0 0 0 1px #ef4444; }
-  .kw-tag.kw-marked .kw-term-text { color: #fca5a5; font-weight: 700; }
+  .kw-tag.kw-marked { background: var(--kw-group-bg, rgba(239, 68, 68, 0.18));
+    box-shadow: inset 0 0 0 1px var(--kw-group-color, #ef4444); }
+  .kw-tag.kw-marked .kw-term-text { color: var(--kw-group-text, var(--text)); font-weight: 700; }
   .kw-tag.kw-marked .badge { filter: brightness(1.1); }
 
   .fterm-tag { font-size: 0.75rem; padding: 1px 6px; background: #1e3a5f;
@@ -536,18 +559,18 @@
     transition: background 0.12s, box-shadow 0.12s; }
   .fterm-tag .fterm-desc { color: var(--text2); }
   .fterm-tag:hover { background: #1e4a7f; }
-  .fterm-tag.kw-marked { background: rgba(239, 68, 68, 0.22);
-    color: #fecaca; box-shadow: inset 0 0 0 1px #ef4444; }
-  .fterm-tag.kw-marked .fterm-desc { color: #fca5a5; }
+  .fterm-tag.kw-marked { background: var(--kw-group-bg, rgba(239, 68, 68, 0.22));
+    color: var(--kw-group-text, var(--text)); box-shadow: inset 0 0 0 1px var(--kw-group-color, #ef4444); }
+  .fterm-tag.kw-marked .fterm-desc { color: var(--kw-group-text-muted, var(--text2)); }
   .fi-tag { font-size: 0.75rem; padding: 1px 6px; background: #064e3b;
     color: #6ee7b7; border-radius: 4px; margin: 1px; display: inline-flex;
     align-items: center; gap: 3px; cursor: pointer; user-select: none;
     transition: background 0.12s, box-shadow 0.12s; }
   .fi-tag .fi-desc { color: var(--text2); }
   .fi-tag:hover { background: #065f46; }
-  .fi-tag.kw-marked { background: rgba(239, 68, 68, 0.22);
-    color: #fecaca; box-shadow: inset 0 0 0 1px #ef4444; }
-  .fi-tag.kw-marked .fi-desc { color: #fca5a5; }
+  .fi-tag.kw-marked { background: var(--kw-group-bg, rgba(239, 68, 68, 0.22));
+    color: var(--kw-group-text, var(--text)); box-shadow: inset 0 0 0 1px var(--kw-group-color, #ef4444); }
+  .fi-tag.kw-marked .fi-desc { color: var(--kw-group-text-muted, var(--text2)); }
   .kw-del { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 0.85rem;
             padding: 0 2px; line-height: 1; border-radius: 50%; transition: all 0.15s; }
   .kw-del:hover { color: var(--red); background: rgba(239,68,68,0.15); }
@@ -1211,12 +1234,19 @@
   /* Step 6: 対比表（列ON/OFF / 詳細・充足 / XYA） */
   .comp-summary-outer { margin-bottom: 1.5rem; }
   .comp-summary-toolbar { display: flex; flex-direction: column; gap: 0.3rem; margin-bottom: 0.75rem; }
+  .comp-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; }
+  .comp-colbar-toggle { font-size: 0.76rem; font-weight: 700; padding: 0.25rem 0.65rem;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface2);
+    color: var(--text); cursor: pointer; }
+  .comp-colbar-toggle:hover { border-color: var(--accent); color: #bfdbfe; }
+  .comp-colbar-toggle.is-muted { background: #0f172a; color: var(--text2); }
   .comp-toolbar-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.2rem; }
   .comp-toolbar-lbl { font-size: 0.8rem; color: var(--text2); font-weight: 600; }
   .comp-radio-lbl { font-size: 0.86rem; color: var(--text); display: inline-flex; align-items: center; gap: 0.25rem; cursor: pointer; }
   .comp-toolbar-hint { max-width: 48rem; }
   .comp-summary-colbar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.4rem; padding: 0.5rem 0.6rem;
     background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; }
+  body.comp-colbar-collapsed .comp-summary-colbar { display: none; }
   .comp-colbar-row1 { display: flex; width: 100%; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.2rem; }
   .comp-colbar-lbl { font-size: 0.78rem; color: var(--text2); font-weight: 600; }
   .comp-colbar-quick { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
@@ -1240,10 +1270,24 @@
   .comp-col-chip input { width: 14px; height: 14px; accent-color: var(--accent); }
   .comp-col-chip-name { max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .comp-cat.comp-cat-inline { font-size: 0.7rem; padding: 1px 5px; border-radius: 4px; min-width: 1.1rem; text-align: center; }
-  .comp-summary-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .comp-summary-scroll {
+    max-height: min(70vh, calc(100vh - 260px));
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+  }
   .comp-summary-table { width: 100%; min-width: 400px; border-collapse: collapse; }
   .comp-summary-table th, .comp-summary-table td { border: 1px solid var(--border); padding: 0.4rem 0.5rem; vertical-align: top; }
-  .comp-summary-table thead th { background: var(--surface2); font-weight: 600; vertical-align: top; }
+  .comp-summary-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: var(--surface2);
+    font-weight: 600;
+    vertical-align: top;
+    box-shadow: 0 2px 0 var(--border), 0 8px 18px rgba(0,0,0,0.22);
+  }
+  body.compact-ref .comp-summary-scroll { max-height: calc(100vh - 150px); }
   .comp-th-cit { min-width: 6rem; text-align: center; }
   .comp-th-cit-line1 { font-size: 0.86rem; font-weight: 600; line-height: 1.3; text-align: center; word-break: break-word; }
   .comp-th-cat { margin-top: 0.25rem; }
@@ -1255,7 +1299,8 @@
   .comp-cat-na { background: var(--surface2); color: var(--text2); font-weight: 500; }
   .comp-td-zen { text-align: center; font-size: 1.05em; }
   .comp-cite-loc { color: var(--text2); font-size: 0.75rem; }
-  .comp-cite-comment { color: #fbbf24; font-size: 0.72rem; font-style: italic; }
+  .comp-cite-comment { color: var(--text); font-size: 0.72rem; font-style: italic; }
+  .comp-cite-comment .pc-important-term { font-style: normal; }
   .comp-copy-btn { display: inline-block; margin-top: 4px; padding: 2px 6px;
                    font-size: 0.7rem; line-height: 1.2; cursor: pointer;
                    background: var(--surface); color: var(--text2);
@@ -1320,13 +1365,19 @@
   .comp-para-popup-loading { color: var(--text2); font-size: 0.82rem; font-style: italic; }
   .comp-para-popup-err { color: #fca5a5; font-size: 0.85rem; }
 
-  /* Step 4.5 ヒットカード PKM 風キーワードハイライト */
-  mark.pkm-mark { background: color-mix(in srgb, var(--c, #f87171) 22%, transparent);
-    color: var(--c, #f87171); padding: 0 2px; border-radius: 3px;
-    font-weight: 600; box-shadow: inset 0 -1px 0 var(--c, #f87171); }
+  /* 統一強調ルール: PDF と同じキーワード色を 40% 透過で塗る */
+  mark.pkm-mark, mark.pc-keyword-highlight {
+    background: var(--pc-hl-bg, color-mix(in srgb, var(--c, #f87171) 40%, transparent));
+    color: inherit; padding: 0 2px; border-radius: 3px;
+    font-weight: 600; box-shadow: inset 0 -1px 0 var(--c, #f87171);
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  }
+  .pc-important-term { color: #f87171; font-weight: 700; background: transparent; }
+  .pc-user-underline { text-decoration: underline; text-decoration-color: #f87171;
+    text-decoration-thickness: 2px; text-underline-offset: 2px; }
   /* color-mix 未対応ブラウザ用フォールバック */
   @supports not (background: color-mix(in srgb, red 50%, transparent)) {
-    mark.pkm-mark { background: rgba(248, 113, 113, 0.22); }
+    mark.pkm-mark, mark.pc-keyword-highlight { background: var(--pc-hl-bg, rgba(248, 113, 113, 0.4)); }
   }
   .sr-pkm-counts { display: flex; flex-wrap: wrap; gap: 4px; margin: 0.4rem 0 0.2rem; }
   .sr-pkm-chip { display: inline-flex; align-items: center; gap: 4px;

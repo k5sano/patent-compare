@@ -1,0 +1,25 @@
+name: AGENTS.md sync
+
+on:
+  pull_request:
+    paths:
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - ".github/workflows/agents-md-sync.yml"
+      - "scripts/sync_agents_md.py"
+  push:
+    branches:
+      - master
+    paths:
+      - "CLAUDE.md"
+      - "AGENTS.md"
+      - ".github/workflows/agents-md-sync.yml"
+      - "scripts/sync_agents_md.py"
+
+jobs:
+  check-agents-md-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure AGENTS.md matches CLAUDE.md
+        run: diff -u CLAUDE.md AGENTS.md

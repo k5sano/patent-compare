@@ -5,10 +5,12 @@ import json
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.cell.rich_text import CellRichText, TextBlock
 
 from services.comparison_service import (
     check_segments_freshness,
     export_excel,
+    export_full_report,
     generate_prompt_single,
     save_response_single,
 )
@@ -126,6 +128,97 @@ def test_export_excel_expected_cells_are_stable(copy_case_fixture):
     assert ws["A11"].value == "1B"
     assert ws["B11"].value == "成分Bを含む"
     assert ws["C12"].value == "段落0011に成分Bが記載されている。\n[段落【0011】]"
+
+
+def test_export_excel_highlights_comment_terms(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    resp_path = case_dir / "responses" / "JP2030000002A.json"
+    response = json.loads(resp_path.read_text(encoding="utf-8"))
+    response["comparisons"][0]["cited_location"] = "10;/成分Aと未知語"
+    resp_path.write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result, code = export_excel("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"], rich_text=True)["対比表"]
+    value = ws["C10"].value
+    assert isinstance(value, CellRichText)
+    assert "（備考: 成分Aと未知語）" in str(value)
+    blocks = [b for b in value if isinstance(b, TextBlock)]
+    assert any(b.text == "成分A" and b.font.color.rgb == "00FF9999" for b in blocks)
+    assert not any("未知語" in b.text and b.font.color.rgb == "00EF4444" for b in blocks)
+
+
+def test_export_excel_highlights_judgment_reason_terms(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    resp_path = case_dir / "responses" / "JP2030000002A.json"
+    response = json.loads(resp_path.read_text(encoding="utf-8"))
+    response["comparisons"][0]["judgment_reason"] = "成分Aは記載されるが未知語は登録語ではない。"
+    resp_path.write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result, code = export_excel("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"], rich_text=True)["対比表"]
+    value = ws["C10"].value
+    assert isinstance(value, CellRichText)
+    blocks = [b for b in value if isinstance(b, TextBlock)]
+    assert any(b.text == "成分A" and b.font.color.rgb == "00FF9999" for b in blocks)
+    assert not any("未知語" in b.text and b.font.color.rgb == "00EF4444" for b in blocks)
+
+
+def test_export_excel_paste_sheet_uses_compact_notation(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    resp_path = case_dir / "responses" / "JP2030000002A.json"
+    response = json.loads(resp_path.read_text(encoding="utf-8"))
+    response["comparisons"][0]["judgment"] = "×"
+    response["comparisons"][0]["cited_location"] = "10;/備考メモ;//防備録"
+    resp_path.write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result, code = export_excel("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"])["ペースト用"]
+    assert ws["C3"].value == "x10/備考メモ"
+
+
+def test_export_full_report_highlights_inventive_step_terms(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    inv = {
+        "overall_assessment": {
+            "inventive_step": "なし",
+            "reasoning": "成分Aと未知語を組み合わせても容易想到である。",
+        },
+        "primary_reference": {
+            "document_id": "JP2030000002A",
+            "selection_reason": "成分Bを含む主引用発明である。",
+        },
+    }
+    (case_dir / "inventive_step.json").write_text(
+        json.dumps(inv, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result, code = export_full_report("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"], rich_text=True)["進歩性判断"]
+    rich_values = [
+        cell.value
+        for row in ws.iter_rows()
+        for cell in row
+        if isinstance(cell.value, CellRichText)
+    ]
+    assert rich_values
+    blocks = [
+        block
+        for value in rich_values
+        for block in value
+        if isinstance(block, TextBlock)
+    ]
+    assert any(block.text == "成分A" and block.font.color.rgb == "00FF9999" for block in blocks)
+    assert any(block.text == "成分B" and block.font.color.rgb == "00FF9999" for block in blocks)
+    assert not any("未知語" in block.text and block.font.color.rgb == "00EF4444" for block in blocks)
 
 
 def test_check_segments_freshness_clean_fixture(copy_case_fixture):

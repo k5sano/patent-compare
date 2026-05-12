@@ -51,6 +51,17 @@ def opd_dossier_collect(case_id):
     return jsonify(result), (200 if result.get("ok") else 400)
 
 
+@bp.route("/case/<case_id>/dossier/opd/collect-process", methods=["POST"])
+def opd_dossier_collect_process(case_id):
+    """OPD収集から添付PDF保存/OCR、翻訳・要約まで一気通貫で実行する。"""
+    from services.opd_dossier_service import collect_process_and_summarize
+    data = request.get_json(silent=True) or {}
+    return _svc_response(collect_process_and_summarize(
+        case_id,
+        model=data.get("model"),
+    ))
+
+
 @bp.route("/case/<case_id>/dossier/opd/index", methods=["GET"])
 def opd_dossier_index(case_id):
     from services.opd_dossier_service import load_opd_index

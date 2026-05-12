@@ -91,6 +91,15 @@ _SHOW_ALL_CITATION_LABELS = [
     "すべての分類・引用情報を表示",
     "Show all classification/citation information",
 ]
+_OPD_EXPANDED_MARKERS = [
+    "書類情報を全て閉じる",
+    "書類情報をすべて閉じる",
+    "添付書類",
+    "Attached Document",
+    "International Preliminary",
+    "International Search Report",
+    "原文PDF一括",
+]
 
 _SCRAPE_SELECTORS = [
     "table tbody tr",
@@ -271,6 +280,16 @@ def _has_downloadable_attachment(target: dict) -> bool:
     return False
 
 
+def _is_wo_original_downloadable(target: dict) -> bool:
+    """WO/PCT dossier rows often expose the real document on the row itself."""
+    if target.get("kind") not in ("ISR", "IPER"):
+        return False
+    text = target.get("label") or target.get("text") or ""
+    if re.search(r"国内書面|National\s+Entry|受理書類", text, re.I):
+        return False
+    return bool(re.search(r"発送書類|ノート/サーチ|Copy\s+of\s+the\s+international", text, re.I))
+
+
 def _downloadable_rejection_targets(targets: list[dict]) -> tuple[list[dict], list[dict]]:
     downloadable = []
     skipped = []
@@ -278,6 +297,12 @@ def _downloadable_rejection_targets(targets: list[dict]) -> tuple[list[dict], li
         if target.get("kind") not in _REJECTION_KINDS:
             continue
         if _has_downloadable_attachment(target):
+            target = dict(target)
+            target.setdefault("preferred_source", "attachment")
+            downloadable.append(target)
+        elif _is_wo_original_downloadable(target):
+            target = dict(target)
+            target["preferred_source"] = "original_if_no_attachment"
             downloadable.append(target)
         else:
             skipped.append({
@@ -286,9 +311,36 @@ def _downloadable_rejection_targets(targets: list[dict]) -> tuple[list[dict], li
                 "date": target.get("date") or _extract_doc_date(target.get("label") or target.get("text") or ""),
                 "success": False,
                 "skipped": True,
-                "error": "OPD上で安全に取得できる添付書類行を検出できませんでした。原文/英訳リンクは表紙や別書類の場合があるため、手動取込を使ってください。",
+                "error": "OPD上で添付PDFの実体行をまだ特定できませんでした。原文/英訳リンクは表紙や別書類の場合があるため、自動取得対象から外しました。",
             })
     return downloadable, skipped
+
+
+def _download_key(item: dict) -> tuple[str, str]:
+    label = item.get("label") or item.get("text") or ""
+    return (item.get("kind") or "", item.get("date") or _extract_doc_date(label))
+
+
+def _suppress_covered_skipped_downloads(downloads: list[dict]) -> list[dict]:
+    """Hide skipped OPD candidates covered by a successful same-kind/date PDF."""
+    success_keys = {
+        _download_key(item)
+        for item in downloads
+        if item.get("success") and item.get("kind")
+    }
+    success_kinds = {
+        item.get("kind")
+        for item in downloads
+        if item.get("success") and item.get("kind")
+    }
+    filtered = []
+    for item in downloads:
+        if item.get("skipped"):
+            key = _download_key(item)
+            if key in success_keys or (not key[1] and key[0] in success_kinds):
+                continue
+        filtered.append(item)
+    return filtered
 
 
 def save_opd_index(case_id: str, payload: dict) -> Path:
@@ -529,6 +581,7 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
     items: list[dict] = []
     seen: set[str] = set()
     covered_opd_document_keys: set[str] = set()
+    covered_opd_kinds: set[str] = set()
 
     for report in data.get("opd_pdf_reports") or []:
         text = report.get("box_v") or report.get("raw_text") or ""
@@ -539,6 +592,10 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
         if kind in ("IPER", "WOSA") or kind in _REJECTION_KINDS or re.search(r"IPER|Written Opinion|書面意見|予備報告|Rejection|Office Action|拒絶理由", label, re.I):
             cover_kind = "IPER" if kind == "WOSA" and re.search(r"International Preliminary Report|予備報告|IPER", label, re.I) else kind
             covered_opd_document_keys.update(_rejection_cover_keys(cover_kind, label, report.get("date", "")))
+            if kind:
+                covered_opd_kinds.add(kind)
+            if cover_kind:
+                covered_opd_kinds.add(cover_kind)
 
     def add_item(kind: str, label: str, *, source: str, text: str = "", date: str = "", note: str = "") -> None:
         label = re.sub(r"\s+", " ", label or "").strip()
@@ -611,7 +668,9 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
         if form not in ("IPER", "WOSA"):
             continue
         label = report.get("filename") or form
-        text = report.get("box_v") or ""
+        text = _search_report_rejection_text(case_id, report)
+        if not text.strip() and (form in covered_opd_kinds or (form == "WOSA" and "IPER" in covered_opd_kinds)):
+            continue
         add_item(form, label, source="search_report", text=text)
         if report.get("box_v_summary"):
             item_id = _rejection_doc_id(form, label, "search_report")
@@ -620,6 +679,25 @@ def _build_rejection_documents(case_id: str, data: dict) -> list[dict]:
 
     items.sort(key=lambda x: (0 if x["status"] == "summarized" else 1 if x["has_text"] else 2, x.get("kind", ""), x.get("date", ""), x.get("label", "")))
     return items
+
+
+def _search_report_rejection_text(case_id: str, report: dict) -> str:
+    """Return WOSA/IPER text from cached metadata or the saved PDF itself."""
+    text = report.get("box_v") or report.get("raw_text") or ""
+    if text.strip():
+        return text
+    filename = report.get("filename") or ""
+    if not filename:
+        return ""
+    pdf_path = get_case_dir(case_id) / "search_reports" / filename
+    if not pdf_path.exists() or pdf_path.suffix.lower() != ".pdf":
+        return ""
+    try:
+        from modules.search_report_parser import parse_search_report
+        parsed = parse_search_report(str(pdf_path))
+    except Exception:
+        return ""
+    return parsed.get("box_v") or parsed.get("raw_text") or ""
 
 
 def get_rejection_documents(case_id: str) -> tuple[dict, int]:
@@ -692,6 +770,55 @@ def summarize_rejection_documents(case_id: str, model: str | None = None, force:
         "documents": refreshed.get("rejection_documents") or [],
         "opd_timing": timing_payload,
     }, 200
+
+
+def collect_process_and_summarize(case_id: str, model: str | None = None) -> tuple[dict, int]:
+    """One-shot OPD flow: collect visible OPD data, save/OCR attachments, then summarize."""
+    sess = get_session()
+    collect_result = sess.collect(case_id, timeout=90)
+    if not collect_result.get("ok"):
+        return collect_result, 400
+
+    targets = collect_result.get("targets") or []
+    target_indices = [
+        idx for idx, target in enumerate(targets)
+        if target.get("kind") in _REJECTION_KINDS and _has_downloadable_attachment(target)
+    ]
+    download_result = {
+        "ok": True,
+        "downloads": [],
+        "skipped": "downloadable OPD attachments not found",
+    }
+    if target_indices:
+        download_result = sess.download_rejection_pdfs(case_id, target_indices=target_indices, timeout=240)
+
+    summary_result, summary_code = summarize_rejection_documents(case_id, model=model)
+    refreshed, refresh_code = load_opd_index(case_id)
+    if refresh_code != 200:
+        refreshed = {}
+
+    payload = {
+        **refreshed,
+        "ok": True,
+        "collect_result": collect_result,
+        "download_result": download_result,
+        "summary_result": summary_result,
+        "auto_process": {
+            "target_count": len(targets),
+            "downloadable_count": len(target_indices),
+            "download_ok": bool(download_result.get("ok")),
+            "download_success_count": sum(1 for d in (download_result.get("downloads") or []) if d.get("success")),
+            "summary_code": summary_code,
+            "summary_success_count": sum(1 for r in (summary_result.get("results") or []) if r.get("status") in ("summarized", "cached")),
+            "summary_waiting_count": sum(1 for r in (summary_result.get("results") or []) if r.get("status") == "needs_pdf_ocr"),
+            "summary_error_count": sum(1 for r in (summary_result.get("results") or []) if r.get("status") == "error"),
+        },
+    }
+    if not download_result.get("ok"):
+        payload["auto_process"]["download_error"] = download_result.get("error", "")
+    if summary_code != 200 or summary_result.get("error"):
+        payload["auto_process"]["summary_error"] = summary_result.get("error", "")
+    return payload, 200
 
 
 def ingest_opd_pdf_file(case_id: str, src_path: str | Path, *, label: str = "", kind: str = "") -> tuple[dict, int]:
@@ -1066,7 +1193,14 @@ class OpdDossierSession:
         self._started_at = 0.0
 
     def is_alive(self) -> bool:
-        return self._running and self._thread is not None and self._thread.is_alive()
+        if not (self._running and self._thread is not None and self._thread.is_alive()):
+            return False
+        try:
+            if self._browser is not None and not self._browser.is_connected():
+                return False
+        except Exception:
+            pass
+        return True
 
     def open(self, case_id: str, *, timeout: int = 60) -> dict:
         if not self.is_alive():
@@ -1167,7 +1301,7 @@ class OpdDossierSession:
         if not targets:
             return {
                 "ok": False,
-                "error": "収集結果の中に安全に自動保存できるOPD添付書類がありません。対象行に添付がない場合は、OPDで対象PDFを開いて保存し、PDF手動取込を使ってください。",
+                "error": "収集結果の中に自動保存できるOPD添付PDFの実体行がありません。OPDで「書類情報を全て開く」後に再収集してください。",
                 "downloads": skipped,
                 "opd_timing": _finish_opd_timing(case_id, timing, status="error", error="no downloadable targets"),
             }
@@ -1207,6 +1341,7 @@ class OpdDossierSession:
             _save_opd_pdf_reports(case_id, reports)
             refreshed, _ = load_opd_index(case_id)
             _add_timing_step(timing, "save", save_t0, reports=len(reports))
+            result["downloads"] = _suppress_covered_skipped_downloads(result.get("downloads") or [])
             result["rejection_documents"] = refreshed.get("rejection_documents") or []
             result["opd_timing"] = _finish_opd_timing(
                 case_id,
@@ -1322,45 +1457,92 @@ class OpdDossierSession:
             return {"ok": True, "url": self._page.url if self._page else ""}
         return {"ok": False, "error": f"unknown op: {op}"}
 
+    def _ensure_active_page(self):
+        """Return a usable page, recreating it after the user closes the OPD tab."""
+        browser = getattr(self, "_browser", None)
+        if browser is None or not browser.is_connected():
+            raise RuntimeError("OPDブラウザが閉じています。もう一度「OPDを開く」を押してください。")
+        if getattr(self, "_ctx", None) is None:
+            self._ctx = browser.new_context(
+                locale="ja-JP",
+                viewport={"width": 1280, "height": 900},
+                accept_downloads=True,
+            )
+        page_closed = True
+        if self._page is not None:
+            try:
+                page_closed = bool(self._page.is_closed())
+            except Exception:
+                page_closed = True
+        if page_closed:
+            try:
+                self._page = self._ctx.new_page()
+            except Exception:
+                self._ctx = browser.new_context(
+                    locale="ja-JP",
+                    viewport={"width": 1280, "height": 900},
+                    accept_downloads=True,
+                )
+                self._page = self._ctx.new_page()
+        return self._page
+
     def _op_open_opd(self, url: str, patent_number: str) -> dict:
-        page = self._page
+        page = self._ensure_active_page()
         page.goto(url, wait_until="domcontentloaded", timeout=45000)
         page.wait_for_timeout(1200)
         _dismiss_modals(page)
         clicked = _click_first_visible(page, _OPD_SELECTORS, timeout=1200)
         if clicked:
             try:
-                page.wait_for_timeout(2500)
-                if self._ctx.pages:
-                    self._page = self._ctx.pages[-1]
-                    page = self._page
+                page = self._wait_for_opd_page(timeout_ms=30000) or page
             except Exception:
                 pass
             _dismiss_modals(page)
+        page = self._select_opd_page() or page
+        _wait_for_opd_app_ready(page)
+        expanded_on_open = False
+        citation_info_expanded_on_open = False
+        if clicked or "/h0200" in (page.url or ""):
+            _dismiss_modals(page)
+            expanded_on_open = _click_expand_all_documents(page)
+            if expanded_on_open:
+                _wait_for_opd_text(page, _OPD_EXPANDED_MARKERS, timeout_ms=15000)
+            citation_info_expanded_on_open = _click_show_all_citation_info(page)
+            if citation_info_expanded_on_open:
+                _wait_for_opd_text(page, ["引用情報", "分類情報", "Citation"], timeout_ms=8000)
         return {
             "ok": True,
             "url": page.url,
             "patent_number": patent_number,
             "opd_clicked": bool(clicked),
+            "expanded_on_open": bool(expanded_on_open),
+            "citation_info_expanded_on_open": bool(citation_info_expanded_on_open),
             "hint": "" if clicked else "OPDボタンの自動クリックに失敗しました。ブラウザ側でOPDを開いてから「OPD書類を収集」を押してください。",
         }
 
     def _op_collect(self) -> dict:
-        page = self._page
+        self._ensure_active_page()
+        page = self._select_opd_page() or self._page
+        _wait_for_opd_app_ready(page)
         _dismiss_modals(page)
         expanded = _click_expand_all_documents(page)
+        expanded_by_click = bool(expanded)
         if expanded:
-            page.wait_for_timeout(2500)
+            _wait_for_opd_text(page, _OPD_EXPANDED_MARKERS, timeout_ms=15000)
         citation_expanded = _click_show_all_citation_info(page)
+        citation_expanded_by_click = bool(citation_expanded)
         if citation_expanded:
-            page.wait_for_timeout(2000)
+            _wait_for_opd_text(page, ["引用情報", "分類情報", "Citation"], timeout_ms=8000)
         documents = _scrape_documents(page)
         page_text = _scrape_page_text(page)
         citation_info_texts = _scrape_citation_info_texts(page)
+        expanded_by_content = _documents_look_expanded(documents)
+        if expanded_by_content:
+            expanded = True
         targets = [d for d in documents if d.get("target")]
         targets.sort(key=lambda d: (-int(d.get("priority") or 0), d.get("kind", ""), d.get("label", "")))
         warnings = []
-        if not expanded and not _documents_look_expanded(documents):
+        if not expanded:
             warnings.append("「書類情報を全て開く」ボタンを自動クリックできませんでした。未展開なら手動で開いて再収集してください。")
         if not targets:
             warnings.append("対象書類候補が見つかりませんでした。OPD画面が開かれているか確認してください。")
@@ -1374,7 +1556,10 @@ class OpdDossierSession:
             "ok": True,
             "url": page.url,
             "expanded": bool(expanded),
+            "expanded_by_click": expanded_by_click,
+            "expanded_by_content": expanded_by_content,
             "citation_info_expanded": bool(citation_expanded),
+            "citation_info_expanded_by_click": citation_expanded_by_click,
             "page_text": page_text,
             "citation_info_texts": citation_info_texts,
             "documents": documents,
@@ -1384,11 +1569,13 @@ class OpdDossierSession:
         }
 
     def _op_download_rejection_pdfs(self, case_id: str, targets: list[dict]) -> dict:
-        page = self._page
+        self._ensure_active_page()
+        page = self._select_opd_page() or self._page
+        _wait_for_opd_app_ready(page)
         _dismiss_modals(page)
         expanded = _click_expand_all_documents(page)
         if expanded:
-            page.wait_for_timeout(2500)
+            _wait_for_opd_text(page, _OPD_EXPANDED_MARKERS, timeout_ms=15000)
             _dismiss_modals(page)
         downloads = []
         for target in targets:
@@ -1404,9 +1591,12 @@ class OpdDossierSession:
                     item["resolved_by"] = "saved_wsh0901_recipe"
                     downloads.append(item)
                     continue
-                row = _find_opd_attachment_row_for_target(page, target)
+                if target.get("preferred_source") == "original_if_no_attachment":
+                    row = _find_opd_row_for_target(page, target)
+                else:
+                    row = _find_opd_attachment_row_for_target(page, target)
                 if row is None:
-                    item["error"] = "OPD画面上で対象の添付書類行を見つけられませんでした"
+                    item["error"] = "OPD画面上で対象のPDF行を見つけられませんでした"
                     downloads.append(item)
                     continue
                 clicked, path = _click_row_pdf_and_capture_download(page, row, case_id, target)
@@ -1422,6 +1612,66 @@ class OpdDossierSession:
                 downloads.append(item)
         return {"ok": True, "downloads": downloads}
 
+    def _select_opd_page(self):
+        """Use the OPD window when J-PlatPat opens h0200 in a separate page."""
+        try:
+            pages = [p for p in list(self._ctx.pages or []) if not p.is_closed()]
+        except Exception:
+            pages = []
+        if not pages:
+            return self._page
+
+        def page_score(p) -> int:
+            try:
+                url = p.url or ""
+            except Exception:
+                url = ""
+            score = 0
+            if "/h0200" in url:
+                score += 100
+            if "opd" in url.lower():
+                score += 30
+            try:
+                title = p.title(timeout=500)
+            except Exception:
+                title = ""
+            if re.search(r"OPD|ドシエ|One\s*Portal", title, re.I):
+                score += 20
+            try:
+                body = (p.locator("body").inner_text(timeout=800) or "")[:5000]
+            except Exception:
+                body = ""
+            if "書類情報を全て開く" in body or "書類情報をすべて開く" in body:
+                score += 80
+            if "ワン" in body and "ドシエ" in body:
+                score += 15
+            return score
+
+        ranked = sorted(pages, key=page_score, reverse=True)
+        chosen = ranked[0]
+        if page_score(chosen) <= 0:
+            chosen = pages[-1]
+        self._page = chosen
+        try:
+            chosen.bring_to_front()
+            chosen.wait_for_timeout(500)
+        except Exception:
+            pass
+        return chosen
+
+    def _wait_for_opd_page(self, timeout_ms: int = 30000):
+        """Wait for the OPD h0200 window after clicking the OPD button."""
+        deadline = time.perf_counter() + (timeout_ms / 1000.0)
+        while time.perf_counter() <= deadline:
+            page = self._select_opd_page()
+            try:
+                if page and "/h0200" in (page.url or ""):
+                    return page
+            except Exception:
+                pass
+            time.sleep(0.1)
+        return self._select_opd_page()
+
 
 def _dismiss_modals(page) -> None:
     for sel in _DISMISS_SELECTORS:
@@ -1432,6 +1682,92 @@ def _dismiss_modals(page) -> None:
                 page.wait_for_timeout(300)
         except Exception:
             continue
+
+
+def _wait_for_opd_app_ready(page, timeout_ms: int = 12000) -> None:
+    """Wait until the Angular OPD app has rendered beyond app-root Loading."""
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=3000)
+    except Exception:
+        pass
+    try:
+        page.wait_for_function(
+            """() => {
+                const body = document.body ? document.body.innerText || '' : '';
+                if (!body.trim()) return false;
+                if (body.trim() === 'Loading...') return false;
+                if (body.includes('書類情報を全て開く') || body.includes('書類情報をすべて開く')) return true;
+                return !body.includes('Loading...');
+            }""",
+            timeout=timeout_ms,
+        )
+    except Exception:
+        pass
+    try:
+        page.wait_for_timeout(500)
+    except Exception:
+        pass
+
+
+def _label_variants(labels: list[str]) -> list[str]:
+    variants = []
+    for label in labels or []:
+        label = str(label or "").strip()
+        if not label:
+            continue
+        variants.append(label)
+        if "全て" in label:
+            variants.append(label.replace("全て", "すべて"))
+        if "すべて" in label:
+            variants.append(label.replace("すべて", "全て"))
+        if "･" in label:
+            variants.append(label.replace("･", "・"))
+        if "・" in label:
+            variants.append(label.replace("・", "･"))
+    return list(dict.fromkeys(variants))
+
+
+def _context_inner_text(ctx, timeout: int = 250) -> str:
+    try:
+        return ctx.locator("body").inner_text(timeout=timeout) or ""
+    except Exception:
+        try:
+            return ctx.evaluate("() => document.body ? document.body.innerText || '' : ''") or ""
+        except Exception:
+            return ""
+
+
+def _wait_for_opd_text(page, labels: list[str], *, timeout_ms: int = 30000, interval_ms: int = 100) -> bool:
+    """Wait for concrete OPD text, mirroring J-PlatPat VBA-style readiness waits."""
+    variants = _label_variants(labels)
+    if not variants:
+        return True
+    if not hasattr(page, "locator"):
+        return False
+    deadline = time.perf_counter() + (timeout_ms / 1000.0)
+    while time.perf_counter() <= deadline:
+        for ctx in _iter_playwright_contexts(page):
+            text = _context_inner_text(ctx)
+            compact = re.sub(r"[\s　]+", "", text)
+            for label in variants:
+                if label in text or re.sub(r"[\s　]+", "", label) in compact:
+                    return True
+        time.sleep(max(0.01, interval_ms / 1000.0))
+    return False
+
+
+def _iter_playwright_contexts(page):
+    """Return page + child frames for OPD pages that render controls in frames."""
+    contexts = [page]
+    try:
+        main = getattr(page, "main_frame", None)
+        for frame in getattr(page, "frames", []) or []:
+            if frame is main:
+                continue
+            contexts.append(frame)
+    except Exception:
+        pass
+    return contexts
 
 
 def _click_first_visible(page, selectors: list[str], *, timeout: int) -> bool:
@@ -1465,10 +1801,19 @@ def _documents_look_expanded(documents: list[dict]) -> bool:
 
 def _click_opd_toolbar_button(page, labels: list[str], selectors: list[str]) -> bool:
     """Click OPD toolbar buttons whose visible label may be split across nested nodes."""
-    if _click_first_visible(page, selectors, timeout=1200):
-        return True
-    try:
-        return bool(page.evaluate(
+    _wait_for_opd_text(page, labels, timeout_ms=30000, interval_ms=100)
+    deadline = time.perf_counter() + 30.0
+    while time.perf_counter() <= deadline:
+        contexts = _iter_playwright_contexts(page)
+        for ctx in contexts:
+            if _click_first_visible(ctx, selectors, timeout=700):
+                return True
+        for ctx in contexts:
+            if _click_text_force(ctx, labels):
+                return True
+        for ctx in contexts:
+            try:
+                clicked = bool(ctx.evaluate(
             """({labels}) => {
                 const normalizedLabels = labels.map(label => String(label || '').replace(/[\\s　]+/g, ''));
                 const clickableSelector = 'button,a,[role="button"],input[type="button"],input[type="submit"]';
@@ -1478,14 +1823,17 @@ def _click_opd_toolbar_button(page, labels: list[str], selectors: list[str]) -> 
                   return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
                 };
                 const normText = (el) => {
-                  const value = el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '';
+                  const value = el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('alt') || '';
                   return ((el.innerText || el.textContent || '') + ' ' + value).replace(/[\\s　]+/g, '');
                 };
                 const clickableAncestor = (el) => {
                   let cur = el;
-                  for (let i = 0; cur && i < 5; i += 1, cur = cur.parentElement) {
+                  for (let i = 0; cur && i < 12; i += 1, cur = cur.parentElement) {
                     if (cur.matches && cur.matches(clickableSelector)) return cur;
                     if (cur.onclick || cur.tabIndex >= 0) return cur;
+                    const style = window.getComputedStyle(cur);
+                    const cls = String(cur.className || '').toLowerCase();
+                    if (style.cursor === 'pointer' || cls.includes('button') || cls.includes('btn')) return cur;
                   }
                   return el;
                 };
@@ -1498,10 +1846,11 @@ def _click_opd_toolbar_button(page, labels: list[str], selectors: list[str]) -> 
                   if (el.tabIndex >= 0) v += 5;
                   if (normalizedLabels.some(label => text === label)) v += 20;
                   if (normalizedLabels.some(label => text.startsWith(label))) v += 8;
+                  if (window.getComputedStyle(el).cursor === 'pointer') v += 10;
                   return v;
                 };
                 const candidates = [];
-                const nodes = document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"],span,div,li');
+                const nodes = document.querySelectorAll('button,a,[role="button"],input[type="button"],input[type="submit"],span,div,li,td,th');
                 for (const el of nodes) {
                   if (!isVisible(el)) continue;
                   const text = normText(el);
@@ -1516,15 +1865,103 @@ def _click_opd_toolbar_button(page, labels: list[str], selectors: list[str]) -> 
                 const found = candidates[0] && candidates[0].target;
                 if (!found) return false;
                 found.scrollIntoView({block: 'center', inline: 'center'});
+                if (typeof found.focus === 'function') found.focus();
                 for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
                   found.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window}));
                 }
+                if (typeof found.click === 'function') found.click();
+                found.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', bubbles: true, cancelable: true}));
+                found.dispatchEvent(new KeyboardEvent('keyup', {key: 'Enter', code: 'Enter', bubbles: true, cancelable: true}));
                 return true;
             }""",
-            {"labels": labels},
-        ))
-    except Exception:
-        return False
+                {"labels": _label_variants(labels)},
+                ))
+                if clicked:
+                    return True
+            except Exception:
+                continue
+        time.sleep(0.1)
+    return False
+
+
+def _click_text_force(ctx, labels: list[str]) -> bool:
+    """Last-resort Playwright click by visible text/bounding box.
+
+    Some OPD toolbar controls are rendered as framework widgets where DOM event
+    dispatch on an ancestor does not trigger the handler. In that case, a real
+    mouse click at the visible text/button coordinates is more reliable.
+    """
+    patterns = []
+    for label in labels:
+        label = str(label or "").strip()
+        if not label:
+            continue
+        patterns.append(label)
+        if "全て" in label:
+            patterns.append(label.replace("全て", "すべて"))
+        if "すべて" in label:
+            patterns.append(label.replace("すべて", "全て"))
+    seen = set()
+    for label in patterns:
+        if label in seen:
+            continue
+        seen.add(label)
+        locators = []
+        try:
+            locators.append(ctx.get_by_role("button", name=label, exact=True))
+        except Exception:
+            pass
+        try:
+            locators.append(ctx.get_by_role("button", name=label, exact=False))
+        except Exception:
+            pass
+        try:
+            locators.append(ctx.get_by_text(label, exact=True))
+        except Exception:
+            pass
+        try:
+            locators.append(ctx.get_by_text(label, exact=False))
+        except Exception:
+            pass
+        try:
+            locators.append(ctx.locator(f"text={label}"))
+        except Exception:
+            pass
+        for loc in locators:
+            try:
+                count = min(int(loc.count()), 8)
+                if count <= 0:
+                    continue
+            except Exception:
+                continue
+            for i in range(count):
+                item = loc.nth(i)
+                try:
+                    if not item.is_visible(timeout=500):
+                        continue
+                except Exception:
+                    pass
+                try:
+                    item.scroll_into_view_if_needed(timeout=1000)
+                except Exception:
+                    pass
+                try:
+                    item.click(timeout=1500, force=True)
+                    return True
+                except Exception:
+                    pass
+                try:
+                    box = item.bounding_box(timeout=1000)
+                except Exception:
+                    box = None
+                if box:
+                    try:
+                        mouse_owner = getattr(ctx, "page", ctx)
+                        mouse_owner.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+                        return True
+                    except Exception:
+                        pass
+    return False
 
 
 def _target_needles(target: dict) -> list[str]:
@@ -1551,21 +1988,22 @@ def _target_needles(target: dict) -> list[str]:
 def _find_opd_row_for_target(page, target: dict):
     needles = [n.lower() for n in _target_needles(target) if n]
     selectors = ["table tbody tr", "mat-row, .mat-row", "li", "div"]
-    for sel in selectors:
-        try:
-            locs = page.locator(sel).all()
-        except Exception:
-            continue
-        for loc in locs[:1000]:
+    for ctx in _iter_playwright_contexts(page):
+        for sel in selectors:
             try:
-                text = _normalize_doc_text(loc.inner_text(timeout=250))
+                locs = ctx.locator(sel).all()
             except Exception:
                 continue
-            low = text.lower()
-            if len(text) > 1800:
-                continue
-            if needles and sum(1 for n in needles if n.lower() in low) >= min(2, len(needles)):
-                return loc
+            for loc in locs[:1000]:
+                try:
+                    text = _normalize_doc_text(loc.inner_text(timeout=250))
+                except Exception:
+                    continue
+                low = text.lower()
+                if len(text) > 1800:
+                    continue
+                if needles and sum(1 for n in needles if n.lower() in low) >= min(2, len(needles)):
+                    return loc
     return None
 
 
@@ -1577,29 +2015,30 @@ def _find_opd_attachment_row_for_target(page, target: dict):
         if _ATTACHED_PAT.search(label or "") and not _OPD_ATTACHMENT_EXCLUDE_PAT.search(label or "")
     ]
     selectors = ["table tbody tr", "mat-row, .mat-row", "li", "div"]
-    for sel in selectors:
-        try:
-            locs = page.locator(sel).all()
-        except Exception:
-            continue
-        for loc in locs[:1000]:
+    for ctx in _iter_playwright_contexts(page):
+        for sel in selectors:
             try:
-                text = _normalize_doc_text(loc.inner_text(timeout=250))
+                locs = ctx.locator(sel).all()
             except Exception:
                 continue
-            if len(text) > 1200:
-                continue
-            if not _ATTACHED_PAT.search(text):
-                continue
-            if _OPD_ATTACHMENT_EXCLUDE_PAT.search(text):
-                continue
-            if date and date not in text:
-                continue
-            if labels:
-                low = text.lower()
-                if not any(label[:80].lower() in low or low[:120] in label.lower() for label in labels):
+            for loc in locs[:1000]:
+                try:
+                    text = _normalize_doc_text(loc.inner_text(timeout=250))
+                except Exception:
                     continue
-            return loc
+                if len(text) > 1200:
+                    continue
+                if not _ATTACHED_PAT.search(text):
+                    continue
+                if _OPD_ATTACHMENT_EXCLUDE_PAT.search(text):
+                    continue
+                if date and date not in text:
+                    continue
+                if labels:
+                    low = text.lower()
+                    if not any(label[:80].lower() in low or low[:120] in label.lower() for label in labels):
+                        continue
+                return loc
     return None
 
 
@@ -2101,102 +2540,147 @@ def _click_row_pdf_and_capture_download(page, row, case_id: str, target: dict) -
     return False, ""
 
 
+def _add_scraped_document(docs: list[dict], seen: set, text: str, *, href: str = "") -> None:
+    text = _normalize_doc_text(text)
+    if len(text) < 4 or len(text) > 1800:
+        return
+    classified = _classify_opd_document(text)
+    is_attached = bool(_ATTACHED_PAT.search(text))
+    if not classified and not is_attached:
+        return
+    kind = classified["kind"] if classified else "添付書類"
+    key = (kind, text[:180], href)
+    if key in seen:
+        return
+    seen.add(key)
+    docs.append({
+        "label": text[:180],
+        "text": text,
+        "kind": kind,
+        "priority": classified["priority"] if classified else 0,
+        "target": bool(classified),
+        "note": classified.get("note", "") if classified else "",
+        "href": href,
+        "date": _extract_doc_date(text),
+    })
+
+
+def _scrape_documents_from_text(raw_text: str, docs: list[dict], seen: set) -> None:
+    """Recover OPD document rows from visible text when Angular rows are hard to address."""
+    if not raw_text:
+        return
+    lines = [_normalize_doc_text(line) for line in re.split(r"[\r\n]+", raw_text)]
+    lines = [line for line in lines if line]
+    for idx, line in enumerate(lines):
+        _add_scraped_document(docs, seen, line)
+        # J-PlatPat sometimes renders date/name/group/output as neighboring
+        # text nodes, so inspect a small local window as one pseudo-row.
+        if _DATE_PAT.search(line) or _ATTACHED_PAT.search(line) or re.search(r"International|拒絶理由|Office\s+Action|予備報告|調査報告", line, re.I):
+            window = " ".join(lines[idx:min(len(lines), idx + 8)])
+            _add_scraped_document(docs, seen, window)
+
+
 def _scrape_documents(page) -> list[dict]:
     docs: list[dict] = []
     seen = set()
-    for sel in _SCRAPE_SELECTORS:
-        try:
-            locs = page.locator(sel).all()
-        except Exception:
-            continue
-        for loc in locs[:800]:
+    contexts = _iter_playwright_contexts(page)
+    for ctx in contexts:
+        for sel in _SCRAPE_SELECTORS:
             try:
-                text = _normalize_doc_text(loc.inner_text(timeout=600))
+                locs = ctx.locator(sel).all()
             except Exception:
                 continue
-            if len(text) < 4 or len(text) > 1200:
-                continue
-            classified = _classify_opd_document(text)
-            is_attached = bool(_ATTACHED_PAT.search(text))
-            if not classified and not is_attached:
-                continue
-            href = ""
-            try:
-                href = loc.get_attribute("href", timeout=300) or ""
-            except Exception:
-                pass
-            kind = classified["kind"] if classified else "添付書類"
-            key = (kind, text[:180], href)
-            if key in seen:
-                continue
-            seen.add(key)
-            docs.append({
-                "label": text[:180],
-                "text": text,
-                "kind": kind,
-                "priority": classified["priority"] if classified else 0,
-                "target": bool(classified),
-                "note": classified.get("note", "") if classified else "",
-                "href": href,
-            })
+            for loc in locs[:1000]:
+                try:
+                    text = loc.inner_text(timeout=600)
+                except Exception:
+                    continue
+                href = ""
+                try:
+                    href = loc.get_attribute("href", timeout=300) or ""
+                except Exception:
+                    pass
+                _add_scraped_document(docs, seen, text, href=href)
+        _scrape_documents_from_text(_context_inner_text(ctx, timeout=1200), docs, seen)
     return docs
 
 
 def _scrape_page_text(page) -> str:
-    try:
-        text = page.locator("body").inner_text(timeout=3000)
-    except Exception:
-        return ""
-    return _normalize_doc_text(text)[:120000]
+    parts = []
+    seen = set()
+    for ctx in _iter_playwright_contexts(page):
+        text = _context_inner_text(ctx, timeout=3000)
+        norm = _normalize_doc_text(text)
+        if norm and norm not in seen:
+            seen.add(norm)
+            parts.append(norm)
+    return "\n".join(parts)[:120000]
+
+
+def _extract_visible_citation_info_chunks(raw_text: str) -> list[str]:
+    lines = [_normalize_doc_text(line) for line in re.split(r"[\r\n]+", raw_text or "")]
+    lines = [line for line in lines if line]
+    chunks = []
+    for idx, line in enumerate(lines):
+        window = " ".join(lines[idx:min(len(lines), idx + 10)])
+        if ("引用情報" in window or "Citation" in window) and any(True for _pid, _snippet in _iter_patent_citations(window)):
+            chunks.append(window)
+    return chunks
 
 
 def _scrape_citation_info_texts(page) -> list[str]:
     texts: list[str] = []
     seen = set()
+    for ctx in _iter_playwright_contexts(page):
+        for text in _extract_visible_citation_info_chunks(_context_inner_text(ctx, timeout=1200)):
+            if text and text not in seen:
+                seen.add(text)
+                texts.append(text)
     selectors = [
         'a:has-text("引用情報")',
         'button:has-text("引用情報")',
         '[role="button"]:has-text("引用情報")',
         'text="引用情報"',
     ]
-    for sel in selectors:
-        try:
-            count = min(page.locator(sel).count(), 20)
-        except Exception:
-            continue
-        for idx in range(count):
+    for ctx in _iter_playwright_contexts(page):
+        for sel in selectors:
             try:
-                loc = page.locator(sel).nth(idx)
-                if not loc.is_visible(timeout=500):
-                    continue
-                before_pages = list(page.context.pages)
-                loc.click(timeout=1500)
-                page.wait_for_timeout(1200)
-                active = page
-                after_pages = list(page.context.pages)
-                if len(after_pages) > len(before_pages):
-                    active = after_pages[-1]
-                    try:
-                        active.wait_for_load_state("domcontentloaded", timeout=5000)
-                    except Exception:
-                        pass
-                text = _scrape_page_text(active)
-                if text and text not in seen:
-                    seen.add(text)
-                    texts.append(text)
-                if active is not page:
-                    try:
-                        active.close()
-                    except Exception:
-                        pass
-                else:
-                    _dismiss_modals(page)
-                    try:
-                        page.keyboard.press("Escape")
-                    except Exception:
-                        pass
+                count = min(ctx.locator(sel).count(), 20)
             except Exception:
                 continue
+            for idx in range(count):
+                try:
+                    loc = ctx.locator(sel).nth(idx)
+                    if not loc.is_visible(timeout=500):
+                        continue
+                    before_pages = list(page.context.pages)
+                    loc.click(timeout=1500)
+                    page.wait_for_timeout(1200)
+                    active = page
+                    after_pages = list(page.context.pages)
+                    if len(after_pages) > len(before_pages):
+                        active = after_pages[-1]
+                        try:
+                            active.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
+                    text = _scrape_page_text(active)
+                    if text and text not in seen:
+                        seen.add(text)
+                        texts.append(text)
+                    if active is not page:
+                        try:
+                            active.close()
+                        except Exception:
+                            pass
+                    else:
+                        _dismiss_modals(page)
+                        try:
+                            page.keyboard.press("Escape")
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
     return texts
 
 

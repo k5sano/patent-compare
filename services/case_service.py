@@ -1568,9 +1568,12 @@ def stream_citation_table_extraction(case_id, citation_id, *,
             "n_error": s.get("n_error"),
             "candidates_total": s.get("candidates_total"),
             "candidates_targeted": s.get("candidates_targeted"),
+            "vector_tables_count": s.get("vector_tables_count"),
+            "crop_candidates": s.get("crop_candidates"),
             "total_duration_ms": s.get("total_duration_ms"),
             "total_cost_usd_equivalent": s.get("total_cost_usd_equivalent"),
             "body_table_references": s.get("body_table_references", []),
+            "missing_table_references": s.get("missing_table_references", []),
         },
     }, ensure_ascii=False) + "\n\n"
 
@@ -1680,18 +1683,62 @@ def stream_hongan_table_extraction(case_id, *, model="sonnet", effort="low"):
         "candidates_total": summary.get("candidates_total"),
         "candidates_targeted": summary.get("candidates_targeted"),
         "candidates_skipped": summary.get("candidates_skipped"),
+        "vector_tables_count": summary.get("vector_tables_count"),
+        "crop_candidates": summary.get("crop_candidates"),
         "n_table": summary.get("n_table"),
         "n_nontable": summary.get("n_nontable"),
         "n_error": summary.get("n_error"),
         "total_duration_ms": summary.get("total_duration_ms"),
         "total_cost_usd_equivalent": summary.get("total_cost_usd_equivalent"),
         "body_table_references": summary.get("body_table_references", []),
+        "missing_table_references": summary.get("missing_table_references", []),
         "output_json": summary.get("output_json"),
     }
     yield "data: " + json.dumps(
         {"stage": "done", "summary": light},
         ensure_ascii=False,
     ) + "\n\n"
+
+
+_FW_DIGITS = str.maketrans("0123456789", "０１２３４５６７８９")
+
+
+def _resolve_hongan_bookmark_y(doc, bookmark):
+    """Find the vertical position of a cited paragraph marker in a hongan PDF."""
+    para_id = str(bookmark.get("para_id") or "").strip()
+    if not para_id:
+        return None
+    try:
+        page_1based = max(1, min(int(bookmark.get("page") or 1), doc.page_count))
+    except (TypeError, ValueError):
+        page_1based = 1
+    page_order = [page_1based - 1] + [
+        i for i in range(max(0, page_1based - 3), min(doc.page_count, page_1based + 2))
+        if i != page_1based - 1
+    ]
+    markers = [
+        f"【{para_id}】",
+        f"【{para_id.translate(_FW_DIGITS)}】",
+    ]
+    for pn in page_order:
+        page = doc[pn]
+        for marker in markers:
+            try:
+                rects = page.search_for(marker)
+            except Exception:
+                rects = []
+            if rects:
+                bookmark["page"] = pn + 1
+                return rects[0].y0
+    return None
+
+
+def _enrich_hongan_bookmarks_with_positions(doc, bookmarks):
+    for bm in bookmarks:
+        y = _resolve_hongan_bookmark_y(doc, bm)
+        if y is not None:
+            bm["y"] = y
+    return bookmarks
 
 
 def create_bookmarked_hongan(case_id):
@@ -1734,7 +1781,7 @@ def create_bookmarked_hongan(case_id):
                 ptype = p.get("type") or ""
                 prefix = f" {ptype}" if ptype else ""
                 title = f"{sid}{prefix}【{p['id']}】 (p.{p['page']})"
-                bookmarks.append({"title": title, "page": p["page"]})
+                bookmarks.append({"title": title, "page": p["page"], "para_id": p["id"]})
                 para_items.append({
                     "seg_id": sid,
                     "para_id": p["id"],
@@ -1772,7 +1819,9 @@ def create_bookmarked_hongan(case_id):
         try:
             n_ann_local = apply_hongan_annotations(
                 doc, claim_items, para_items, keywords=kw_for_hongan)
-            n_bm_local = apply_toc(doc, bookmarks)
+            positioned_bookmarks = _enrich_hongan_bookmarks_with_positions(
+                doc, [dict(bm) for bm in bookmarks])
+            n_bm_local = apply_toc(doc, positioned_bookmarks)
             doc.save(str(target), garbage=3, deflate=True)
         finally:
             doc.close()

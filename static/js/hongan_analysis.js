@@ -25,18 +25,33 @@ function _hanEsc(s) {
   }[c]));
 }
 
-// マーカー <<HL>>..<</HL>> (LLM 由来の重要箇所) と <<UL>>..<</UL>> (ユーザー下線) を
-// それぞれ <mark> / <u> に変換した HTML を返す。それ以外はエスケープ。
+function _hanImportantToHtml(s) {
+  if (window.PCHighlight && typeof window.PCHighlight.renderImportantText === 'function') {
+    return window.PCHighlight.renderImportantText(s);
+  }
+  return `<span class="pc-important-term">${_hanEsc(s)}</span>`;
+}
+
+// マーカー <<HL>>..<</HL>> (LLM/ユーザー由来の重要箇所) と <<UL>>..<</UL>> (ユーザー下線) を
+// 統一強調ルールに変換する。それ以外はエスケープ。
 function _hanMarkupToHtml(s) {
   if (s == null) return '';
-  let out = _hanEsc(String(s));
-  // エスケープ後なので <<HL>> は &lt;&lt;HL&gt;&gt; になっている
-  out = out.replace(/&lt;&lt;HL&gt;&gt;([\s\S]*?)&lt;&lt;\/HL&gt;&gt;/g,
-    '<mark style="background:#fde68a; color:#451a03; padding:0 2px; border-radius:2px;">$1</mark>');
-  out = out.replace(/&lt;&lt;UL&gt;&gt;([\s\S]*?)&lt;&lt;\/UL&gt;&gt;/g,
-    '<u style="text-decoration: underline; text-decoration-color:#f87171; text-decoration-thickness:2px;">$1</u>');
-  out = out.replace(/\n/g, '<br>');
-  return out;
+  const raw = String(s);
+  const re = /<<(HL|UL)>>([\s\S]*?)<<\/\1>>/g;
+  let out = '';
+  let prev = 0;
+  let m;
+  while ((m = re.exec(raw)) !== null) {
+    out += _hanEsc(raw.slice(prev, m.index));
+    if (m[1] === 'HL') {
+      out += _hanImportantToHtml(m[2]);
+    } else {
+      out += `<u class="pc-user-underline">${_hanEsc(m[2])}</u>`;
+    }
+    prev = m.index + m[0].length;
+  }
+  out += _hanEsc(raw.slice(prev));
+  return out.replace(/\n/g, '<br>');
 }
 
 // 1.3 技術分野を特化フォーマットでコンパクト表示
@@ -279,7 +294,7 @@ function hanEditItem(itemId) {
     <textarea id="han-edit-ta-${_hanEsc(itemId)}" rows="5"
       style="width:100%; padding:0.4rem 0.55rem; background:#1e293b; color:#e2e8f0; border:1px solid var(--border); border-radius:5px; font-family:ui-monospace,monospace; font-size:0.82rem; line-height:1.5;">${_hanEsc(raw)}</textarea>
     <div style="font-size:0.72rem; color:#64748b; margin-top:0.25rem;">
-      マーカー記法: &lt;&lt;HL&gt;&gt;...&lt;&lt;/HL&gt;&gt; (黄色ハイライト)、&lt;&lt;UL&gt;&gt;...&lt;&lt;/UL&gt;&gt; (赤下線)
+      マーカー記法: &lt;&lt;HL&gt;&gt;...&lt;&lt;/HL&gt;&gt; (キーワード色/未登録語は赤字)、&lt;&lt;UL&gt;&gt;...&lt;&lt;/UL&gt;&gt; (下線)
     </div>
   `;
 }

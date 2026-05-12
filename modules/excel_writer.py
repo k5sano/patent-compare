@@ -17,6 +17,8 @@ from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side,
     numbers
 )
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
 from openpyxl.utils import get_column_letter
 
 from modules.cited_ref_notation import (
@@ -41,6 +43,14 @@ FILL_HEADER_LIGHT = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_t
 FILL_SECTION = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
 
 FONT_WHITE = Font(name="游ゴシック", size=10, bold=True, color="FFFFFF")
+
+# PDF 注釈と同じキーワードグループ色。Excel はセル内の部分背景が弱いため、
+# コメント内では文字色 + 太字で近似する。
+GROUP_HIGHLIGHT_COLORS = [
+    "FF9999", "C7A6FF", "FF99D9", "99BFFF",
+    "99FFB3", "FFD180", "80F2D9", "BFC4CC",
+]
+IMPORTANT_TERM_COLOR = "EF4444"
 
 ALIGNMENT_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 ALIGNMENT_LEFT = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -79,7 +89,101 @@ def _set_cell(ws, row, col, value, font=None, fill=None, alignment=None, border=
     return cell
 
 
-def write_comparison_table(output_path, case_meta, segments, responses, citations_meta=None):
+def _keyword_color(gid):
+    try:
+        i = int(gid)
+    except (TypeError, ValueError):
+        i = 1
+    return GROUP_HIGHLIGHT_COLORS[(i - 1) % len(GROUP_HIGHLIGHT_COLORS)]
+
+
+def _keyword_highlight_index(keywords):
+    items = []
+    for g in keywords or []:
+        gid = g.get("group_id")
+        color = _keyword_color(gid)
+        for kw in g.get("keywords", []) or []:
+            term = str((kw or {}).get("term") or "").strip()
+            if term:
+                items.append({"term": term, "color": color})
+    items.sort(key=lambda x: len(x["term"]), reverse=True)
+    return items
+
+
+def _find_keyword_positions(text, index):
+    positions = []
+    for item in index:
+        term = item["term"]
+        start = 0
+        while True:
+            pos = text.find(term, start)
+            if pos < 0:
+                break
+            end = pos + len(term)
+            if not any(not (end <= p["start"] or pos >= p["end"]) for p in positions):
+                positions.append({"start": pos, "end": end, "color": item["color"]})
+            start = end
+    positions.sort(key=lambda p: p["start"])
+    return positions
+
+
+def _append_rich_important(rt, text, keywords):
+    text = str(text or "")
+    if not text:
+        return
+    positions = _find_keyword_positions(text, _keyword_highlight_index(keywords))
+    if not positions:
+        rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text))
+        return
+    prev = 0
+    for p in positions:
+        if p["start"] > prev:
+            rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text[prev:p["start"]]))
+        rt.append(TextBlock(InlineFont(color=p["color"], b=True), text[p["start"]:p["end"]]))
+        prev = p["end"]
+    if prev < len(text):
+        rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text[prev:]))
+
+
+def _append_rich_keywords(rt, text, keywords):
+    text = str(text or "")
+    if not text:
+        return
+    positions = _find_keyword_positions(text, _keyword_highlight_index(keywords))
+    if not positions:
+        rt.append(text)
+        return
+    prev = 0
+    for p in positions:
+        if p["start"] > prev:
+            rt.append(text[prev:p["start"]])
+        rt.append(TextBlock(InlineFont(color=p["color"], b=True), text[p["start"]:p["end"]]))
+        prev = p["end"]
+    if prev < len(text):
+        rt.append(text[prev:])
+
+
+def _build_rich_reason(parts, comment=None, keywords=None):
+    rt = CellRichText()
+    first = True
+    for part in parts or []:
+        if not part:
+            continue
+        if not first:
+            rt.append("\n")
+        _append_rich_keywords(rt, part, keywords)
+        first = False
+    if comment:
+        if not first:
+            rt.append("\n")
+        rt.append("（備考: ")
+        _append_rich_keywords(rt, comment, keywords)
+        rt.append("）")
+    return rt if len(rt) else ""
+
+
+def write_comparison_table(output_path, case_meta, segments, responses,
+                           citations_meta=None, keywords=None):
     """対比表Excelを生成 (1 シートのみ)
 
     Parameters:
@@ -91,13 +195,15 @@ def write_comparison_table(output_path, case_meta, segments, responses, citation
     """
     wb = Workbook()
     _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta,
-                                 main_sheet_title="対比表", drop_default=True)
+                                 main_sheet_title="対比表", drop_default=True,
+                                 keywords=keywords)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
 
 
 def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta=None,
-                                 main_sheet_title="対比表", drop_default=False):
+                                 main_sheet_title="対比表", drop_default=False,
+                                 keywords=None):
     """対比表 + ペースト用シートを wb に追加する (内部用)。
 
     drop_default=True なら wb.active が空のデフォルト Sheet (新規 Workbook 直後)
@@ -183,7 +289,8 @@ def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_me
 
     if claim1:
         row = _write_claim_comparison(ws, row, claim1, citation_order,
-                                       responses, citations_meta, case_meta)
+                                       responses, citations_meta, case_meta,
+                                       keywords=keywords)
         row += 2
 
     # ===== セクション3: 従属請求項の対比表 =====
@@ -194,7 +301,7 @@ def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_me
         row += 1
 
         row = _write_sub_claims_table(ws, row, sub_claims, citation_order,
-                                       responses, citations_meta)
+                                       responses, citations_meta, keywords=keywords)
         row += 2
 
     # ===== セクション4: 文献リスト =====
@@ -205,7 +312,8 @@ def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_me
     row += 1
 
     row = _write_document_list(ws, row, citation_order, responses,
-                                citations_meta, case_meta, num_citations)
+                                citations_meta, case_meta, num_citations,
+                                keywords=keywords)
     row += 2
 
     # ===== セクション5: 拒絶理由構成の方針 =====
@@ -231,11 +339,14 @@ def _strip_comment_memo_from_loc(raw):
     out = []
     for tok in str(raw).split(";"):
         tok = tok.strip()
-        if not tok or tok.startswith('"') or tok.startswith("//"):
+        if not tok or tok.startswith('"') or tok.startswith("/") or tok.startswith("//"):
             continue
-        # トークン内の " や // 以降を切り捨て
+        # トークン内の " / // 以降を切り捨て
         cuts = []
         i = tok.find('"')
+        if i >= 0:
+            cuts.append(i)
+        i = tok.find("/")
         if i >= 0:
             cuts.append(i)
         i = tok.find("//")
@@ -284,7 +395,7 @@ def _format_comp_for_paste(comp):
     if j == "△":
         prefix = "?"
     elif j == "×":
-        prefix = "!"  # 該当箇所なしは !
+        prefix = "x"
 
     raw = comp.get("cited_location") or ""
     loc_only = _strip_comment_memo_from_loc(raw)
@@ -431,7 +542,8 @@ def _write_paste_sheet(wb, segments, citation_order, responses, citations_meta, 
     # 列幅自動調整は openpyxl 側で限定的なので固定値で運用
 
 
-def _write_claim_comparison(ws, row, claim, citation_order, responses, citations_meta, case_meta):
+def _write_claim_comparison(ws, row, claim, citation_order, responses,
+                            citations_meta, case_meta, keywords=None):
     """請求項の対比表を書き込む"""
     num_citations = len(citation_order)
 
@@ -504,17 +616,16 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
                 reason_parts = []
                 if comp.get("judgment_reason"):
                     reason_parts.append(comp["judgment_reason"])
+                comment = ""
                 cited_loc_raw = comp.get("cited_location", "")
                 if cited_loc_raw:
                     expanded = _expand_ref(cited_loc_raw, with_comment=False)
                     if expanded:
                         reason_parts.append(f"[{expanded}]")
-                    cmt = _ref_comment_of(cited_loc_raw)
-                    if cmt:
-                        reason_parts.append(f"（備考: {cmt}）")
+                    comment = _ref_comment_of(cited_loc_raw)
                 if comp.get("cited_text"):
                     reason_parts.append(f"「{comp['cited_text'][:100]}」")
-                reason_text = "\n".join(reason_parts)
+                reason_text = _build_rich_reason(reason_parts, comment=comment, keywords=keywords)
                 _set_cell(ws, row, 3 + i, reason_text,
                           font=FONT_SMALL, alignment=ALIGNMENT_LEFT,
                           border=THIN_BORDER)
@@ -525,7 +636,8 @@ def _write_claim_comparison(ws, row, claim, citation_order, responses, citations
     return row
 
 
-def _write_sub_claims_table(ws, row, sub_claims, citation_order, responses, citations_meta):
+def _write_sub_claims_table(ws, row, sub_claims, citation_order, responses,
+                            citations_meta, keywords=None):
     """従属請求項の対比表"""
     num_citations = len(citation_order)
 
@@ -563,15 +675,14 @@ def _write_sub_claims_table(ws, row, sub_claims, citation_order, responses, cita
                         parts.append(judgment_disp)
                     if sub_comp.get("judgment_reason"):
                         parts.append(sub_comp["judgment_reason"])
+                    comment = ""
                     cited_loc_raw = sub_comp.get("cited_location", "")
                     if cited_loc_raw:
                         expanded = _expand_ref(cited_loc_raw, with_comment=False)
                         if expanded:
                             parts.append(f"[{expanded}]")
-                        cmt = _ref_comment_of(cited_loc_raw)
-                        if cmt:
-                            parts.append(f"（備考: {cmt}）")
-                    cell_text = "\n".join(parts)
+                        comment = _ref_comment_of(cited_loc_raw)
+                    cell_text = _build_rich_reason(parts, comment=comment, keywords=keywords)
                     _set_cell(ws, row, 3 + i, cell_text,
                               font=FONT_NORMAL, fill=fill,
                               alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
@@ -584,7 +695,7 @@ def _write_sub_claims_table(ws, row, sub_claims, citation_order, responses, cita
 
 
 def _write_document_list(ws, row, citation_order, responses, citations_meta,
-                          case_meta, num_citations):
+                         case_meta, num_citations, keywords=None):
     """文献リストセクション"""
     # ヘッダ
     headers = ["No", "文献名・タイトル", "概要・拒絶理由との関連性"]
@@ -624,7 +735,7 @@ def _write_document_list(ws, row, citation_order, responses, citations_meta,
         if num_citations > 0:
             ws.merge_cells(start_row=row, start_column=3,
                            end_row=row, end_column=2 + num_citations)
-            _set_cell(ws, row, 3, f"{summary}\n\n{relevance}",
+            _set_cell(ws, row, 3, _build_rich_keyword_text(f"{summary}\n\n{relevance}", keywords),
                       font=FONT_NORMAL, alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
         ws.row_dimensions[row].height = 60
         row += 1
@@ -719,7 +830,8 @@ def _find_sub_claim(resp, claim_number):
 # ============================================================
 
 def write_full_report(output_path, case_meta, segments, responses,
-                      citations_meta=None, hongan_analysis=None, inventive_step=None):
+                      citations_meta=None, hongan_analysis=None, inventive_step=None,
+                      keywords=None):
     """3 タブ統合 Excel を生成。
 
     タブ構成:
@@ -731,8 +843,9 @@ def write_full_report(output_path, case_meta, segments, responses,
     # デフォルト Sheet を本願解析結果に転用 (空なら使い回し)
     _populate_hongan_analysis_sheet(wb, case_meta, hongan_analysis, drop_default=True)
     _populate_comparison_sheets(wb, case_meta, segments, responses, citations_meta,
-                                 main_sheet_title="対比表", drop_default=False)
-    _populate_inventive_step_sheet(wb, case_meta, inventive_step)
+                                 main_sheet_title="対比表", drop_default=False,
+                                 keywords=keywords)
+    _populate_inventive_step_sheet(wb, case_meta, inventive_step, keywords=keywords)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
@@ -863,7 +976,19 @@ def _format_analysis_value(value):
     return str(value)
 
 
-def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
+def _build_rich_keyword_text(value, keywords=None):
+    text = _format_analysis_value(value)
+    if not text or text == "(未取得)":
+        return text
+    index = _keyword_highlight_index(keywords)
+    if not _find_keyword_positions(text, index):
+        return text
+    rt = CellRichText()
+    _append_rich_keywords(rt, text, keywords)
+    return rt
+
+
+def _populate_inventive_step_sheet(wb, case_meta, inventive_step, keywords=None):
     """進歩性判断 (inventive_step.json) をシートに展開。
 
     実構造 (modules.inventive_step_analyzer 由来):
@@ -906,7 +1031,8 @@ def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
             return
         _set_cell(ws, row, 1, label, font=FONT_HEADER,
                   alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
-        _set_cell(ws, row, 2, str(value), font=FONT_NORMAL,
+        _set_cell(ws, row, 2, _build_rich_keyword_text(value, keywords),
+                  font=FONT_NORMAL,
                   alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
         row += 1
 
@@ -937,7 +1063,9 @@ def _populate_inventive_step_sheet(wb, case_meta, inventive_step):
             seg_ids = "、".join(item.get("segment_ids") or []) or "-"
             _set_cell(ws, row, 1, f"#{i} 構成要件 {seg_ids}", font=FONT_HEADER,
                       alignment=ALIGNMENT_LEFT_CENTER, border=THIN_BORDER)
-            _set_cell(ws, row, 2, item.get("description", ""), font=FONT_NORMAL,
+            _set_cell(ws, row, 2,
+                      _build_rich_keyword_text(item.get("description", ""), keywords),
+                      font=FONT_NORMAL,
                       alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
             row += 1
         row += 1

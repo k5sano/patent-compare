@@ -208,8 +208,9 @@ def _is_thin_google_translation(hit: dict) -> bool:
 
 
 _PKM_GROUP_COLORS = [
-    '#ef4444', '#a855f7', '#ec4899', '#3b82f6',
-    '#22c55e', '#f97316', '#14b8a6', '#6b7280',
+    # modules.pdf_annotator._GROUP_COLORS と同じ色。Web では 40% 透過で塗る。
+    '#ff9999', '#c7a6ff', '#ff99d9', '#99bfff',
+    '#99ffb3', '#ffd180', '#80f2d9', '#bfc4cc',
 ]
 
 
@@ -219,6 +220,19 @@ def pkm_group_color(gid: int) -> str:
     except (TypeError, ValueError):
         return _PKM_GROUP_COLORS[0]
     return _PKM_GROUP_COLORS[(i - 1) % len(_PKM_GROUP_COLORS)]
+
+
+def _pkm_rgba(hex_color: str, opacity: float = 0.4) -> str:
+    h = str(hex_color or "").strip().lstrip("#")
+    if len(h) != 6:
+        return "rgba(248, 113, 113, 0.4)"
+    try:
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+    except ValueError:
+        return "rgba(248, 113, 113, 0.4)"
+    return f"rgba({r}, {g}, {b}, {opacity})"
 
 
 def pkm_build_index(keywords_data) -> list:
@@ -372,8 +386,9 @@ def pkm_highlight_python(text: str, index: list) -> dict:
         out.append(_html.escape(t[prev:p["start"]]))
         matched = _html.escape(t[p["start"]:p["start"] + p["length"]])
         color = pkm_group_color(p["gid"])
+        bg = _pkm_rgba(color)
         out.append(
-            f'<mark class="pkm-mark" style="--c:{color};" '
+            f'<mark class="pkm-mark" style="--c:{color}; --pc-hl-bg:{bg};" '
             f'data-gid="{p["gid"]}">{matched}</mark>'
         )
         prev = p["start"] + p["length"]

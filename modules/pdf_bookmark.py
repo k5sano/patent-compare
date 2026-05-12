@@ -61,12 +61,34 @@ def _normalize_existing_dest(dest, page_1based):
     return dest
 
 
+def _bookmark_dest(page_1based, y=None):
+    """Create a detailed TOC destination.
+
+    If y is omitted, callers get the legacy page-only behavior. If y is
+    provided, the PDF viewer jumps near that vertical coordinate on the page.
+    """
+    page_1based = max(1, int(page_1based or 1))
+    if y is None:
+        return None
+    try:
+        y_pos = max(0.0, float(y) - 18.0)
+    except (TypeError, ValueError):
+        y_pos = 0.0
+    return {
+        "kind": fitz.LINK_GOTO,
+        "page": page_1based - 1,
+        "to": fitz.Point(0, y_pos),
+        "zoom": 0,
+    }
+
+
 def apply_toc(doc, bookmarks, *, preserve_existing=True, group_title="分節"):
     """開いている fitz.Document に TOC を適用する（in-place）。
 
     Args:
         doc: fitz.Document
-        bookmarks: [{"title": "...", "page": 3}, ...]  page は 1-indexed
+        bookmarks: [{"title": "...", "page": 3, "y": 240}, ...]  page は 1-indexed。
+                   y があればページ内座標へ、なければ従来通りページ先頭へ飛ぶ。
         preserve_existing: True なら既存 TOC を残し、新規 bookmarks を末尾に追加する。
                            その際、新規エントリは "group_title" 直下 (level=2) にぶら下げる。
         group_title: preserve_existing=True の時、新規追加分をまとめる level=1 ヘッダ名。
@@ -83,7 +105,9 @@ def apply_toc(doc, bookmarks, *, preserve_existing=True, group_title="分節"):
         if page > page_count:
             page = page_count
         title = str(bm.get("title", ""))[:200] or "(no title)"
-        new_entries.append([1, title, page])
+        dest = _bookmark_dest(page, bm.get("y") if "y" in bm else None)
+        entry = [1, title, page] + ([dest] if dest else [])
+        new_entries.append(entry)
 
     if preserve_existing:
         # 既存 TOC を simple=False で取得 (dest 情報が 4 番目に含まれる)
@@ -105,8 +129,9 @@ def apply_toc(doc, bookmarks, *, preserve_existing=True, group_title="分節"):
             entry = [level, title, page] + ([dest] if dest else [])
             existing_norm.append(entry)
         first_page = new_entries[0][2] if new_entries else 1
-        # 新規 (level=2) エントリは page トップに飛ばす単純 dest で OK
-        nested = [[2, e[1], e[2]] for e in new_entries]
+        nested = []
+        for e in new_entries:
+            nested.append([2, e[1], e[2]] + ([e[3]] if len(e) >= 4 else []))
         if new_entries:
             combined = existing_norm + [[1, group_title, first_page]] + nested
         else:

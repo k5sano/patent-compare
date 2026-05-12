@@ -110,7 +110,53 @@ def test_downloadable_rejection_targets_exclude_application_attachment():
     downloadable, skipped = opd._downloadable_rejection_targets(targets)
 
     assert downloadable == []
-    assert skipped[0]["error"].startswith("OPD上で安全に取得できる添付書類行")
+    assert skipped[0]["error"].startswith("OPD上で添付PDFの実体行")
+
+
+def test_downloadable_rejection_targets_allow_wo_original_iper():
+    targets = [{
+        "kind": "IPER",
+        "label": "2023-12-03 International Preliminary Report on Patentability Chapter I 発送書類 最終処分 分類情報 原文",
+        "attachment_labels": [],
+    }]
+
+    downloadable, skipped = opd._downloadable_rejection_targets(targets)
+
+    assert skipped == []
+    assert downloadable[0]["preferred_source"] == "original_if_no_attachment"
+
+
+def test_suppress_covered_skipped_downloads_hides_duplicate_failures():
+    downloads = [
+        {"kind": "IPER", "date": "2024-05-20", "label": "IPER attached", "success": True},
+        {"kind": "IPER", "date": "2024-05-20", "label": "IPER cover", "success": False, "skipped": True},
+        {"kind": "US Final Rejection", "date": "2024-06-01", "label": "US", "success": False, "skipped": True},
+    ]
+
+    filtered = opd._suppress_covered_skipped_downloads(downloads)
+
+    assert [d["label"] for d in filtered] == ["IPER attached", "US"]
+
+
+def test_scrape_documents_from_visible_text_recovers_opd_rows():
+    docs = []
+    seen = set()
+    text = """
+    書類情報を全て閉じる
+    2024-05-20
+    特許性に関する国際予備報告（第Ｉ章）（International Preliminary Report on Patentability (Chapter I of the Patent Cooperation Treaty)）
+    受理書類
+    原文 英訳
+    2024-05-20
+    添付書類（Attached Document）
+    受理書類
+    原文 英訳
+    """
+
+    opd._scrape_documents_from_text(text, docs, seen)
+
+    assert any(d["kind"] == "IPER" and d["target"] for d in docs)
+    assert any(d["kind"] == "添付書類" and not d["target"] for d in docs)
 
 
 def test_iter_pdf_url_candidates_finds_docu_url_and_pdf_values():
@@ -181,6 +227,9 @@ def test_click_opd_toolbar_button_falls_back_to_dom_click(monkeypatch):
     calls = {}
 
     class FakePage:
+        frames = []
+        main_frame = None
+
         def evaluate(self, script, arg):
             calls["script"] = script
             calls["arg"] = arg
@@ -190,7 +239,31 @@ def test_click_opd_toolbar_button_falls_back_to_dom_click(monkeypatch):
 
     assert opd._click_opd_toolbar_button(FakePage(), ["書類情報を全て開く"], []) is True
     assert "clickableAncestor" in calls["script"]
-    assert calls["arg"] == {"labels": ["書類情報を全て開く"]}
+    assert calls["arg"] == {"labels": ["書類情報を全て開く", "書類情報をすべて開く"]}
+
+
+def test_click_opd_toolbar_button_searches_child_frames(monkeypatch):
+    calls = []
+
+    class FakeFrame:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+
+        def evaluate(self, script, arg):
+            calls.append((self.name, arg))
+            return self.result
+
+    class FakePage(FakeFrame):
+        def __init__(self):
+            super().__init__("page", False)
+            self.main_frame = object()
+            self.frames = [self.main_frame, FakeFrame("child", True)]
+
+    monkeypatch.setattr(opd, "_click_first_visible", lambda *_args, **_kwargs: False)
+
+    assert opd._click_opd_toolbar_button(FakePage(), ["書類情報を全て開く"], []) is True
+    assert [name for name, _ in calls] == ["page", "child"]
 
 
 def test_documents_look_expanded_when_target_and_attachment_are_present():
@@ -206,6 +279,7 @@ def test_documents_look_expanded_when_target_and_attachment_are_present():
 def test_download_rejection_pdfs_uses_saved_recipe_without_row(monkeypatch):
     sess = opd.OpdDossierSession()
     sess._page = object()
+    monkeypatch.setattr(sess, "_ensure_active_page", lambda: sess._page)
     monkeypatch.setattr(opd, "_dismiss_modals", lambda _page: None)
     monkeypatch.setattr(opd, "_click_expand_all_documents", lambda _page: False)
     monkeypatch.setattr(opd, "_try_direct_opd_recipe_download", lambda _page, _case_id, _target: (True, "saved.pdf"))
@@ -224,6 +298,78 @@ def test_download_rejection_pdfs_uses_saved_recipe_without_row(monkeypatch):
     assert result["downloads"][0]["success"] is True
     assert result["downloads"][0]["path"] == "saved.pdf"
     assert result["downloads"][0]["resolved_by"] == "saved_wsh0901_recipe"
+
+
+def test_select_opd_page_prefers_h0200_window():
+    class FakeLocator:
+        def __init__(self, text):
+            self.text = text
+
+        def inner_text(self, timeout=800):
+            return self.text
+
+    class FakePage:
+        def __init__(self, url, body):
+            self.url = url
+            self.body = body
+            self.front = False
+
+        def title(self, timeout=500):
+            return ""
+
+        def locator(self, selector):
+            return FakeLocator(self.body)
+
+        def bring_to_front(self):
+            self.front = True
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def is_closed(self):
+            return False
+
+    sess = opd.OpdDossierSession()
+    fixed = FakePage("https://www.j-platpat.inpit.go.jp/c1801/PU/JP-2030-123456/11/ja", "")
+    opd_page = FakePage("https://www.j-platpat.inpit.go.jp/h0200", "書類情報を全て開く")
+    sess._ctx = type("Ctx", (), {"pages": [fixed, opd_page]})()
+    sess._page = fixed
+
+    assert sess._select_opd_page() is opd_page
+    assert sess._page is opd_page
+    assert opd_page.front is True
+
+
+def test_ensure_active_page_recreates_closed_page():
+    class FakePage:
+        def __init__(self, closed=False):
+            self._closed = closed
+
+        def is_closed(self):
+            return self._closed
+
+    class FakeContext:
+        def __init__(self):
+            self.created = []
+
+        def new_page(self):
+            page = FakePage(False)
+            self.created.append(page)
+            return page
+
+    class FakeBrowser:
+        def is_connected(self):
+            return True
+
+    sess = opd.OpdDossierSession()
+    sess._browser = FakeBrowser()
+    sess._ctx = FakeContext()
+    sess._page = FakePage(True)
+
+    page = sess._ensure_active_page()
+
+    assert page is sess._ctx.created[0]
+    assert sess._page is page
 
 
 def test_rejection_documents_opd_pdf_covers_same_date_kind_candidate(tmp_path, monkeypatch):
@@ -548,6 +694,43 @@ def test_rejection_documents_hide_opd_candidate_covered_by_attached_pdf(tmp_path
     assert data["documents"][0]["status"] == "ready"
 
 
+def test_rejection_documents_hide_empty_search_report_covered_by_opd_pdf(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    monkeypatch.setattr(opd, "load_case_meta", case_service.load_case_meta)
+    monkeypatch.setattr(opd, "_load_or_build_ocr_reports", lambda case_id: [])
+    (tmp_path / "cases").mkdir()
+    case_service.create_minimal_case("2030-opd", title="x")
+    case_dir = case_service.get_case_dir("2030-opd")
+    dossier_dir = case_dir / "dossier"
+    dossier_dir.mkdir()
+    (dossier_dir / "opd_index.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "documents": [],
+    }), encoding="utf-8")
+    (dossier_dir / "opd_pdf_reports.json").write_text(json.dumps({
+        "case_id": "2030-opd",
+        "reports": [{
+            "kind": "WOSA",
+            "label": "2030-01-01 International Preliminary Report on Patentability Chapter I",
+            "date": "2030-01-01",
+            "raw_text": "reasoned statement",
+            "raw_text_length": 18,
+        }],
+    }), encoding="utf-8")
+    reports_dir = case_dir / "search_reports"
+    reports_dir.mkdir()
+    (reports_dir / "search_reports.json").write_text(json.dumps({
+        "reports": [{"filename": "IPER.pdf", "form": "WOSA", "box_v": ""}],
+    }), encoding="utf-8")
+
+    data, code = opd.load_opd_index("2030-opd")
+
+    assert code == 200
+    assert len(data["rejection_documents"]) == 1
+    assert data["rejection_documents"][0]["source"] == "opd_attached_pdf"
+
+
 def test_summarize_rejection_documents_caches_llm_result(tmp_path, monkeypatch):
     monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
@@ -572,6 +755,39 @@ def test_summarize_rejection_documents_caches_llm_result(tmp_path, monkeypatch):
     assert data["documents"][0]["ja_summary"] == "日本語要約"
     cache = json.loads((dossier_dir / "opd_rejection_summaries.json").read_text(encoding="utf-8"))
     assert next(iter(cache["items"].values()))["model"] == "glm-opus"
+
+
+def test_rejection_documents_parse_saved_search_report_pdf_when_box_v_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(opd, "get_case_dir", case_service.get_case_dir)
+    monkeypatch.setattr(opd, "load_case_meta", case_service.load_case_meta)
+    monkeypatch.setattr(opd, "_load_or_build_ocr_reports", lambda case_id: [])
+    monkeypatch.setattr("modules.search_report_parser.parse_search_report", lambda path: {
+        "form": "WOSA",
+        "box_v": "",
+        "raw_text": "parsed IPER raw text",
+    })
+    (tmp_path / "cases").mkdir()
+    case_service.create_minimal_case("2030-opd", title="x")
+    case_dir = case_service.get_case_dir("2030-opd")
+    dossier_dir = case_dir / "dossier"
+    dossier_dir.mkdir()
+    (dossier_dir / "opd_index.json").write_text(json.dumps({"case_id": "2030-opd", "documents": []}), encoding="utf-8")
+    reports_dir = case_dir / "search_reports"
+    reports_dir.mkdir()
+    (reports_dir / "IPER.pdf").write_bytes(b"%PDF-1.7\n")
+    (reports_dir / "search_reports.json").write_text(json.dumps({
+        "reports": [{"filename": "IPER.pdf", "form": "WOSA", "box_v": ""}],
+    }), encoding="utf-8")
+
+    data, code = opd.load_opd_index("2030-opd")
+
+    assert code == 200
+    docs = data["rejection_documents"]
+    assert docs[0]["source"] == "search_report"
+    assert docs[0]["status"] == "ready"
+    assert docs[0]["has_text"] is True
+    assert docs[0]["text_preview"] == "parsed IPER raw text"
 
 
 def test_ingest_opd_pdf_file_adds_ocr_report_to_rejections(tmp_path, monkeypatch):

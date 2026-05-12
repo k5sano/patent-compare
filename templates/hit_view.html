@@ -116,11 +116,12 @@
   .empty-section { color:var(--text2); font-style:italic; padding:0.5rem; display:none; }
   body.filter-active .section:not(:has(.filter-unit.unit-match)) > .empty-section { display:block; }
 
-  mark.pkm-mark { background: color-mix(in srgb, var(--c, #f87171) 22%, transparent);
-    color: var(--c, #f87171); padding:0 2px; border-radius:3px; font-weight:600;
-    box-shadow: inset 0 -1px 0 var(--c, #f87171); }
+  mark.pkm-mark { background: var(--pc-hl-bg, color-mix(in srgb, var(--c, #f87171) 40%, transparent));
+    color: inherit; padding:0 2px; border-radius:3px; font-weight:600;
+    box-shadow: inset 0 -1px 0 var(--c, #f87171);
+    -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   @supports not (background: color-mix(in srgb, red 50%, transparent)) {
-    mark.pkm-mark { background: rgba(248,113,113,0.22); }
+    mark.pkm-mark { background: var(--pc-hl-bg, rgba(248,113,113,0.4)); }
   }
 
   .empty { color:var(--text2); font-style:italic; padding:0.5rem 0; }

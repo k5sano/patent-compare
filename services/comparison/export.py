@@ -6,6 +6,19 @@ from __future__ import annotations
 import json
 
 from services.case_service import get_case_dir, load_case_meta
+
+
+def _load_keywords(case_dir):
+    kw_path = case_dir / "keywords.json"
+    if not kw_path.exists():
+        return None
+    try:
+        with kw_path.open(encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def export_full_report(case_id, selected_citation_ids=None):
     """完成版対比表 (本願解析 / 対比表 / 進歩性判断 の 3 タブ統合) を生成。
 
@@ -89,6 +102,7 @@ def export_full_report(case_id, selected_citation_ids=None):
     else:
         fname = f"{meta['case_id']}_完成版対比表.xlsx"
     output_path = case_dir / "output" / fname
+    keywords = _load_keywords(case_dir)
 
     write_full_report(
         output_path=str(output_path),
@@ -98,6 +112,7 @@ def export_full_report(case_id, selected_citation_ids=None):
         citations_meta=citations_meta,
         hongan_analysis=hongan_analysis,
         inventive_step=inventive_step,
+        keywords=keywords,
     )
     return {
         "success": True,
@@ -170,6 +185,8 @@ def export_excel(case_id, selected_citation_ids=None):
             with open(cit_path, "r", encoding="utf-8") as f:
                 citations_meta[cit["id"]] = json.load(f)
 
+    keywords = _load_keywords(case_dir)
+
     # ファイル名: 選択時はサフィックス付き (上書き防止 + 識別性)
     if selected_citation_ids and len(responses) < len(all_responses):
         suffix = f"_対比表_{len(responses)}件.xlsx"
@@ -183,6 +200,7 @@ def export_excel(case_id, selected_citation_ids=None):
         segments=segs,
         responses=responses,
         citations_meta=citations_meta,
+        keywords=keywords,
     )
 
     return {

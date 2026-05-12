@@ -228,6 +228,27 @@ function toggleWorkspaceRefPane(forceOpen = null) {
   workspaceLog(collapsed ? '参照ペインを閉じました' : '参照ペインを開きました');
 }
 
+function _workspaceSyncControlsButton() {
+  const collapsed = document.body.classList.contains('workspace-controls-collapsed');
+  const btn = document.getElementById('workspace-controls-toggle-btn');
+  if (!btn) return;
+  btn.classList.toggle('is-muted', collapsed);
+  btn.textContent = collapsed ? '操作表示' : '操作非表示';
+  btn.title = collapsed
+    ? '引用/作業の切替ボタンと操作パネルを表示します'
+    : '引用/作業の切替ボタンと操作パネルを非表示にして表示領域を広げます';
+}
+
+function toggleWorkspaceControls(forceShow = null) {
+  const collapsed = forceShow === null
+    ? !document.body.classList.contains('workspace-controls-collapsed')
+    : !forceShow;
+  document.body.classList.toggle('workspace-controls-collapsed', collapsed);
+  _workspaceStore('controls-collapsed', collapsed ? '1' : '0');
+  _workspaceSyncControlsButton();
+  workspaceLog(collapsed ? '引用/作業ボタンを隠しました' : '引用/作業ボタンを表示しました');
+}
+
 function setWorkspaceTab(tab, openPane = true) {
   const target = tab || 'hongan';
   document.querySelectorAll('.ref-tab').forEach(btn => {
@@ -670,6 +691,10 @@ function initWorkspaceResizer() {
 document.addEventListener('DOMContentLoaded', function () {
   const collapsed = _workspaceLoad('ref-collapsed', '0') === '1';
   document.body.classList.toggle('workspace-ref-collapsed', collapsed);
+  document.body.classList.toggle('workspace-controls-collapsed', _workspaceLoad('controls-collapsed', '0') === '1');
+  document.body.classList.toggle('comp-colbar-collapsed', _workspaceLoad('comp-colbar-collapsed', '0') === '1');
+  _workspaceSyncControlsButton();
+  _syncCompColumnPickerButton();
   const log = document.getElementById('workspace-log');
   if (log && _workspaceLoad('log-open', '0') === '1') log.classList.add('open');
   setWorkspaceTab(_workspaceLoad('tab', 'hongan'), false);
@@ -866,6 +891,17 @@ function _opdTargetHasSafeAttachment(t) {
   return labels.some(a => /添付書類|Attached\s+Document/i.test(a || ''));
 }
 
+function _opdTargetIsWoOriginalDownloadable(t) {
+  if (!t || !['ISR', 'IPER'].includes(t.kind || '')) return false;
+  const text = `${t.label || ''} ${t.text || ''}`;
+  if (/国内書面|National\s+Entry|受理書類/i.test(text)) return false;
+  return /発送書類|ノート\/サーチ|Copy\s+of\s+the\s+international/i.test(text);
+}
+
+function _opdTargetHasDownloadablePdf(t) {
+  return _opdTargetHasSafeAttachment(t) || _opdTargetIsWoOriginalDownloadable(t);
+}
+
 function _opdTargetIsRejectionKind(t) {
   return ['IPER', 'US Non Final Rejection', 'US Final Rejection', 'CN拒絶理由'].includes((t && t.kind) || '');
 }
@@ -894,12 +930,12 @@ function _renderOpdTargets(data) {
     const attachments = (t.attachment_labels || []).map(a =>
       `<div style="color:#86efac; font-size:0.74rem; margin-top:0.15rem;">添付: ${_hrefEsc(a)}</div>`
     ).join('');
-    const canDownload = _opdTargetIsRejectionKind(t) && _opdTargetHasSafeAttachment(t);
+    const canDownload = _opdTargetIsRejectionKind(t) && _opdTargetHasDownloadablePdf(t);
     const action = canDownload
       ? `<button type="button" class="btn btn-outline" data-opd-target-download="${idx}"
-                 style="font-size:0.74rem; padding:0.18rem 0.45rem;">この添付を保存/OCR</button>`
+                 style="font-size:0.74rem; padding:0.18rem 0.45rem;">PDFを保存/OCR</button>`
       : (_opdTargetIsRejectionKind(t)
-          ? `<span style="color:#fbbf24; font-size:0.74rem;">手動取込向き</span>`
+          ? `<span style="color:#fbbf24; font-size:0.74rem;">添付PDF未特定</span>`
           : '');
     return `<tr>
       <td style="padding:0.25rem 0.45rem; white-space:nowrap; color:#bfdbfe;">${_hrefEsc(t.kind || '')}</td>
@@ -920,6 +956,7 @@ function _renderOpdTargets(data) {
   const embeddedOcrCitations = ocrReports.reduce((sum, r) =>
     sum + ((r.citations || []).length) + ((r.family_citations || []).length), 0);
   const opdPdfChars = opdPdfReports.reduce((sum, r) => sum + Number(r.raw_text_length || (r.raw_text || '').length || 0), 0);
+  const searchReportReady = rejections.filter(d => d.source === 'search_report' && d.has_text).length;
   const timingLabels = {
     collect_opd_documents: 'OPD書類収集',
     download_rejection_pdfs: 'OPD添付PDF保存/OCR',
@@ -962,7 +999,9 @@ function _renderOpdTargets(data) {
     <div style="padding:0.45rem 0.55rem; border:1px solid var(--border); border-radius:6px; background:rgba(15,23,42,0.35); font-size:0.78rem;">
       <div style="color:#bfdbfe; font-weight:700;">OPD添付PDF OCR</div>
       <div style="margin-top:0.15rem; color:${opdPdfReports.length ? '#86efac' : '#fbbf24'};">
-        ${opdPdfReports.length ? `保存済み ${opdPdfReports.length}件 / ${opdPdfChars.toLocaleString()}字` : '未取得'}
+        ${opdPdfReports.length
+          ? `保存済み ${opdPdfReports.length}件 / ${opdPdfChars.toLocaleString()}字`
+          : (searchReportReady ? `未取得（検索報告PDFから本文あり ${searchReportReady}件）` : '未取得')}
       </div>
       <div style="margin-top:0.15rem; color:#94a3b8;">IPER・拒絶理由の翻訳/要約に使います。</div>
     </div>
@@ -1207,7 +1246,7 @@ async function autoProcessCollectedOpd(data) {
   const targets = (data && data.targets) || [];
   const safeTargetIndices = targets
     .map((t, idx) => ({t, idx}))
-    .filter(x => _opdTargetIsRejectionKind(x.t) && _opdTargetHasSafeAttachment(x.t))
+    .filter(x => _opdTargetIsRejectionKind(x.t) && _opdTargetHasDownloadablePdf(x.t))
     .map(x => x.idx);
   const existingReady = ((data && data.rejection_documents) || []).filter(d => d.has_text || d.status === 'summarized').length;
 
@@ -1230,7 +1269,11 @@ async function autoProcessCollectedOpd(data) {
     /* summarizeOpdRejections handles display */
   }
   if (typeof loadDossierCitationCandidates === 'function') {
-    await loadDossierCitationCandidates();
+    try {
+      await loadDossierCitationCandidates();
+    } catch (e) {
+      _opdRejectionStatus('ドシエ引用候補の再読込に失敗しました: ' + (e.message || e), 'warn');
+    }
   }
 }
 
@@ -1285,7 +1328,11 @@ async function openHonganOpd() {
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
     const hint = data.hint ? ` ${data.hint}` : '';
-    _honganDossierMsg(`OPD画面を開きました。${hint}`, data.opd_clicked ? 'success' : 'info');
+    const expanded = data.expanded_on_open
+      ? '書類情報を全て開きました。'
+      : '書類情報の自動展開は未確認です。OPD画面で開いていなければ「OPD書類を収集」を押してください。';
+    const citationExpanded = data.citation_info_expanded_on_open ? '分類・引用情報も表示しました。' : '';
+    _honganDossierMsg(`OPD画面を開きました。${expanded}${citationExpanded}${hint}`, data.opd_clicked ? 'success' : 'info');
     await refreshHonganOpdSessionStatus();
   } catch (e) {
     _honganDossierMsg('OPDを開けませんでした: ' + (e.message || e), 'error');
@@ -1297,22 +1344,47 @@ async function openHonganOpd() {
 
 async function collectHonganOpdDocuments() {
   if (!await _requireHonganOpdSession('collect')) return;
-  _honganDossierMsg('OPD書類情報を収集中です...', 'info');
-  _setDossierButtonLoading('btn-opd-collect', true, '収集中...');
+  _honganDossierMsg('OPD書類情報を収集し、PDF保存/OCR、翻訳・要約まで自動実行しています...', 'info');
+  const progressTimer = _startOpdRejectionProgress('OPD一括処理中: 収集 → PDF保存/OCR → 翻訳・要約');
+  _setDossierButtonLoading('btn-opd-collect', true, '自動処理中...');
+  let collected = null;
   try {
-    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/collect`, { method: 'POST' });
+    if (typeof initModelPickers === 'function') initModelPickers();
+    const sel = document.querySelector('select.model-picker[data-model-key="opd-rejection-summary"]');
+    const model = (sel && sel.value) || 'sonnet';
+    const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/dossier/opd/collect-process`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({model}),
+    });
     const data = await resp.json();
     if (!resp.ok || !data.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    collected = data;
     _renderOpdTargets(data);
-    _honganDossierMsg(`OPD書類候補を保存しました: 対象 ${((data.targets || []).length)} 件`, 'success');
+    const ap = data.auto_process || {};
+    const msg = `OPD一括処理完了: 対象 ${ap.target_count ?? ((data.targets || []).length)} 件 / ` +
+      `PDF保存 ${ap.download_success_count || 0} 件 / ` +
+      `翻訳・要約 ${ap.summary_success_count || 0} 件` +
+      ((ap.summary_waiting_count || 0) ? ` / PDF・OCR待ち ${ap.summary_waiting_count} 件` : '') +
+      ((ap.summary_error_count || 0) ? ` / 要約エラー ${ap.summary_error_count} 件` : '');
+    _honganDossierMsg(msg, (ap.summary_error_count || ap.download_error) ? 'warn' : 'success');
+    _opdRejectionStatus(msg, (ap.summary_error_count || ap.download_error) ? 'warn' : 'success');
     await refreshHonganOpdSessionStatus();
-    await autoProcessCollectedOpd(data);
   } catch (e) {
     const msg = (e.message || e || '').toString();
-    _honganDossierMsg(msg.includes('OPDセッション') ? _opdSessionGuide('OPD書類収集に失敗しました') : 'OPD書類収集に失敗しました: ' + msg, 'error');
+    _honganDossierMsg(msg.includes('OPDセッション') ? _opdSessionGuide('OPD一括処理に失敗しました') : 'OPD一括処理に失敗しました: ' + msg, 'error');
     await refreshHonganOpdSessionStatus();
+    return;
   } finally {
+    window.clearInterval(progressTimer);
     _setDossierButtonLoading('btn-opd-collect', false);
+  }
+  if (typeof loadDossierCitationCandidates === 'function') {
+    try {
+      await loadDossierCitationCandidates();
+    } catch (e) {
+      _opdRejectionStatus('ドシエ引用候補の再読込に失敗しました: ' + (e.message || e), 'warn');
+    }
   }
 }
 
@@ -2940,9 +3012,12 @@ async function extractHonganTables() {
           _appendTableProgress(`スキャン中: ${evt.info}`);
         } else if (evt.stage === 'extract') {
           _appendTableProgress(`[${evt.current}/${evt.total}] ${evt.info}`);
+        } else if (evt.stage === 'extract_done') {
+          _appendTableProgress(`[完了 ${evt.current}/${evt.total}] ${evt.info}`);
         } else if (evt.stage === 'done') {
           summary = evt.summary;
-          _appendTableProgress(`完了: ${summary.n_table} 表抽出 / 所要 ${(summary.total_duration_ms/1000).toFixed(1)}s / コスト相当 $${summary.total_cost_usd_equivalent}`);
+          const missing = (summary.missing_table_references || []).length;
+          _appendTableProgress(`完了: ${summary.n_table} 表抽出 / ベクター ${summary.vector_tables_count || 0} / クロップ ${summary.crop_candidates || 0} / 漏れ候補 ${missing} / 所要 ${(summary.total_duration_ms/1000).toFixed(1)}s / コスト相当 $${summary.total_cost_usd_equivalent}`);
         } else if (evt.stage === 'error') {
           throw new Error(evt.message);
         }
@@ -2994,10 +3069,12 @@ function _renderHonganTables(payload) {
     return;
   }
   const refs = (payload.body_table_references || []).filter(r => /表|Table/i.test(r));
+  const missing = payload.missing_table_references || [];
   const html = [
     `<div style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">`,
-    `  本文中の表参照: ${refs.length} 件 / 検出キャプション付き画像: ${payload.candidates_targeted ?? '?'} / 抽出成功: ${tables.length} / エラー: ${errs.length}`,
+    `  本文中の表参照: ${refs.length} 件 / ベクター表: ${payload.vector_tables_count || 0} / 画像・クロップ対象: ${payload.candidates_targeted ?? '?'} / 抽出成功: ${tables.length} / エラー: ${errs.length}`,
     `  &nbsp;|&nbsp; 所要 ${((payload.total_duration_ms||0)/1000).toFixed(1)}s &nbsp;|&nbsp; サブスク相当 $${payload.total_cost_usd_equivalent ?? 0}`,
+    missing.length ? `  <br><span style="color:#fbbf24;">漏れ候補: ${missing.map(_esc).join('、')}</span>` : '',
     `</div>`,
   ];
   for (const t of tables) {
@@ -3052,8 +3129,34 @@ const GROUP_COLORS = [
   '#22c55e','#f97316','#14b8a6','#6b7280',
 ];
 
+// 強調表示の統一ルール:
+// - PDF 注釈 (modules.pdf_annotator._GROUP_COLORS) と同じ色を使う
+// - 塗りは 40% 透過
+// - キーワードグループに無い重要語は赤字だけで示す
+const GROUP_HIGHLIGHT_COLORS = [
+  '#ff9999', '#c7a6ff', '#ff99d9', '#99bfff',
+  '#99ffb3', '#ffd180', '#80f2d9', '#bfc4cc',
+];
+const GROUP_HIGHLIGHT_OPACITY = 0.4;
+
 function groupColor(gid) {
   return GROUP_COLORS[(gid - 1) % GROUP_COLORS.length];
+}
+
+function groupHighlightColor(gid) {
+  return GROUP_HIGHLIGHT_COLORS[(gid - 1) % GROUP_HIGHLIGHT_COLORS.length];
+}
+
+function _pcHexToRgb(hex) {
+  const m = String(hex || '').trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!m) return { r: 248, g: 113, b: 113 };
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+function _pcRgba(hex, opacity = GROUP_HIGHLIGHT_OPACITY) {
+  const { r, g, b } = _pcHexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
 // セグメント情報（分節テキスト参照用）
@@ -3171,7 +3274,7 @@ function renderGroup(g) {
               onclick="openCopyModal(${g.group_id})">コピー</button>
       <button class="kw-group-btn" title="このグループ内のハイライトをすべて外す"
               onclick="clearSelection(${g.group_id})">ハイライト解除</button>
-      <button class="kw-group-btn kw-group-btn-del" title="赤字でハイライトしていない語を削除。ハイライト（赤字）した語は残ります。"
+      <button class="kw-group-btn kw-group-btn-del" title="色付きで選択していない語を削除。選択した語は残ります。"
               onclick="deleteUnselected(${g.group_id})">ハイライト外を削除</button>
       <button class="kw-group-btn kw-group-btn-del" title="グループ削除"
               onclick="deleteGroup(${g.group_id})">グループ削除</button>
@@ -3205,8 +3308,11 @@ function renderGroup(g) {
 function renderKwTag(gid, kw) {
   const typeLabel = kw.type || '';
   const badgeClass = typeToBadgeClass(typeLabel);
+  const hlColor = groupHighlightColor(gid);
+  const hlBg = _pcRgba(hlColor);
   return `<span class="kw-tag" data-term="${escAttr(kw.term)}" data-gid="${gid}"
-    title="クリック: 残す/外すを切替（赤=残す） / ダブルクリック: 編集">
+    style="--kw-group-color:${hlColor}; --kw-group-bg:${hlBg};"
+    title="クリック: 残す/外すを切替（色付き=残す） / ダブルクリック: 編集">
     <span class="badge ${badgeClass}" style="font-size:0.65rem; padding:1px 4px; border-radius:3px;">${escHtml(typeLabel)}</span>
     <span class="kw-term-text">${escHtml(kw.term)}</span>
   </span>`;
@@ -3214,9 +3320,12 @@ function renderKwTag(gid, kw) {
 
 function renderFterms(g) {
   const fterms = g.search_codes && g.search_codes.fterm ? g.search_codes.fterm : [];
+  const hlColor = groupHighlightColor(g.group_id);
+  const hlBg = _pcRgba(hlColor);
   const items = fterms.map(ft =>
     `<span class="fterm-tag" data-gid="${g.group_id}" data-code="${escAttr(ft.code)}"
-      title="クリックで残す/外すを切替（赤=残す）">
+      style="--kw-group-color:${hlColor}; --kw-group-bg:${hlBg};"
+      title="クリックで残す/外すを切替（色付き=残す）">
       ${escHtml(ft.code)} <span class="fterm-desc">${escHtml(ft.desc || '')}</span>
     </span>`
   ).join('');
@@ -3240,9 +3349,12 @@ function renderFterms(g) {
 
 function renderFis(g) {
   const fis = g.search_codes && g.search_codes.fi ? g.search_codes.fi : [];
+  const hlColor = groupHighlightColor(g.group_id);
+  const hlBg = _pcRgba(hlColor);
   const items = fis.map(fi =>
     `<span class="fi-tag" data-gid="${g.group_id}" data-code="${escAttr(fi.code)}"
-      title="クリックで残す/外すを切替（赤=残す）">
+      style="--kw-group-color:${hlColor}; --kw-group-bg:${hlBg};"
+      title="クリックで残す/外すを切替（色付き=残す）">
       ${escHtml(fi.code)} <span class="fi-desc">${escHtml(fi.desc || '')}</span>
     </span>`
   ).join('');
@@ -3525,7 +3637,7 @@ async function applySearchHints() {
       status.textContent = '';
       return;
     }
-    // 取り込んだ語/コードを localStorage の kw-marked に反映 → 再描画後に赤字化
+    // 取り込んだ語/コードを localStorage の kw-marked に反映 → 再描画後にグループ色で強調
     _shMarkApplied(d);
     alert(`✅ 同義語 ${d.synonyms_added} 件 / 分類コード ${d.codes_added} 件 を反映しました。\n` +
           `(振り分けできなかった分類コード ${d.codes_unmatched_to_unsorted} 件は「予備検索ヒント (未分類)」グループへ集約)`);
@@ -3615,7 +3727,7 @@ async function rebuildGroupsFromTechAnalysis() {
     '・グループは Step 4 の各項目ごとに 1 つずつ作り直されます\n' +
     '・既存の手動追加キーワード/Fターム は segment_ids の重なりで新グループへ自動移行されます\n' +
     '・旧AI自動提案グループは残さず、Step 4 構造を正とします\n' +
-    '・ハイライト (赤字) 状態は失われる場合があります\n' +
+    '・ハイライト選択状態は失われる場合があります\n' +
     '\n' +
     'よろしいですか?'
   );
@@ -3694,7 +3806,7 @@ async function deleteUnselected(gid) {
   const g = kwGroups.find(g => g.group_id === gid);
   if (!g) return;
 
-  // 赤字ハイライト = 残す。ハイライトされていないものを削除対象とする。
+  // グループ色ハイライト = 残す。ハイライトされていないものを削除対象とする。
   const delKws = Array.from(groupEl.querySelectorAll('.kw-tag:not(.kw-marked)')).map(el => el.dataset.term).filter(Boolean);
   const delFts = Array.from(groupEl.querySelectorAll('.fterm-tag:not(.kw-marked)')).map(el => el.dataset.code).filter(Boolean);
   const delFis = Array.from(groupEl.querySelectorAll('.fi-tag:not(.kw-marked)')).map(el => el.dataset.code).filter(Boolean);
@@ -4674,7 +4786,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // イベントデリゲーション: キーワードタグの編集・選択
   const kwContainer = document.getElementById('kw-groups-container');
   if (kwContainer) {
-    // クリックで選択（赤字）トグル。dblclick が来れば取り消して編集モードに入る。
+    // クリックで選択（グループ色）トグル。dblclick が来れば取り消して編集モードに入る。
     let _kwClickTimer = null;
     kwContainer.addEventListener('click', (e) => {
       // 編集中の input や追加用 input は無視
@@ -4996,12 +5108,13 @@ function _stripCommentMemoFromLoc(raw) {
   // ; 区切りでトークンを取り直し、" や // で始まるものを除外
   return raw.split(';')
     .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith('"') && !s.startsWith('//'))
+    .filter((s) => s && !s.startsWith('"') && !s.startsWith('/') && !s.startsWith('//'))
     .map((s) => {
-      // トークン内の " や // 以降を切り捨て
+      // トークン内の " / // 以降を切り捨て
       const cIdx = s.indexOf('"');
+      const slashIdx = s.indexOf('/');
       const mIdx = s.indexOf('//');
-      const cuts = [cIdx, mIdx].filter((i) => i >= 0);
+      const cuts = [cIdx, slashIdx, mIdx].filter((i) => i >= 0);
       if (cuts.length) return s.substring(0, Math.min(...cuts)).trim();
       return s;
     })
@@ -5024,7 +5137,7 @@ function _formatCompForPaste(comp) {
   const j = (comp.judgment || '').trim();
   let prefix = '';
   if (j === '△') prefix = '?';
-  else if (j === '×') prefix = '!';  // 該当箇所なしは !
+  else if (j === '×') prefix = 'x';
   // ○ や空は prefix なし
 
   const raw = comp.cited_location || '';
@@ -5132,7 +5245,7 @@ function _compLocHtml(comp, citId) {
   let html = '<br><span class="comp-cite-loc">📍 ' + _compLinkifyParaRefs(_escapeHtml(loc), citId) + '</span>';
   const cmt = comp.cited_location_comment || '';
   if (cmt) {
-    html += '<br><span class="comp-cite-comment">📝 ' + _escapeHtml(cmt) + '</span>';
+    html += '<br><span class="comp-cite-comment">📝 ' + _compCommentHtml(cmt, citId) + '</span>';
   }
   return html;
 }
@@ -5145,6 +5258,12 @@ function wireCompSummaryIfNeeded() {
   root.addEventListener('change', (e) => {
     const t = e.target;
     if (t && ((t.classList && t.classList.contains('comp-col-toggle')) || t.name === 'comp-view')) {
+      renderCompSummaryTable();
+    }
+  });
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (t && t.name === 'comp-view') {
       renderCompSummaryTable();
     }
   });
@@ -5184,6 +5303,37 @@ function _compLinkifyParaRefs(escaped, citId) {
       '" data-para-id="' + norm + '" title="段落 【' + norm + '】 を表示">【' +
       num + '】</a>';
   });
+}
+
+function _syncCompColumnPickerButton() {
+  const collapsed = document.body.classList.contains('comp-colbar-collapsed');
+  const btn = document.getElementById('comp-colbar-toggle');
+  if (!btn) return;
+  btn.classList.toggle('is-muted', collapsed);
+  btn.textContent = collapsed ? '個別特許 表示' : '個別特許 非表示';
+  btn.title = collapsed ? '個別特許の列選択を表示します' : '個別特許の列選択を非表示にします';
+}
+
+function toggleCompColumnPicker(forceShow = null) {
+  const collapsed = forceShow === null
+    ? !document.body.classList.contains('comp-colbar-collapsed')
+    : !forceShow;
+  document.body.classList.toggle('comp-colbar-collapsed', collapsed);
+  _workspaceStore('comp-colbar-collapsed', collapsed ? '1' : '0');
+  _syncCompColumnPickerButton();
+}
+
+function _compCommentHtml(text, citId) {
+  const raw = String(text || '');
+  if (!raw) return '';
+  const highlighted = (window.PCHighlight && typeof window.PCHighlight.renderKeywordText === 'function')
+    ? window.PCHighlight.renderKeywordText(raw)
+    : _escapeHtml(raw);
+  return _compLinkifyParaRefs(highlighted, citId);
+}
+
+function _compReasonHtml(text, citId) {
+  return _compCommentHtml(text, citId);
 }
 
 async function _compShowParagraphPopup(citId, paraId, anchorEl) {
@@ -5373,7 +5523,7 @@ function renderCompSummaryTable() {
 
   if (colbar) colbar.innerHTML = _buildColbarHtml(d, visMap);
 
-  const view = (document.querySelector('#comparison-summary input[name="comp-view"]:checked') || {}).value || 'detail';
+  const view = (document.querySelector('input[name="comp-view"]:checked') || {}).value || 'detail';
   const isCompact = view === 'compact';
   const spanAll = activeCits.length + 1;
 
@@ -5425,7 +5575,7 @@ function renderCompSummaryTable() {
         const resp = d.responses[citId];
         const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
         if (comp) {
-          const reason = _compLinkifyParaRefs(_escapeHtml(comp.judgment_reason || ''), citId);
+          const reason = _compReasonHtml(comp.judgment_reason || '', citId);
           const loc = _compLocHtml(comp, citId);
           const editedBadge = comp._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(comp._edited_at) + '">✏</span>' : '';
           const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'comparison\',\'' + _escapeAttr(segId) + '\')">✏</button>';
@@ -5463,7 +5613,7 @@ function renderCompSummaryTable() {
           if (sub) {
             const jRaw = (sub.judgment) ? String(sub.judgment) : '';
             const jDisp = _compJDisp(sub);
-            const jr = _compLinkifyParaRefs(_escapeHtml(sub.judgment_reason || ''), citId);
+            const jr = _compReasonHtml(sub.judgment_reason || '', citId);
             const loc = _compLocHtml(sub, citId);
             const editedBadge = sub._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(sub._edited_at) + '">✏</span>' : '';
             const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'sub_claim\',\'' + claim.claim_number + '\')">✏</button>';
@@ -5491,7 +5641,7 @@ function renderCompSummaryTable() {
     } else {
       if (resp) {
         const cat = _escapeHtml(String(resp.category_suggestion || ''));
-        const summary = _escapeHtml(String(resp.overall_summary || ''));
+        const summary = _compCommentHtml(resp.overall_summary || '', citId);
         body += '<td class="comp-td-sum"><strong>' + cat + '</strong><br><span class="comp-sum-text">' + summary + '</span></td>';
       } else {
         body += '<td class="comp-td-sum" style="color:var(--text2);">未回答</td>';
@@ -5933,6 +6083,19 @@ async function parseInventiveStepResponse() {
   }
 }
 
+function _invTextHtml(value) {
+  const text = String(value || '');
+  if (!text) return '';
+  if (window.PCHighlight && typeof window.PCHighlight.renderKeywordText === 'function') {
+    return window.PCHighlight.renderKeywordText(text);
+  }
+  return _escapeHtml(text);
+}
+
+function _invListHtml(values) {
+  return (values || []).map(v => _invTextHtml(v)).join(', ');
+}
+
 function renderInventiveStepResult(data) {
   let html = '';
 
@@ -5943,12 +6106,12 @@ function renderInventiveStepResult(data) {
     const stepTextColor = oa.inventive_step === 'あり' ? '#4ade80' : oa.inventive_step === 'なし' ? '#fca5a5' : '#fbbf24';
     html += `<div style="padding:1rem; background:${stepColor}; border-radius:8px; margin-bottom:1rem;">
       <div style="font-size:1.2rem; font-weight:700; color:${stepTextColor}; margin-bottom:0.5rem;">
-        進歩性: ${oa.inventive_step}
+        進歩性: ${_escapeHtml(oa.inventive_step || '')}
       </div>
-      <div style="font-size:0.9rem; color:var(--text); margin-bottom:0.5rem;">${oa.reasoning || ''}</div>
-      ${oa.rejection_logic ? `<div style="font-size:0.85rem; margin-top:0.5rem;"><strong style="color:var(--text2);">拒絶理由の論理構成:</strong><br>${oa.rejection_logic}</div>` : ''}
-      ${oa.vulnerable_points ? `<div style="font-size:0.85rem; margin-top:0.5rem; color:#fbbf24;"><strong>反論されやすいポイント:</strong><br>${oa.vulnerable_points}</div>` : ''}
-      ${oa.strengthening_suggestions ? `<div style="font-size:0.85rem; margin-top:0.5rem; color:#60a5fa;"><strong>論理強化の提案:</strong><br>${oa.strengthening_suggestions}</div>` : ''}
+      <div style="font-size:0.9rem; color:var(--text); margin-bottom:0.5rem;">${_invTextHtml(oa.reasoning)}</div>
+      ${oa.rejection_logic ? `<div style="font-size:0.85rem; margin-top:0.5rem;"><strong style="color:var(--text2);">拒絶理由の論理構成:</strong><br>${_invTextHtml(oa.rejection_logic)}</div>` : ''}
+      ${oa.vulnerable_points ? `<div style="font-size:0.85rem; margin-top:0.5rem; color:#fbbf24;"><strong>反論されやすいポイント:</strong><br>${_invTextHtml(oa.vulnerable_points)}</div>` : ''}
+      ${oa.strengthening_suggestions ? `<div style="font-size:0.85rem; margin-top:0.5rem; color:#60a5fa;"><strong>論理強化の提案:</strong><br>${_invTextHtml(oa.strengthening_suggestions)}</div>` : ''}
     </div>`;
   }
 
@@ -5956,8 +6119,8 @@ function renderInventiveStepResult(data) {
   const pr = data.primary_reference;
   if (pr) {
     html += `<div style="padding:0.8rem; background:var(--surface2); border-radius:8px; margin-bottom:0.8rem;">
-      <strong>主引用発明:</strong> ${pr.document_id}<br>
-      <span style="font-size:0.85rem; color:var(--text2);">${pr.selection_reason || ''}</span>
+      <strong>主引用発明:</strong> ${_escapeHtml(pr.document_id || '')}<br>
+      <span style="font-size:0.85rem; color:var(--text2);">${_invTextHtml(pr.selection_reason)}</span>
     </div>`;
   }
 
@@ -5967,8 +6130,8 @@ function renderInventiveStepResult(data) {
       <strong>一致点:</strong>
       <ul style="margin:0.3rem 0 0 1.5rem; font-size:0.85rem;">`;
     for (const cf of data.common_features) {
-      const segs = (cf.segment_ids || []).join(', ');
-      html += `<li><span style="color:var(--green); font-weight:600;">[${segs}]</span> ${cf.description}</li>`;
+      const segs = (cf.segment_ids || []).map(x => _escapeHtml(x)).join(', ');
+      html += `<li><span style="color:var(--green); font-weight:600;">[${segs}]</span> ${_invTextHtml(cf.description)}</li>`;
     }
     html += '</ul></div>';
   }
@@ -5980,26 +6143,26 @@ function renderInventiveStepResult(data) {
       const res = diff.resolution || {};
       const methodColor = res.method === '論理付け不可' ? '#fca5a5' : '#fbbf24';
       html += `<div style="padding:0.8rem; background:var(--bg); border-radius:6px; margin-top:0.5rem; border-left:3px solid var(--red);">
-        <div style="font-weight:600; color:var(--red);">${diff.segment_id}: ${diff.description || ''}</div>
-        <div style="font-size:0.85rem; color:var(--text2); margin-top:0.3rem;">技術的意義: ${diff.technical_significance || ''}</div>
+        <div style="font-weight:600; color:var(--red);">${_escapeHtml(diff.segment_id || '')}: ${_invTextHtml(diff.description)}</div>
+        <div style="font-size:0.85rem; color:var(--text2); margin-top:0.3rem;">技術的意義: ${_invTextHtml(diff.technical_significance)}</div>
         <div style="font-size:0.85rem; margin-top:0.5rem;">
-          <span style="color:${methodColor}; font-weight:600;">手法: ${res.method || ''}</span>
-          ${res.secondary_reference ? ` (副引例: ${res.secondary_reference})` : ''}
-          ${res.design_change_type ? ` [${res.design_change_type}]` : ''}
+          <span style="color:${methodColor}; font-weight:600;">手法: ${_invTextHtml(res.method)}</span>
+          ${res.secondary_reference ? ` (副引例: ${_escapeHtml(res.secondary_reference)})` : ''}
+          ${res.design_change_type ? ` [${_invTextHtml(res.design_change_type)}]` : ''}
         </div>`;
       if (res.motivation) {
         const m = res.motivation;
         html += `<div style="font-size:0.8rem; margin-top:0.3rem; padding-left:0.8rem; border-left:2px solid var(--border);">`;
-        if (m.technical_field) html += `<div>技術分野: ${m.technical_field}</div>`;
-        if (m.common_problem) html += `<div>課題共通性: ${m.common_problem}</div>`;
-        if (m.common_function) html += `<div>作用・機能: ${m.common_function}</div>`;
-        if (m.suggestion) html += `<div>示唆: ${m.suggestion}</div>`;
+        if (m.technical_field) html += `<div>技術分野: ${_invTextHtml(m.technical_field)}</div>`;
+        if (m.common_problem) html += `<div>課題共通性: ${_invTextHtml(m.common_problem)}</div>`;
+        if (m.common_function) html += `<div>作用・機能: ${_invTextHtml(m.common_function)}</div>`;
+        if (m.suggestion) html += `<div>示唆: ${_invTextHtml(m.suggestion)}</div>`;
         html += '</div>';
       }
       if (res.inhibiting_factors && res.inhibiting_factors.length > 0) {
-        html += `<div style="font-size:0.8rem; margin-top:0.3rem; color:#fbbf24;">阻害要因: ${res.inhibiting_factors.join(', ')}</div>`;
+        html += `<div style="font-size:0.8rem; margin-top:0.3rem; color:#fbbf24;">阻害要因: ${_invListHtml(res.inhibiting_factors)}</div>`;
       }
-      html += `<div style="font-size:0.85rem; margin-top:0.3rem;">${res.conclusion || ''}</div>`;
+      html += `<div style="font-size:0.85rem; margin-top:0.3rem;">${_invTextHtml(res.conclusion)}</div>`;
       html += '</div>';
     }
     html += '</div>';
@@ -6010,13 +6173,13 @@ function renderInventiveStepResult(data) {
   if (ae) {
     html += `<div style="padding:0.8rem; background:var(--surface2); border-radius:8px; margin-bottom:0.8rem;">
       <strong>有利な効果:</strong><br>
-      <span style="font-size:0.85rem;">${ae.claimed_effects || ''}</span><br>
+      <span style="font-size:0.85rem;">${_invTextHtml(ae.claimed_effects)}</span><br>
       <span style="font-size:0.8rem; color:var(--text2);">
         異質: ${ae.is_heterogeneous ? '○' : '×'} /
         際だって優れた: ${ae.is_remarkably_superior ? '○' : '×'} /
         予測可能: ${ae.is_predictable ? '○' : '×'}
       </span><br>
-      <span style="font-size:0.85rem;">${ae.assessment || ''}</span>
+      <span style="font-size:0.85rem;">${_invTextHtml(ae.assessment)}</span>
     </div>`;
   }
 
@@ -6469,10 +6632,10 @@ async function loadCitationFullTexts() {
             html += `<div class="para-text" style="margin-top:2px;">📍 ${_compLinkifyParaRefs(_escapeHtml(locTxt), citId)}</div>`;
           }
           if (comp.cited_location_comment) {
-            html += `<div class="para-text" style="margin-top:2px; color:var(--text2);">📝 ${_escapeHtml(comp.cited_location_comment)}</div>`;
+            html += `<div class="para-text comp-cite-comment" style="margin-top:2px;">📝 ${_compCommentHtml(comp.cited_location_comment, citId)}</div>`;
           }
           if (comp.judgment_reason) {
-            html += `<div class="para-text" style="margin-top:2px;">${_compLinkifyParaRefs(_escapeHtml(comp.judgment_reason), citId)}</div>`;
+            html += `<div class="para-text" style="margin-top:2px;">${_compReasonHtml(comp.judgment_reason, citId)}</div>`;
           }
           html += '</div>';
         }
@@ -8088,7 +8251,7 @@ function _pkmGetIndex() {
   if (_pkmIndexCache) return _pkmIndexCache;
   const items = [];
   for (const g of (kwGroups || [])) {
-    const color = groupColor(g.group_id);
+    const color = groupHighlightColor(g.group_id);
     for (const kw of (g.keywords || [])) {
       const t = (kw && kw.term ? String(kw.term) : '').trim();
       if (!t) continue;
@@ -8174,6 +8337,23 @@ function _pkmNormalizeForMatch(text) {
 function pkmHighlight(text, index) {
   const t = String(text || '');
   if (!t || !index || !index.length) return { html: _pkmEsc(t), counts: {} };
+  const positions = _pcFindKeywordPositions(t, index);
+  const counts = {};
+  positions.forEach(p => { counts[p.gid] = (counts[p.gid] || 0) + 1; });
+  let out = '';
+  let prev = 0;
+  for (const p of positions) {
+    out += _pkmEsc(t.slice(prev, p.start));
+    const matched = _pkmEsc(t.slice(p.start, p.start + p.length));
+    out += `<mark class="pkm-mark" style="--c:${p.color}; --pc-hl-bg:${_pcRgba(p.color)};" data-gid="${p.gid}">${matched}</mark>`;
+    prev = p.start + p.length;
+  }
+  out += _pkmEsc(t.slice(prev));
+  return { html: out, counts };
+}
+
+function _pcFindKeywordPositions(text, index) {
+  const t = String(text || '');
   const { norm: normText, idxMap } = _pkmNormalizeForMatch(t);
   const positions = [];
   for (const item of index) {
@@ -8197,19 +8377,70 @@ function pkmHighlight(text, index) {
     }
   }
   positions.sort((a, b) => a.start - b.start);
-  const counts = {};
-  positions.forEach(p => { counts[p.gid] = (counts[p.gid] || 0) + 1; });
+  return positions;
+}
+
+function pcBuildKeywordHighlightIndex(groups) {
+  const items = [];
+  for (const g of (groups || kwGroups || [])) {
+    const color = groupHighlightColor(g.group_id);
+    for (const kw of (g.keywords || [])) {
+      const t = (kw && kw.term ? String(kw.term) : '').trim();
+      if (!t) continue;
+      items.push({ term: t, gid: g.group_id, color });
+    }
+  }
+  items.sort((a, b) => b.term.length - a.term.length);
+  return items;
+}
+
+function pcRenderImportantText(text, groups) {
+  const t = String(text || '');
+  if (!t) return '';
+  const index = pcBuildKeywordHighlightIndex(groups);
+  const positions = _pcFindKeywordPositions(t, index);
+  if (!positions.length) {
+    return `<span class="pc-important-term">${_pkmEsc(t)}</span>`;
+  }
+  let out = '';
+  let prev = 0;
+  for (const p of positions) {
+    const before = t.slice(prev, p.start);
+    if (before) out += `<span class="pc-important-term">${_pkmEsc(before)}</span>`;
+    const matched = _pkmEsc(t.slice(p.start, p.start + p.length));
+    out += `<mark class="pc-keyword-highlight" style="--c:${p.color}; --pc-hl-bg:${_pcRgba(p.color)};" data-gid="${p.gid}">${matched}</mark>`;
+    prev = p.start + p.length;
+  }
+  const tail = t.slice(prev);
+  if (tail) out += `<span class="pc-important-term">${_pkmEsc(tail)}</span>`;
+  return out;
+}
+
+function pcRenderKeywordText(text, groups) {
+  const t = String(text || '');
+  if (!t) return '';
+  const index = pcBuildKeywordHighlightIndex(groups);
+  const positions = _pcFindKeywordPositions(t, index);
+  if (!positions.length) return _pkmEsc(t);
   let out = '';
   let prev = 0;
   for (const p of positions) {
     out += _pkmEsc(t.slice(prev, p.start));
     const matched = _pkmEsc(t.slice(p.start, p.start + p.length));
-    out += `<mark class="pkm-mark" style="--c:${p.color};" data-gid="${p.gid}">${matched}</mark>`;
+    out += `<mark class="pc-keyword-highlight" style="--c:${p.color}; --pc-hl-bg:${_pcRgba(p.color)};" data-gid="${p.gid}">${matched}</mark>`;
     prev = p.start + p.length;
   }
   out += _pkmEsc(t.slice(prev));
-  return { html: out, counts };
+  return out;
 }
+
+window.PCHighlight = {
+  groupHighlightColor,
+  rgba: _pcRgba,
+  buildKeywordIndex: pcBuildKeywordHighlightIndex,
+  renderImportantText: pcRenderImportantText,
+  renderKeywordText: pcRenderKeywordText,
+};
 
 function srTogglePkm() {
   _pkmEnabled = !_pkmEnabled;
@@ -8399,9 +8630,12 @@ async function srExtractOneTable(pid, btn) {
           const evt = JSON.parse(line.slice(6));
           if (evt.stage === 'extract' && evt.total) {
             btn.textContent = `${evt.current}/${evt.total}`;
+          } else if (evt.stage === 'extract_done' && evt.total) {
+            btn.textContent = `✓${evt.current}/${evt.total}`;
           } else if (evt.stage === 'done') {
             const s = evt.summary || {};
-            alert(`✅ ${pid}: ${s.n_table || 0} 表抽出 / 所要 ${((s.total_duration_ms || 0)/1000).toFixed(1)}s / コスト相当 $${s.total_cost_usd_equivalent || 0}`);
+            const missing = (s.missing_table_references || []).length;
+            alert(`✅ ${pid}: ${s.n_table || 0} 表抽出 / ベクター ${s.vector_tables_count || 0} / クロップ ${s.crop_candidates || 0} / 漏れ候補 ${missing} / 所要 ${((s.total_duration_ms || 0)/1000).toFixed(1)}s / コスト相当 $${s.total_cost_usd_equivalent || 0}`);
           } else if (evt.stage === 'skip') {
             alert(`スキップ: ${pid} は既に抽出済みです (再抽出するには 🔄 を使用)`);
           } else if (evt.stage === 'error') {
@@ -8458,13 +8692,15 @@ async function srShowCitationTables(pid) {
 function _renderCitationTablesHtml(payload, pid) {
   const tables = (payload.tables || []).filter(t => t.is_table);
   const errs = (payload.tables || []).filter(t => !t.is_table && t.error);
+  const missing = payload.missing_table_references || [];
   const head = [
     `<div style="font-size:0.82rem; color:var(--text2); margin-bottom:0.6rem;">`,
-    `  画像候補: ${payload.candidates_total || 0} / 表対象: ${payload.candidates_targeted || 0}`,
+    `  画像候補: ${payload.candidates_total || 0} / ベクター表: ${payload.vector_tables_count || 0} / 画像・クロップ対象: ${payload.candidates_targeted || 0}`,
     `   / 抽出成功: ${tables.length} / エラー: ${errs.length}`,
     `   / 所要 ${((payload.total_duration_ms||0)/1000).toFixed(1)}s`,
     `   / サブスク相当 $${payload.total_cost_usd_equivalent || 0}`,
     `   <span style="margin-left:0.6rem; color:#fb923c;">source: ${_pkmEsc(payload.source_kind || 'pdf')}</span>`,
+    missing.length ? `   <br><span style="color:#fbbf24;">漏れ候補: ${missing.map(_pkmEsc).join('、')}</span>` : '',
     `</div>`,
   ];
   if (!tables.length) {
@@ -8765,7 +9001,7 @@ function _kwSanitizeTerm(term) {
 
 // Step 3 のキーワードグループから J-PlatPat 検索式を組み立てる。
 // ルール:
-//   - 「赤字ハイライト (.kw-marked)」を**選択中**とみなし、それだけを使う
+//   - 「グループ色ハイライト (.kw-marked)」を**選択中**とみなし、それだけを使う
 //   - 何も選んでいない場合: 確認ダイアログを出して、押されたら全件使用
 //   - 各グループ内: `(a+b+c)/CL` 形式で OR 結合
 //   - 全グループは `*` (AND) で結合
@@ -8822,7 +9058,7 @@ async function srBuildFormulaFromKeywords() {
   let useAll = false;
   if (markedKw.size === 0 && markedFt.size === 0 && markedFi.size === 0) {
     if (!confirm(
-      'ハイライト (赤字) した語が無いため、各グループの全キーワードを使います。\n\n' +
+      'ハイライト選択した語が無いため、各グループの全キーワードを使います。\n\n' +
       '選別したい場合は Step 3 で残したい語をクリックして赤くしてからもう一度実行してください。\n\n' +
       '全キーワードで組み立てますか？'
     )) {

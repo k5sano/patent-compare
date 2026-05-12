@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Iterable, Optional
@@ -177,6 +178,189 @@ def extract_image_candidates(pdf_path: Path, out_dir: Path) -> list[ImageCandida
     return candidates
 
 
+def _norm_table_label(label: str) -> str:
+    """表参照ラベルを漏れ検出用に正規化する。"""
+    s = str(label or "").strip()
+    if not s:
+        return ""
+    s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    s = re.sub(r"\s+", "", s)
+    s = s.replace("【", "").replace("】", "")
+    s = re.sub(r"^[Tt]able", "表", s)
+    return s
+
+
+def _caption_label_from_text(text: str) -> Optional[str]:
+    m = _TABLE_CAPTION_PAT.search(text or "")
+    return m.group(0) if m else None
+
+
+def _find_table_caption_blocks(pdf_path: Path) -> list[dict]:
+    """PDF内の表キャプションブロックを列挙する。"""
+    out: list[dict] = []
+    with fitz.open(str(pdf_path)) as doc:
+        for pi in range(doc.page_count):
+            page = doc[pi]
+            for b in page.get_text("blocks"):
+                if len(b) < 5:
+                    continue
+                text = (b[4] or "").strip()
+                if not text:
+                    continue
+                for line in text.splitlines():
+                    label = _caption_label_from_text(line)
+                    if not label:
+                        continue
+                    out.append({
+                        "page_num": pi + 1,
+                        "page_index": pi,
+                        "bbox": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
+                        "caption": line.strip(),
+                        "caption_label": label,
+                    })
+                    break
+    return out
+
+
+def find_caption_pages_without_image(pdf_path: Path,
+                                     image_candidates: Optional[list[ImageCandidate]] = None,
+                                     covered_pages: Optional[set[int]] = None) -> list[dict]:
+    """表キャプションがあるが、画像候補/ベクター表で処理済みでないページを返す。"""
+    covered_pages = set(covered_pages or set())
+    image_pages = {
+        c.page_num for c in (image_candidates or [])
+        if c.is_table_caption and not c.is_figure_caption
+    }
+    captions = _find_table_caption_blocks(pdf_path)
+    seen = set()
+    out = []
+    for c in captions:
+        page = int(c["page_num"])
+        key = (page, _norm_table_label(c.get("caption_label")))
+        if key in seen:
+            continue
+        seen.add(key)
+        if page in covered_pages or page in image_pages:
+            continue
+        out.append(c)
+    return out
+
+
+def _rows_to_headers_and_body(rows) -> tuple[list[str], list[dict]]:
+    clean_rows = []
+    for row in rows or []:
+        cells = [str(c or "").strip() for c in (row or [])]
+        if any(cells):
+            clean_rows.append(cells)
+    if not clean_rows:
+        return [], []
+    headers = clean_rows[0]
+    body = [{"cells": row} for row in clean_rows[1:]]
+    return headers, body
+
+
+def extract_vector_tables(pdf_path: Path) -> list[dict]:
+    """PDFの罫線/テキストから直接抽出できる表を拾う。
+
+    PyMuPDF の `page.find_tables()` を利用する。スキャン画像では拾えないが、
+    ベクター表はLLMに投げるより速く、重複・コストも抑えられる。
+    """
+    pdf_path = Path(pdf_path)
+    tables: list[dict] = []
+    if not hasattr(fitz.Page, "find_tables"):
+        return tables
+    with fitz.open(str(pdf_path)) as doc:
+        for pi in range(doc.page_count):
+            page = doc[pi]
+            try:
+                # PyMuPDF 1.26 prints an optional-layout-package hint to stdout.
+                # SSE/CLI logs should stay clean, so suppress that advisory here.
+                import contextlib
+                import io
+                with contextlib.redirect_stdout(io.StringIO()):
+                    found = page.find_tables()
+            except Exception:
+                continue
+            for ti, tab in enumerate(getattr(found, "tables", []) or [], 1):
+                try:
+                    rows = tab.extract()
+                except Exception:
+                    continue
+                headers, body = _rows_to_headers_and_body(rows)
+                if not headers and not body:
+                    continue
+                rect = fitz.Rect(tab.bbox)
+                caption, caption_label, _is_table, _is_figure = _find_image_caption(
+                    page, rect, max_distance=90.0,
+                )
+                title = caption_label or caption or f"Table p{pi + 1}-{ti}"
+                tables.append({
+                    "is_table": True,
+                    "source": "vector",
+                    "page_num": pi + 1,
+                    "image_path": "",
+                    "title": title,
+                    "headers": headers,
+                    "rows": body,
+                    "duration_ms": 0,
+                    "cost_usd_equivalent": 0.0,
+                    "model": "pymupdf.find_tables",
+                    "error": None,
+                    "caption": caption,
+                    "caption_label": caption_label,
+                    "bbox": [rect.x0, rect.y0, rect.x1, rect.y1],
+                })
+    return tables
+
+
+def crop_region_below_caption(pdf_path: Path, out_dir: Path, caption: dict,
+                              *, index: int = 0, zoom: float = 2.5) -> Optional[ImageCandidate]:
+    """表キャプションの下を画像化し、LLM抽出用候補として返す。"""
+    pdf_path = Path(pdf_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    page_index = int(caption.get("page_index", max(0, int(caption.get("page_num", 1)) - 1)))
+    with fitz.open(str(pdf_path)) as doc:
+        if page_index < 0 or page_index >= doc.page_count:
+            return None
+        page = doc[page_index]
+        page_rect = page.rect
+        x0, y0, x1, y1 = caption.get("bbox") or [page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y0]
+        next_caption_y = None
+        for b in page.get_text("blocks"):
+            if len(b) < 5:
+                continue
+            by0 = float(b[1])
+            if by0 <= y1 + 4:
+                continue
+            if _caption_label_from_text(b[4] or ""):
+                next_caption_y = by0 if next_caption_y is None else min(next_caption_y, by0)
+        clip = fitz.Rect(
+            page_rect.x0 + 18,
+            min(page_rect.y1 - 30, float(y1) + 2),
+            page_rect.x1 - 18,
+            min(page_rect.y1 - 18, (next_caption_y - 4) if next_caption_y else float(y1) + page_rect.height * 0.45),
+        )
+        if clip.height < 60 or clip.width < 120:
+            return None
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip, alpha=False)
+        label = _norm_table_label(caption.get("caption_label")) or f"p{page_index + 1}_{index}"
+        img_path = out_dir / f"{pdf_path.stem}_crop_{label}_{index:02d}.png"
+        pix.save(str(img_path))
+        w, h = pix.width, pix.height
+    return ImageCandidate(
+        page_num=page_index + 1,
+        xref=-(index + 1),
+        width=w,
+        height=h,
+        image_path=img_path,
+        caption=caption.get("caption"),
+        caption_label=caption.get("caption_label"),
+        is_table_caption=True,
+        is_figure_caption=False,
+    )
+
+
 def find_table_references_in_text(pdf_path: Path) -> list[str]:
     """本文テキストから 表N / Table N / 実施例N 等の参照を抽出 (重複あり)。
 
@@ -194,6 +378,45 @@ def find_table_references_in_text(pdf_path: Path) -> list[str]:
             for m in pat.finditer(txt):
                 refs.append(m.group(0))
     return refs
+
+
+def detect_missing_tables(body_refs: list[str], tables: list[dict]) -> list[str]:
+    """本文中の表参照と抽出済み表ラベルを照合し、未抽出らしい表を返す。"""
+    expected = []
+    for ref in body_refs or []:
+        norm = _norm_table_label(ref)
+        if norm and norm not in expected and norm.startswith("表"):
+            expected.append(norm)
+    seen = set()
+    for t in tables or []:
+        if not t or t.get("is_table") is False:
+            continue
+        for key in ("caption_label", "title", "caption"):
+            norm = _norm_table_label(t.get(key) or "")
+            if norm:
+                seen.add(norm)
+    missing = [x for x in expected if x not in seen]
+    return missing
+
+
+def normalize_and_merge(vector_tables: list[dict], llm_tables: list[dict]) -> list[dict]:
+    """ベクター表とLLM表を統合する。ラベル重複時は先にある表を優先。"""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for table in list(vector_tables or []) + list(llm_tables or []):
+        if not table:
+            continue
+        label = (
+            _norm_table_label(table.get("caption_label") or "")
+            or _norm_table_label(table.get("title") or "")
+            or _norm_table_label(table.get("caption") or "")
+        )
+        key = label or f"{table.get('source') or 'table'}:{table.get('page_num')}:{len(out)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(table)
+    return out
 
 
 # ---------- LLM 呼び出し ----------
@@ -480,28 +703,49 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
 
     if progress:
         progress("scan", 0, 0, str(pdf_path.name))
+    vector_tables = extract_vector_tables(pdf_path)
+    covered_pages = {int(t.get("page_num") or 0) for t in vector_tables}
     all_candidates = extract_image_candidates(pdf_path, img_dir)
     body_refs = find_table_references_in_text(pdf_path)
 
     # 表キャプション付き画像のみ抽出対象。figure キャプション (化/図) は明示スキップ。
+    # ベクター表が取れたページは重複防止のため画像経路から除外する。
     if include_uncaptioned:
-        targets = [c for c in all_candidates if not c.is_figure_caption]
+        targets = [
+            c for c in all_candidates
+            if not c.is_figure_caption and c.page_num not in covered_pages
+        ]
     else:
-        targets = [c for c in all_candidates if c.is_table_caption]
+        targets = [
+            c for c in all_candidates
+            if c.is_table_caption and c.page_num not in covered_pages
+        ]
+
+    # キャプションはあるが画像として抜けないページは、キャプション下をクロップしてLLMへ。
+    caption_pages = find_caption_pages_without_image(
+        pdf_path, image_candidates=all_candidates, covered_pages=covered_pages,
+    )
+    crop_candidates = []
+    for i, cap in enumerate(caption_pages, 1):
+        cand = crop_region_below_caption(pdf_path, img_dir, cap, index=i)
+        if cand is not None:
+            crop_candidates.append(cand)
+    llm_targets = targets + crop_candidates
     skipped = [c for c in all_candidates if c not in targets]
 
     if max_images is not None:
-        targets = targets[:max_images]
-    total = len(targets)
+        llm_targets = llm_targets[:max_images]
+    total = len(llm_targets)
 
-    tables = []
+    llm_tables = []
     total_cost = 0.0
     total_duration = 0
-    n_table = 0
+    n_table = len(vector_tables)
     n_nontable = 0
     n_error = 0
 
-    for i, cand in enumerate(targets, 1):
+    def _extract_one(i_cand):
+        i, cand = i_cand
         if progress:
             progress("extract", i, total,
                      f"{cand.image_path.name} cap={cand.caption_label or '-'}")
@@ -510,10 +754,28 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
             caption_hint=cand.caption_label,
             effort=effort,
         )
+        return cand, et
+
+    max_workers = min(4, max(1, total))
+    completed = 0
+    results = []
+    if total:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(_extract_one, (i, cand)) for i, cand in enumerate(llm_targets, 1)]
+            for fut in as_completed(futures):
+                completed += 1
+                cand, et = fut.result()
+                if progress:
+                    progress("extract_done", completed, total,
+                             f"{cand.image_path.name} table={bool(et.is_table)}")
+                results.append((cand, et))
+
+    for cand, et in results:
         total_cost += et.cost_usd_equivalent or 0.0
         total_duration += et.duration_ms or 0
         rec = asdict(et)
         rec.update({
+            "source": "crop" if cand.xref < 0 else "image",
             "page_num": cand.page_num,
             "image_xref": cand.xref,
             "image_width": cand.width,
@@ -521,7 +783,7 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
             "caption": cand.caption,
             "caption_label": cand.caption_label,
         })
-        tables.append(rec)
+        llm_tables.append(rec)
         if et.error:
             n_error += 1
         elif et.is_table:
@@ -529,24 +791,31 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
         else:
             n_nontable += 1
 
+    tables = normalize_and_merge(vector_tables, llm_tables)
+    n_table = sum(1 for t in tables if t.get("is_table") and not t.get("error"))
+    missing = detect_missing_tables(body_refs, tables)
     summary = {
         "doc_id": pdf_path.stem,
         "pdf_path": str(pdf_path),
         "extracted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "model": model,
+        "vector_tables_count": len(vector_tables),
+        "crop_candidates": len(crop_candidates),
         "candidates_total": len(all_candidates),
-        "candidates_targeted": len(targets),
+        "candidates_targeted": len(llm_targets),
         "candidates_skipped": len(skipped),
         "skipped_reasons": [
             {
                 "page": c.page_num, "xref": c.xref,
                 "caption": c.caption, "caption_label": c.caption_label,
-                "reason": ("figure_caption" if c.is_figure_caption
+                "reason": ("vector_page_covered" if c.page_num in covered_pages
+                           else "figure_caption" if c.is_figure_caption
                            else "no_table_caption"),
             }
             for c in skipped
         ],
         "body_table_references": body_refs,
+        "missing_table_references": missing,
         "n_table": n_table,
         "n_nontable": n_nontable,
         "n_error": n_error,
