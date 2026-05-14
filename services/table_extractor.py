@@ -21,10 +21,13 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Optional
 
 import fitz
+import requests
+import urllib3
 
 
 # ---------- 画像候補抽出 ----------
@@ -60,6 +63,37 @@ def _is_likely_table_image(width: int, height: int) -> bool:
     if width * height < 30_000:
         return False
     return True
+
+
+def _requests_get_with_tls_fallback(url: str, *, headers: Optional[dict] = None,
+                                    timeout: int = 30):
+    """GET with certifi and the project-standard SSL fallback.
+
+    Some Windows Python/OpenSSL setups cannot validate Google-hosted patent
+    image certificates even though the browser can. Prefer certifi; if that
+    still fails, retry without verification unless explicitly disabled.
+    """
+    kwargs = {"headers": headers or {}, "timeout": timeout}
+    try:
+        import certifi
+        kwargs["verify"] = certifi.where()
+    except Exception:
+        pass
+    try:
+        return requests.get(url, **kwargs)
+    except requests.exceptions.SSLError:
+        if os.environ.get("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "1") == "0":
+            raise
+        kwargs["verify"] = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, **kwargs)
+
+
+def _download_image_url(url: str, dest: Path, *, timeout: int = 30) -> None:
+    headers = {"User-Agent": "Mozilla/5.0"}
+    resp = _requests_get_with_tls_fallback(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    dest.write_bytes(resp.content or b"")
 
 
 # 表のキャプション (positive): 【表1】 / 表1 / Table 1 / 実施例の表 等
@@ -184,6 +218,9 @@ def _norm_table_label(label: str) -> str:
     if not s:
         return ""
     s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    if s.startswith("[#"):
+        num = re.sub(r"\D", "", s)
+        return f"表{num}" if num else s
     s = re.sub(r"\s+", "", s)
     s = s.replace("【", "").replace("】", "")
     s = re.sub(r"^[Tt]able", "表", s)
@@ -193,6 +230,94 @@ def _norm_table_label(label: str) -> str:
 def _caption_label_from_text(text: str) -> Optional[str]:
     m = _TABLE_CAPTION_PAT.search(text or "")
     return m.group(0) if m else None
+
+
+_TABLE_REF_PAT = re.compile(
+    r"(【\s*表\s*[0-9０-９]+\s*】|表\s*[0-9０-９]+|"
+    r"[Tt]able\s+[0-9]+|\[#\s*[0-9０-９]+\])"
+)
+
+
+def _env_int(name: str, default: Optional[int] = None) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _is_qwen_vl_model(model: str) -> bool:
+    s = str(model or "").strip().lower()
+    return (
+        s.startswith("qwen2.5-vl")
+        or s.startswith("qwen2.5vl")
+        or s.startswith("qwen-vl")
+        or s.startswith("local-qwen-vl")
+        or s.startswith("local-qwen25vl")
+        or s == "qwen-vl-local"
+    )
+
+
+def _table_llm_max_workers(total: int, model: str) -> int:
+    """Choose LLM image extraction concurrency.
+
+    Cloud/CLI vision calls benefit from a few parallel workers. Local Qwen2.5-VL
+    shares one RTX 3080, so default to one worker unless explicitly overridden.
+    """
+    total = max(0, int(total or 0))
+    if total <= 0:
+        return 0
+    if _is_qwen_vl_model(model):
+        cap = _env_int("PATENT_COMPARE_QWEN_VL_WORKERS", 1)
+    else:
+        cap = _env_int("PATENT_COMPARE_TABLE_LLM_WORKERS", 4)
+    cap = max(1, int(cap or 1))
+    return min(total, cap)
+
+
+@lru_cache(maxsize=8)
+def _cached_ocr_pages_for_table_detection(path_str: str, mtime_ns: int, size: int) -> tuple[dict, ...]:
+    from modules.pdf_extractor import extract_text_from_pdf
+    pages = extract_text_from_pdf(path_str, ocr_lang="jpn+eng")
+    return tuple({"page": p.get("page"), "text": p.get("text") or ""} for p in pages)
+
+
+def _ocr_pages_for_table_detection(pdf_path: Path) -> list[dict]:
+    p = Path(pdf_path)
+    try:
+        st = p.stat()
+        key = (str(p.resolve()), int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        key = (str(p), 0, 0)
+    try:
+        return list(_cached_ocr_pages_for_table_detection(*key))
+    except Exception:
+        return []
+
+
+def _table_labels_from_text(text: str) -> list[str]:
+    hash_labels = []
+    for m in re.finditer(r"\[#\s*([0-9０-９]+)\]", text or ""):
+        num = m.group(1).translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        label = f"表{num}"
+        if label not in hash_labels:
+            hash_labels.append(label)
+    if hash_labels:
+        return hash_labels
+    labels = []
+    for m in _TABLE_REF_PAT.finditer(text or ""):
+        raw = m.group(0)
+        if raw.startswith("[#"):
+            num = re.sub(r"\D", "", raw.translate(str.maketrans("０１２３４５６７８９", "0123456789")))
+            label = f"表{num}" if num else raw
+        else:
+            label = raw
+        norm = _norm_table_label(label)
+        if norm and norm not in labels:
+            labels.append(norm)
+    return labels
 
 
 def _find_table_caption_blocks(pdf_path: Path) -> list[dict]:
@@ -361,22 +486,86 @@ def crop_region_below_caption(pdf_path: Path, out_dir: Path, caption: dict,
     )
 
 
+def find_ocr_table_pages(pdf_path: Path) -> list[dict]:
+    """画像のみPDFをOCRし、表らしいページを返す。
+
+    J-PlatPat の WO 日本語画像公報では通常テキスト層が空で、
+    表キャプションが `[#1]` のようにOCRされることがある。
+    """
+    pages = _ocr_pages_for_table_detection(pdf_path)
+    out = []
+    seen = set()
+    for p in pages:
+        text = p.get("text") or ""
+        labels = _table_labels_from_text(text)
+        if not labels:
+            continue
+        page_num = int(p.get("page") or 0)
+        for label in labels:
+            key = (page_num, label)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({
+                "page_num": page_num,
+                "caption_label": label,
+                "caption": label,
+                "ocr_text_preview": re.sub(r"\s+", " ", text)[:240],
+            })
+    return out
+
+
+def render_full_page_candidate(pdf_path: Path, out_dir: Path, page_num: int,
+                               *, caption_label: str = "", index: int = 0,
+                               zoom: float = 2.5) -> Optional[ImageCandidate]:
+    """画像のみPDFの表ページ全体をLLM抽出候補としてPNG化する。"""
+    pdf_path = Path(pdf_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with fitz.open(str(pdf_path)) as doc:
+        page_index = int(page_num) - 1
+        if page_index < 0 or page_index >= doc.page_count:
+            return None
+        page = doc[page_index]
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        label = _norm_table_label(caption_label) or f"p{page_num}_{index}"
+        img_path = out_dir / f"{pdf_path.stem}_page_{page_num:03d}_{label}_{index:02d}.png"
+        pix.save(str(img_path))
+        w, h = pix.width, pix.height
+    return ImageCandidate(
+        page_num=int(page_num),
+        xref=-(1000 + index),
+        width=w,
+        height=h,
+        image_path=img_path,
+        caption=caption_label,
+        caption_label=caption_label,
+        is_table_caption=True,
+        is_figure_caption=False,
+    )
+
+
 def find_table_references_in_text(pdf_path: Path) -> list[str]:
     """本文テキストから 表N / Table N / 実施例N 等の参照を抽出 (重複あり)。
 
     Phase 1 で「期待される表数」と「実際に検出した caption 数」を照合する用。
     """
-    pat = re.compile(
-        r"(【\s*表\s*[0-9０-９]+\s*】|表\s*[0-9０-９]+|"
-        r"[Tt]able\s+[0-9]+|【\s*実施例\s*[0-9０-９]+\s*】|"
-        r"実施例\s*[0-9０-９]+|[Ee]xample\s+[0-9]+)"
-    )
     refs = []
+    text_chars = 0
     with fitz.open(str(pdf_path)) as doc:
         for pi in range(doc.page_count):
             txt = doc[pi].get_text() or ""
-            for m in pat.finditer(txt):
+            text_chars += len(txt.strip())
+            for m in _TABLE_REF_PAT.finditer(txt):
                 refs.append(m.group(0))
+    if refs or text_chars > 100:
+        return refs
+
+    # 画像のみPDFでは通常テキスト層が空なので、OCRで表参照を探す。
+    for p in _ocr_pages_for_table_detection(pdf_path):
+        txt = p.get("text") or ""
+        for m in _TABLE_REF_PAT.finditer(txt):
+            refs.append(m.group(0))
     return refs
 
 
@@ -583,7 +772,7 @@ def extract_table_via_claude(image_path: Path, *, model: str = DEFAULT_MODEL,
         model_provider,
     )
     provider = model_provider(model)
-    if provider == "codex":
+    if provider in ("codex", "local"):
         api_prompt = prompt.replace(
             f"画像 `{image_path}` を Read ツールで読み取り",
             "添付画像を読み取り",
@@ -730,7 +919,21 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
         cand = crop_region_below_caption(pdf_path, img_dir, cap, index=i)
         if cand is not None:
             crop_candidates.append(cand)
-    llm_targets = targets + crop_candidates
+    ocr_page_candidates = []
+    if not targets and not crop_candidates and not vector_tables:
+        image_pages = {c.page_num for c in all_candidates if c.is_table_caption}
+        for i, info in enumerate(find_ocr_table_pages(pdf_path), 1):
+            page_num = int(info.get("page_num") or 0)
+            if not page_num or page_num in covered_pages or page_num in image_pages:
+                continue
+            cand = render_full_page_candidate(
+                pdf_path, img_dir, page_num,
+                caption_label=info.get("caption_label") or "",
+                index=i,
+            )
+            if cand is not None:
+                ocr_page_candidates.append(cand)
+    llm_targets = targets + crop_candidates + ocr_page_candidates
     skipped = [c for c in all_candidates if c not in targets]
 
     if max_images is not None:
@@ -756,7 +959,7 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
         )
         return cand, et
 
-    max_workers = min(4, max(1, total))
+    max_workers = _table_llm_max_workers(total, model)
     completed = 0
     results = []
     if total:
@@ -775,7 +978,7 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
         total_duration += et.duration_ms or 0
         rec = asdict(et)
         rec.update({
-            "source": "crop" if cand.xref < 0 else "image",
+            "source": "ocr_page" if cand.xref <= -1000 else "crop" if cand.xref < 0 else "image",
             "page_num": cand.page_num,
             "image_xref": cand.xref,
             "image_width": cand.width,
@@ -801,6 +1004,7 @@ def extract_tables_from_pdf(pdf_path: Path, out_dir: Path, *,
         "model": model,
         "vector_tables_count": len(vector_tables),
         "crop_candidates": len(crop_candidates),
+        "ocr_page_candidates": len(ocr_page_candidates),
         "candidates_total": len(all_candidates),
         "candidates_targeted": len(llm_targets),
         "candidates_skipped": len(skipped),
@@ -861,7 +1065,6 @@ def extract_tables_from_image_records(
         out_dir: 結果保存先 (ここに images/ と tables.json が出来る)
         doc_id: 出力ファイル名のベース (patent_id 等)
     """
-    import urllib.request
     out_dir = Path(out_dir)
     img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
@@ -911,9 +1114,7 @@ def extract_tables_from_image_records(
         img_path = img_dir / img_name
         if not img_path.exists():
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=30) as r:
-                    img_path.write_bytes(r.read())
+                _download_image_url(url, img_path, timeout=30)
             except Exception as e:
                 tables.append({
                     "index": cand["index"], "src": url,

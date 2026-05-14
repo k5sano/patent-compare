@@ -253,3 +253,14 @@ class TestFindCitationPdf:
         )
         found = case_service.find_citation_pdf(input_dir, doc_id)
         assert found == weird
+
+    def test_foreign_kind_code_id_finds_pdf_without_kind_suffix(self, tmp_path):
+        case_dir = tmp_path / "c"
+        input_dir = case_dir / "input"
+        input_dir.mkdir(parents=True)
+        pdf = input_dir / "WO2020255643.pdf"
+        pdf.write_bytes(b"%PDF-1.3\n")
+
+        found = case_service.find_citation_pdf(input_dir, "WO2020/255643A1")
+
+        assert found == pdf

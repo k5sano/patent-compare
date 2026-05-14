@@ -86,7 +86,7 @@ def _build_cited_location_notation_rules():
 - 範囲は **`-`** で: `41-45` / `CL1-3` / `F1-3`
 
 ### コメント
-- **`"...`**: その後を検索報告書の備考欄に転記するコメント（例: `20;"上位概念のみ`）
+- **`/...`**: その後を検索報告書の備考欄に転記するコメント（例: `20/上位概念のみ`）
 - **`//...`**: 防備録メモ（外部に転記しない）
 
 ### 出力例
@@ -96,7 +96,7 @@ def _build_cited_location_notation_rules():
 - **表1と表2に記載**: `T1,2`     ← `T1;T2` ❌ 同種は ; ではなく , で連結
 - **段落23と段落24に記載**: `23,24`  ← `0023;0024` ❌ ゼロパディング不要
 - **再表/WO等で段落番号がない箇所**: `P12G8-11` ← 12ページ8-11行。段組みが明確なら `P12A8-11` / `P12B8-11` 等
-- 段落20で記載されているが上位概念のみ: `20;/上位概念のみ`
+- 段落20で記載されているが上位概念のみ: `20/上位概念のみ`
 
 **判定が ○ または △ の時は `cited_location` 必須 (空文字禁止)**:
 - 引例本文が乏しくファミリー文献 (例「WO2019107497 の EP 対応」「同一発明の JP/US 対応」)
@@ -116,6 +116,8 @@ def _build_cited_location_notation_rules():
 - 再表・WO・翻訳文献などで段落番号が付与されていない場合、仮の段落番号を使わず、必ず `P<ページ>G<行>`（例: `P7G18-22`）でページ数と何行目かを明記する
 - **同種の要素を ; で繋がない**: `T1;T2;T3` ❌ → `T1,2,3` ✓
   / `CL1;CL2;CL3` ❌ → `CL1,2,3` ✓ / `F2;F5` ❌ → `F2,5` ✓
+- **同種の接頭辞を繰り返さない**: `CL1,CL2,CL3` ❌ → `CL1,2,3` ✓
+  / `P1,P2,P3` ❌ → `P1,2,3` ✓
 - **段落番号にゼロパディングしない**: `0023;0024` ❌ → `23,24` ✓
   / `00230;00450` ❌ → `230,450` ✓ (内部で 4 桁化される)
 - 全角数字・全角英字も認識するがなるべく半角で
@@ -874,6 +876,10 @@ def generate_prompt(segments, citations, keywords=None, field="cosmetics", honga
 _MAX_HONGAN_HITS_PER_SEG = 8
 _MAX_CITATION_HITS_PER_SEG = 8
 _MAX_PARA_TEXT_CHARS = 600  # 1段落の最大表示文字数 (長文段落は冒頭のみ)
+_MAX_FALLBACK_CLAIMS_PER_CITATION = 2
+_MAX_FALLBACK_CLAIM_CHARS = 250
+_MAX_EVIDENCE_CHUNKS_PER_CITATION = _prompt_cfg.get("max_evidence_chunks_per_citation", 120)
+_MAX_TABLE_TEXT_CHARS = _prompt_cfg.get("max_table_text_chars", 1600)
 
 
 def _build_segment_keyword_map(keywords):
@@ -1068,6 +1074,127 @@ def _find_matching_tables(tables, terms, max_hits=3):
             if len(out) >= max_hits:
                 break
     return out
+
+
+def _table_text_for_prompt(table):
+    rows = table.get("rows") or table.get("data") or []
+    parts = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, list):
+                parts.append("\t".join(str(x) for x in row))
+            else:
+                parts.append(str(row))
+    content = table.get("content") or ""
+    if content:
+        parts.append(str(content))
+    return _truncate("\n".join(p for p in parts if p), _MAX_TABLE_TEXT_CHARS)
+
+
+def _table_source_label(table, index):
+    cap = table.get("caption") or table.get("title") or table.get("caption_label") or f"表{index}"
+    para_id = table.get("paragraph_id") or table.get("source_paragraph") or ""
+    page = table.get("page") or table.get("page_num") or table.get("page_number")
+    loc = f"表「{cap}」"
+    if para_id:
+        loc += f" 段落{para_id}付近"
+    elif page:
+        loc += f" P{page}"
+    return loc
+
+
+def _matched_terms(text, terms):
+    return [t for t in (terms or []) if t and _any_keyword_matches(text or "", [t])]
+
+
+def _build_citation_evidence_catalog(citations, seg_keywords):
+    """引例本文を段落/請求項/表チャンクに正規化し、hit metadata を付与する。
+
+    同じ段落を構成要件ごとに再掲すると、画像WOのOCRテキストでプロンプトが
+    爆発する。ここで一度だけ evidence chunk として提示し、後続ブロックは
+    chunk ID を参照する。
+    """
+    lines = [
+        "## 引例エビデンスチャンク",
+        "引例本文・請求項・表から、構成要件キーワードにヒットした箇所をチャンク化した。",
+        "各チャンクには hit_segments / hit_keywords を付けている。",
+        "チャンクIDは検討用ラベルであり、出力 JSON の cited_location には使わず、"
+        "段落番号・請求項番号・表番号・ページ行番号を用いること。",
+    ]
+    refs_by_segment = {}
+
+    for i, cit in enumerate(citations, 1):
+        cit_label = cit.get("label") or cit.get("patent_number") or f"引例{i}"
+        chunks = []
+        by_key = {}
+
+        def add_chunk(kind, source, section, text, seg_id, terms):
+            hits = _matched_terms(text, terms)
+            if not hits:
+                return
+            key = (kind, str(source), str(text)[:80])
+            chunk = by_key.get(key)
+            if chunk is None:
+                chunk = {
+                    "kind": kind,
+                    "source": source,
+                    "section": section or "",
+                    "text": text or "",
+                    "segments": [],
+                    "keywords": [],
+                }
+                by_key[key] = chunk
+                chunks.append(chunk)
+            if seg_id not in chunk["segments"]:
+                chunk["segments"].append(seg_id)
+            for term in hits:
+                if term not in chunk["keywords"]:
+                    chunk["keywords"].append(term)
+
+        cit_paras = cit.get("paragraphs", []) or []
+        cit_claims = cit.get("claims", []) or []
+        cit_tables = cit.get("tables", []) or []
+
+        for seg_id, terms in (seg_keywords or {}).items():
+            for cl in _find_matching_claims(cit_claims, terms):
+                source = f"CL{cl.get('number', '?')}"
+                add_chunk("claim", source, "請求項", cl.get("text", ""), seg_id, terms)
+            for p in _find_matching_paragraphs(cit_paras, terms, _MAX_CITATION_HITS_PER_SEG):
+                source = _paragraph_source_label(p)
+                add_chunk("paragraph", source, p.get("section", ""), p.get("text", ""), seg_id, terms)
+            for ti, t in enumerate(_find_matching_tables(cit_tables, terms), 1):
+                source = _table_source_label(t, ti)
+                add_chunk("table", source, t.get("section", "表"), _table_text_for_prompt(t), seg_id, terms)
+
+        lines.append(f"\n### 引例{i}: {cit_label}")
+        if not chunks:
+            lines.append("- キーワード直接ヒットのチャンクなし。請求項概要と上位概念・同義語で確認すること。")
+            continue
+
+        for n, chunk in enumerate(chunks[:_MAX_EVIDENCE_CHUNKS_PER_CITATION], 1):
+            prefix = {"claim": "CL", "paragraph": "P", "table": "T"}.get(chunk["kind"], "E")
+            chunk_id = f"C{i}-{prefix}{n}"
+            chunk["id"] = chunk_id
+            for seg_id in chunk["segments"]:
+                refs_by_segment.setdefault((i, seg_id), []).append(chunk_id)
+            hit_segments = ", ".join(chunk["segments"])
+            hit_keywords = "、".join(chunk["keywords"][:10])
+            if len(chunk["keywords"]) > 10:
+                hit_keywords += f"…(他{len(chunk['keywords']) - 10}件)"
+            excerpt = (
+                _truncate(chunk["text"], _MAX_TABLE_TEXT_CHARS)
+                if chunk["kind"] == "table"
+                else _excerpt_around_keyword(chunk["text"], chunk["keywords"], _MAX_PARA_TEXT_CHARS)
+            )
+            lines.append(
+                f"- [{chunk_id}] {chunk['source']} ({chunk['section']}) "
+                f"| hit_segments: {hit_segments} | hit_keywords: {hit_keywords}\n"
+                f"  {excerpt}"
+            )
+        if len(chunks) > _MAX_EVIDENCE_CHUNKS_PER_CITATION:
+            lines.append(f"- （チャンク上限により他 {len(chunks) - _MAX_EVIDENCE_CHUNKS_PER_CITATION} 件を省略）")
+
+    return "\n".join(lines), refs_by_segment
 
 
 def _build_citations_overview(citations):
@@ -1266,6 +1393,7 @@ def _build_requirement_blocks_v2(segments, citations, seg_keywords):
         "本願側の参酌資料は前のセクション「本願 参酌資料」を参照すること。",
         "全構成要件について必ず判定し、末尾の出力フォーマットの JSON で結果を返すこと。",
     ]
+    fallback_claims_emitted = set()
 
     for claim in segments:
         claim_num = claim.get("claim_number", "?")
@@ -1320,15 +1448,64 @@ def _build_requirement_blocks_v2(segments, citations, seg_keywords):
                     #  にヒットしないが、請求項を読めば包含関係が判定できる)
                     lines.append(
                         f"\n**引例{i} ({cit_label})**: キーワードヒットなし。"
-                        "下記引例請求項全文を読み、上位概念・同義語・別名 (例: 商品名→一般名、"
-                        "INCI 名→慣用名) を考慮した上で判定すること。"
+                        "引用文献の概要および前出の請求項抜粋を読み、上位概念・同義語・別名 "
+                        "(例: 商品名→一般名、INCI 名→慣用名) を考慮した上で判定すること。"
                     )
-                    if cit_claims:
-                        for cl in cit_claims[:3]:  # 上位 3 請求項
+                    fallback_key = cit.get("patent_number") or cit_label or i
+                    if cit_claims and fallback_key not in fallback_claims_emitted:
+                        fallback_claims_emitted.add(fallback_key)
+                        lines.append("  - 参考請求項抜粋 (この引用文献では初回のみ表示):")
+                        for cl in cit_claims[:_MAX_FALLBACK_CLAIMS_PER_CITATION]:
                             lines.append(
-                                f"  - 請求項{cl.get('number','?')}: "
-                                f"{_truncate(cl.get('text',''), 400)}"
+                                f"    - 請求項{cl.get('number','?')}: "
+                                f"{_truncate(cl.get('text',''), _MAX_FALLBACK_CLAIM_CHARS)}"
                             )
+                    elif cit_claims:
+                        lines.append("  - 参考請求項抜粋はこの引用文献の前出ブロックを参照。")
+
+    return "\n".join(lines)
+
+
+def _build_requirement_blocks_chunked(segments, citations, seg_keywords, refs_by_segment):
+    """構成要件ごとの判定対象を evidence chunk ID で示す軽量ブロック。"""
+    lines = [
+        "## 構成要件別 チャンク対応",
+        "",
+        "各構成要件について、前セクションの evidence chunk のうち参照すべきものを列挙する。",
+        "チャンクがない場合も、引用文献概要・請求項・技術常識から上位概念/同義語を確認し、"
+        "必ず ○/△/× の判定を出すこと。",
+    ]
+
+    for claim in segments:
+        claim_num = claim.get("claim_number", "?")
+        is_indep = claim.get("is_independent", False)
+        deps = claim.get("dependencies", [])
+        dep_label = "独立" if is_indep else f"従属(→請求項{','.join(map(str, deps))})"
+        lines.append(f"\n### 請求項{claim_num} ({dep_label})")
+
+        for seg in claim.get("segments", []):
+            seg_id = seg.get("id", "?")
+            seg_text = seg.get("text", "")
+            terms = seg_keywords.get(seg_id, [])
+            terms_label = (
+                "、".join(terms[:6]) + (f"…(他{len(terms)-6}件)" if len(terms) > 6 else "")
+                if terms else "(キーワード未登録)"
+            )
+
+            lines.append(f"\n#### 構成要件 {seg_id}")
+            lines.append(f"**請求項文言**: 「{seg_text}」")
+            lines.append(f"**参酌キーワード**: {terms_label}")
+
+            for i, cit in enumerate(citations, 1):
+                cit_label = cit.get("label") or cit.get("patent_number") or f"引例{i}"
+                refs = refs_by_segment.get((i, seg_id), [])
+                if refs:
+                    lines.append(f"- 引例{i} ({cit_label}) 該当チャンク: {', '.join(refs)}")
+                else:
+                    lines.append(
+                        f"- 引例{i} ({cit_label}) 直接ヒットなし。"
+                        "引用文献概要・請求項抜粋を参照し、上位概念・同義語・別名を検討。"
+                    )
 
     return "\n".join(lines)
 
@@ -1351,6 +1528,7 @@ def generate_prompt_requirement_first(segments, citations, keywords=None,
         field = citations[0].get("field", field)
 
     seg_keywords = _build_segment_keyword_map(keywords)
+    citation_chunks, refs_by_segment = _build_citation_evidence_catalog(citations, seg_keywords)
 
     sections = [
         # === 静的部分 (cache 対象) ===
@@ -1362,7 +1540,8 @@ def generate_prompt_requirement_first(segments, citations, keywords=None,
         # === 動的部分 ===
         _build_citations_overview(citations),
         _build_hongan_reference_section(hongan, seg_keywords),
-        _build_requirement_blocks_v2(segments, citations, seg_keywords),
+        citation_chunks,
+        _build_requirement_blocks_chunked(segments, citations, seg_keywords, refs_by_segment),
         _build_output_format_multi(citations, segments),
     ]
     return "\n\n---\n\n".join(s for s in sections if s.strip())

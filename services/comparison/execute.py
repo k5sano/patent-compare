@@ -23,18 +23,24 @@ from services.comparison.expert import _compare_execute_expert_squad
 logger = logging.getLogger(__name__)
 def _compare_execute_per_citation_parallel(
     *, case_id, citations, segs, keywords, hongan, field,
-    model, known_cit_ids, max_workers=3, effort=None,
+    model, known_cit_ids, max_workers=2, effort=None, mode="requirement_first",
+    fallback_to_legacy=False,
 ):
-    """citation ごとに個別 prompt を生成して Claude を並列呼び出し。
+    """個別対比 per-citation パス。
 
-    Sonnet/Haiku 専用の高速パス。1プロンプトに全 citation を統合する従来方式
-    （Opus 用）と異なり、各 citation を別 Claude プロセスで処理することで:
-      - 並列化で総所要時間を短縮（max_workers=3）
+    lightweight モデルでは並列、Opus 等の重量モデルでは直列推奨。
+    max_workers=1 でも ThreadPoolExecutor 経由で正常に直列実行できる。
+    1プロンプトに全 citation を統合する従来方式と異なり、各 citation を
+    別 LLM 呼び出しで処理することで:
+      - 並列化で総所要時間を短縮（lightweight は通常 max_workers=2）
       - 1 件の失敗が他に波及しない
-      - 各 prompt のサイズが小さいので Sonnet が読みやすい
+      - 各 prompt のサイズが小さいので引例ごとの注意が薄まりにくい
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    from modules.prompt_generator import generate_prompt as _gen
+    from modules.prompt_generator import (
+        generate_prompt as _gen_legacy,
+        generate_prompt_requirement_first as _gen_reqfirst,
+    )
     from modules.response_parser import parse_response, split_multi_response
     from modules.claude_client import (
         call_claude,
@@ -53,7 +59,21 @@ def _compare_execute_per_citation_parallel(
     prompts_dir = case_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
+    max_workers = max(1, int(max_workers or 1))
     all_segment_ids = _get_all_segment_ids(segs)
+    _gen = _gen_reqfirst if mode == "requirement_first" else _gen_legacy
+    provider = model_provider(model)
+    if provider == "glm":
+        timeout = 900
+    elif provider == "codex":
+        timeout = 720
+    else:
+        timeout = 600
+
+    logger.info(
+        "Step5 execution_mode=per_citation provider=%s model=%s workers=%s citations=%s mode=%s",
+        provider, model, max_workers, len(citations), mode,
+    )
 
     def _safe_label(cit):
         label = cit.get("patent_number") or cit.get("label") or cit.get("doc_number") or "unknown"
@@ -73,15 +93,43 @@ def _compare_execute_per_citation_parallel(
         except OSError:
             pass
 
-        call_kwargs = {"timeout": 600, "model": model}
+        call_kwargs = {"timeout": timeout, "model": model}
         if effort is not None:
             call_kwargs["effort"] = effort
         try:
             raw = call_claude(prompt_text, **call_kwargs)
+        except ClaudeNotFoundError as e:
+            return {
+                "doc_id": safe_label, "ok": False, "error": str(e),
+                "phase": "llm_not_available",
+                "provider": provider,
+                "hint": provider_setup_hint(provider),
+                "char_count": len(prompt_text), "response_length": 0,
+            }
+        except ClaudeTimeoutError as e:
+            return {
+                "doc_id": safe_label, "ok": False, "error": str(e),
+                "phase": "llm_timeout",
+                "provider": provider,
+                "timeout_sec": timeout,
+                "hint": execution_error_hint(provider, str(e)),
+                "char_count": len(prompt_text), "response_length": 0,
+            }
+        except ClaudeExecutionError as e:
+            return {
+                "doc_id": safe_label, "ok": False, "error": str(e),
+                "phase": "llm_execution",
+                "provider": provider,
+                "hint": execution_error_hint(provider, str(e)),
+                "char_count": len(prompt_text), "response_length": 0,
+            }
         except ClaudeClientError as e:
-            return {"doc_id": safe_label, "ok": False, "error": str(e),
-                    "phase": "claude_call",
-                    "char_count": len(prompt_text), "response_length": 0}
+            return {
+                "doc_id": safe_label, "ok": False, "error": str(e),
+                "phase": "llm_unknown",
+                "provider": provider,
+                "char_count": len(prompt_text), "response_length": 0,
+            }
 
         try:
             with open(responses_dir / f"_raw_{safe_label}.txt", "w", encoding="utf-8") as f:
@@ -120,7 +168,7 @@ def _compare_execute_per_citation_parallel(
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(_one, c): c for c in citations}
-        for fut in as_completed(futures, timeout=1800):
+        for fut in as_completed(futures):
             try:
                 r = fut.result()
             except Exception as e:
@@ -136,7 +184,8 @@ def _compare_execute_per_citation_parallel(
                     resolved_log.extend(f"{r['doc_id']}: {x}" for x in r["resolved"])
             else:
                 err_msg = r.get("error") or "; ".join(r.get("errors") or [])
-                all_errors.append(f"{r['doc_id']}: {err_msg}")
+                phase = f" [{r.get('phase')}]" if r.get("phase") else ""
+                all_errors.append(f"{r['doc_id']}{phase}: {err_msg}")
 
     return {
         "success": len(saved_docs) > 0,
@@ -148,8 +197,10 @@ def _compare_execute_per_citation_parallel(
         "response_length": resp_total,
         "parallel": max_workers,
         "model": model,
-        "mode_used": "legacy",  # 並列版は常に legacy 統合 prompt
-        "fallback_to_legacy": False,
+        "mode_used": mode,
+        "fallback_to_legacy": fallback_to_legacy,
+        "execution_mode": "per_citation",
+        "split_by_citation": True,
     }, 200
 
 
@@ -244,15 +295,23 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         with open(hongan_path, "r", encoding="utf-8") as f:
             hongan = json.load(f)
 
-    # 並列実行は環境変数 COMPARE_PARALLEL=N (N>=2) で明示的に有効化したときのみ。
-    # 過去に Sonnet*3 並列でかえって遅くなる事例あり（CLI 起動オーバーヘッド +
-    # prompt cache が効かない+ session が分散するため）。デフォルトは Opus と
-    # 同じ「1 プロンプトに全 citation を統合」方式とする。
+    # per-citation 実行:
+    # - COMPARE_PER_CITATION=1 ならモデル/件数を問わず有効化 (Opus は直列推奨)。
+    # - 旧来互換として COMPARE_PARALLEL>=2 かつ lightweight モデルなら自動並列。
+    # 未指定時の重量モデルは従来どおり統合方式。
     import os as _os
     try:
         parallel_workers = int(_os.environ.get("COMPARE_PARALLEL", "0"))
     except ValueError:
         parallel_workers = 0
+    if parallel_workers > 2:
+        logger.warning(
+            "COMPARE_PARALLEL=%d は方針上限(2)を超えるため2に丸めます",
+            parallel_workers,
+        )
+        parallel_workers = 2
+    per_citation_env = _os.environ.get("COMPARE_PER_CITATION", "").strip().lower()
+    per_citation_explicit = per_citation_env in ("1", "true", "yes", "on")
     model_l = (model or "").lower()
     is_lightweight = (
         ("sonnet" in model_l)
@@ -260,13 +319,21 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         or ("mini" in model_l)
         or ("glm" in model_l)
     )
-    if parallel_workers >= 2 and is_lightweight and len(citations) >= 2:
+    use_per_citation = per_citation_explicit or (
+        parallel_workers >= 2 and is_lightweight and len(citations) >= 2
+    )
+    if use_per_citation:
         known_cit_ids = [c.get("id") for c in (meta or {}).get("citations", []) if c.get("id")]
+        if parallel_workers >= 1:
+            workers = parallel_workers
+        else:
+            workers = 2 if is_lightweight else 1
         return _compare_execute_per_citation_parallel(
             case_id=case_id, citations=citations, segs=segs,
             keywords=keywords, hongan=hongan, field=field,
             model=model, known_cit_ids=known_cit_ids,
-            max_workers=parallel_workers, effort=effort,
+            max_workers=workers, effort=effort, mode=mode,
+            fallback_to_legacy=fallback_to_legacy,
         )
 
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
@@ -287,6 +354,10 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
     call_kwargs = {"timeout": timeout, "model": model}
     if effort is not None:
         call_kwargs["effort"] = effort
+    logger.info(
+        "Step5 execution_mode=integrated provider=%s model=%s citations=%s mode=%s prompt_chars=%s",
+        provider, model, len(citations), mode, len(prompt_text),
+    )
     try:
         raw_response = call_claude(prompt_text, **call_kwargs)
     except ClaudeNotFoundError as e:
@@ -390,6 +461,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         "response_length": len(raw_response),
         "mode_used": mode,
         "fallback_to_legacy": fallback_to_legacy,
+        "execution_mode": "integrated",
     }, 200
 
 

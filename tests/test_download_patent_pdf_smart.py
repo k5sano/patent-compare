@@ -113,17 +113,28 @@ class TestRouting:
         assert result["jplatpat_error"] == "JP fail"
         assert len(gp_calls) == 1
 
-    def test_non_jp_skips_jplatpat(self, tmp_path, monkeypatch):
+    def test_unsupported_non_jplatpat_skips_jplatpat(self, tmp_path, monkeypatch):
         jp_calls = self._stub_jplatpat(monkeypatch, success=True)
         gp_calls = self._stub_gp(monkeypatch, success=True)
         result = patent_downloader.download_patent_pdf_smart(
-            "WO2022/044362", tmp_path
+            "FR3088205A1", tmp_path
         )
         assert result["success"] is True
         assert result["source"] == "google_patents"
-        # JP 経路は呼ばれない
+        # J-PlatPat PDF 経路の正規化対象外なので呼ばれない
         assert len(jp_calls) == 0
         assert len(gp_calls) == 1
+
+    def test_supported_foreign_uses_jplatpat_first(self, tmp_path, monkeypatch):
+        jp_calls = self._stub_jplatpat(monkeypatch, success=True)
+        gp_calls = self._stub_gp(monkeypatch, success=True)
+        result = patent_downloader.download_patent_pdf_smart(
+            "WO2020/255643A1", tmp_path
+        )
+        assert result["success"] is True
+        assert result["source"] == "jplatpat"
+        assert len(jp_calls) == 1
+        assert len(gp_calls) == 0
 
     def test_prefer_jplatpat_false_skips_jp(self, tmp_path, monkeypatch):
         """既存挙動 (Google Patents 直行) に明示的にフォールバックする経路"""

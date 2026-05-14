@@ -32,6 +32,10 @@ def test_model_aliases_resolve_to_expected_providers():
     assert cc.resolve_model("local-ai") == "qwen2.5:7b-instruct"
     assert cc.model_provider("local-ai") == "local"
     assert cc.resolve_model("local-gemma4-e2b") == "gemma4:e2b"
+    assert cc.resolve_model("qwen2.5-vl") == "qwen2.5vl:7b"
+    assert cc.resolve_model("qwen2.5-vl-32b") == "qwen2.5vl:32b"
+    assert cc.model_provider("qwen2.5-vl") == "local"
+    assert cc.model_provider("qwen2.5vl:7b") == "local"
     assert cc.resolve_model("ollama:qwen2.5:14b") == "qwen2.5:14b"
     assert cc.model_provider("ollama:qwen2.5:14b") == "local"
     assert cc.resolve_model("openai:gpt-5.5") == "gpt-5.5"
@@ -123,6 +127,37 @@ def test_call_claude_routes_local_ai_to_ollama(monkeypatch):
     assert payload["prompt"] == "hello"
     assert payload["stream"] is False
     assert timeout == 9
+
+
+def test_call_llm_with_image_routes_qwen_vl_to_ollama(monkeypatch, tmp_path):
+    monkeypatch.setattr(cc, "is_local_ai_available", lambda: True)
+    img = tmp_path / "table.png"
+    img.write_bytes(b"fake-image")
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append((url, json, timeout))
+        return _Resp({"response": '{"is_table": true}'})
+
+    monkeypatch.setattr(cc.requests, "post", fake_post)
+
+    out = cc.call_llm_with_image(
+        "添付画像を読み取りJSONで返してください",
+        img,
+        model="qwen2.5-vl",
+        effort="low",
+        timeout=11,
+    )
+
+    assert out == '{"is_table": true}'
+    url, payload, timeout = calls[0]
+    assert url == "http://127.0.0.1:11434/api/generate"
+    assert payload["model"] == "qwen2.5vl:7b"
+    assert payload["prompt"].startswith("添付画像")
+    assert payload["images"] == ["ZmFrZS1pbWFnZQ=="]
+    assert payload["stream"] is False
+    assert payload["options"]["temperature"] == 0.0
+    assert timeout == 11
 
 
 def test_call_claude_local_ai_missing_model_is_classified(monkeypatch):

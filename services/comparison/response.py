@@ -90,6 +90,7 @@ def save_response_single(case_id, citation_id, raw_text):
     result, errors = parse_response(raw_text, _get_all_segment_ids(segs))
 
     if result:
+        _normalize_cited_locations_inplace(result)
         resp_path = case_dir / "responses" / f"{citation_id}.json"
         with open(resp_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)

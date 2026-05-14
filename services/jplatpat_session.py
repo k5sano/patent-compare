@@ -97,7 +97,7 @@ class JPlatpatSession:
             return {"ok": False, "error": "セッションが開かれていません。先に J-PlatPat を開いてください。"}
         return self._submit("fill_formula", {"formula": formula}, timeout=timeout)
 
-    def scrape(self, *, max_results: int = 50, timeout: int = 30) -> Dict[str, Any]:
+    def scrape(self, *, max_results: int = 100, timeout: int = 30) -> Dict[str, Any]:
         if not self.is_alive():
             return {"ok": False, "error": "セッションが開かれていません。先に J-PlatPat を開いてください。"}
         return self._submit("scrape", {"max_results": max_results}, timeout=timeout)
@@ -292,7 +292,7 @@ class JPlatpatSession:
         if op == "fill_formula":
             return self._op_fill(page, kw.get("formula") or "")
         if op == "scrape":
-            return self._op_scrape(page, int(kw.get("max_results") or 50))
+            return self._op_scrape(page, int(kw.get("max_results") or 100))
         if op == "status":
             return {"ok": True, "url": (page.url if page else "")}
         return {"ok": False, "error": f"unknown op: {op}"}

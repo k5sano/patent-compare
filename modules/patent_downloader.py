@@ -273,15 +273,15 @@ def build_jplatpat_url(patent_id):
     # 公開: EPnnnnnnnA(1/2)
     m = re.match(r'EP[-\s]?(\d{6,9})\s*A\d?\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/EP-A-{m.group(1)}/50/ja"
+        return f"{BASE}/EP-A-{m.group(1).zfill(9)}/50/ja"
     # 登録: EPnnnnnnnB(1/2)
     m = re.match(r'EP[-\s]?(\d{6,9})\s*B\d?\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/EP-B-{m.group(1)}/50/ja"
+        return f"{BASE}/EP-B-{m.group(1).zfill(9)}/50/ja"
     # 種別不明 → A と仮置き
     m = re.match(r'EP[-\s]?(\d{6,9})\s*$', pid, re.IGNORECASE)
     if m:
-        return f"{BASE}/EP-A-{m.group(1)}/50/ja"
+        return f"{BASE}/EP-A-{m.group(1).zfill(9)}/50/ja"
 
     # --- CN ---
     # 公開 CN…A / 登録(発明) CN…B / 登録(別系統) CN…C / 実案 CN…U / CN…Y
@@ -439,6 +439,21 @@ def is_jp_patent_id(patent_id):
         return False
 
 
+def is_jplatpat_patent_id(patent_id):
+    """J-PlatPat PDF 経路で試行できる公報番号かを判定する。"""
+    if not (patent_id or "").strip():
+        return False
+    try:
+        from modules.jplatpat_pdf_downloader import normalize_jplatpat_patent_number
+    except ImportError:
+        return False
+    try:
+        normalize_jplatpat_patent_number(patent_id)
+        return True
+    except ValueError:
+        return False
+
+
 def download_patent_pdf_smart(patent_id, save_dir, *, timeout=30,
                               prefer_jplatpat=True, headless=True,
                               on_progress=None):
@@ -464,7 +479,7 @@ def download_patent_pdf_smart(patent_id, save_dir, *, timeout=30,
         return {"success": False, "error": "patent_id が空です",
                 "google_patents_url": ""}
 
-    if prefer_jplatpat and is_jp_patent_id(pid):
+    if prefer_jplatpat and is_jplatpat_patent_id(pid):
         jp_error = ""
         try:
             from modules.jplatpat_pdf_downloader import download_jplatpat_pdf

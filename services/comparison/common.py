@@ -192,7 +192,31 @@ def _load_citation_for_prompt(case_id, cit_id, case_dir):
     with open(cit_path, "r", encoding="utf-8") as f:
         citation = json.load(f)
     citation = _enrich_citation_with_hit_text(case_id, cit_id, citation)
+    citation = _enrich_citation_with_extracted_tables(case_id, cit_id, citation)
     return citation, None
+
+
+def _enrich_citation_with_extracted_tables(case_id, cit_id, citation):
+    """output/tables/citations の抽出済み表を Step 5 prompt 用にマージする。"""
+    if not citation:
+        return citation
+    if citation.get("tables"):
+        return citation
+    safe = re.sub(r"[^A-Za-z0-9_\-]", "_", str(cit_id))
+    p = get_case_dir(case_id) / "output" / "tables" / "citations" / safe / "tables.json"
+    if not p.exists():
+        return citation
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return citation
+    tables = [t for t in (data.get("tables") or []) if t and t.get("is_table") is not False]
+    if not tables:
+        return citation
+    enriched = dict(citation)
+    enriched["tables"] = tables
+    enriched["_tables_source"] = str(p)
+    return enriched
 
 
 def _annotate_worker(job):

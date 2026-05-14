@@ -23,6 +23,142 @@ from modules import google_patents_throttle
 logger = logging.getLogger(__name__)
 
 
+_GOOGLE_PATENTS_IMAGE_JS = r"""() => {
+  const clean = (text) => String(text || '').replace(/\s+/g, ' ').trim();
+  const absUrl = (url) => {
+    const u = String(url || '').trim();
+    if (!u) return '';
+    try { return new URL(u, location.href).href; } catch (_e) { return u; }
+  };
+  const firstText = (root, selectors) => {
+    if (!root) return '';
+    for (const sel of selectors) {
+      const el = root.querySelector(sel);
+      const text = clean(el && el.textContent);
+      if (text) return text;
+    }
+    return '';
+  };
+  const nearestCaption = (im) => {
+    const fig = im.closest('figure, li, .description-line, .description, section');
+    const figText = firstText(fig, [
+      '[itemprop="label"]',
+      'figcaption',
+      '.caption',
+      '.description-line-number',
+    ]);
+    if (figText) return figText.slice(0, 320);
+
+    let cur = im;
+    for (let step = 0; step < 10; step++) {
+      const prev = cur.previousElementSibling;
+      const next = cur.nextElementSibling;
+      for (const cand of [prev, next]) {
+        const t = clean(cand && cand.textContent);
+        if (t && t.length < 600) return t.slice(0, 320);
+      }
+      cur = cur.parentElement;
+      if (!cur || cur === document.body) break;
+      const t = clean(cur.textContent);
+      if (t && t.length >= 2 && t.length < 600) return t.slice(0, 320);
+    }
+    return '';
+  };
+  const fullImageUrl = (im) => {
+    const fig = im.closest('figure, li, section');
+    const meta = fig && (
+      fig.querySelector('meta[itemprop="full"]')
+      || fig.querySelector('meta[itemprop="image"]')
+      || fig.querySelector('meta[name="full"]')
+    );
+    return absUrl(
+      (meta && meta.getAttribute('content'))
+      || im.currentSrc
+      || im.src
+      || im.getAttribute('data-src')
+      || im.getAttribute('data-full')
+    );
+  };
+  const sourceSection = (im) => {
+    if (im.closest('section[itemprop="drawings"], #drawings, .drawings')) return 'drawings';
+    if (im.closest('#description')) return 'description';
+    return 'page';
+  };
+
+  const imgs = Array.from(document.querySelectorAll([
+    '#description img',
+    'section[itemprop="drawings"] img',
+    '#drawings img',
+    'img[src*="patentimages.storage.googleapis.com"]',
+    'img[src*="patentimages"]',
+  ].join(',')));
+  const seen = new Set();
+  const out = [];
+  for (const im of imgs) {
+    const src = fullImageUrl(im);
+    if (!src || seen.has(src)) continue;
+    seen.add(src);
+    const fig = im.closest('figure, li, section');
+    const label = firstText(fig, ['[itemprop="label"]', 'figcaption', '.caption']);
+    out.push({
+      src,
+      alt: im.alt || '',
+      width: im.naturalWidth || im.width || parseInt(im.getAttribute('width') || '0', 10) || 0,
+      height: im.naturalHeight || im.height || parseInt(im.getAttribute('height') || '0', 10) || 0,
+      label: clean(label),
+      context: nearestCaption(im),
+      source_section: sourceSection(im),
+    });
+  }
+  return out;
+}"""
+
+
+def _extract_google_patents_image_label(record: dict) -> str:
+    """Google Patents の画像 record から表/図/化/式ラベルを抽出する。"""
+    texts = [
+        record.get("label") or "",
+        record.get("context") or "",
+        record.get("alt") or "",
+    ]
+    patterns = [
+        re.compile(r"【\s*(表|図|化|式)\s*([0-9０-９]+(?:\s*[\-－―]\s*[0-9０-９]+)?[A-Za-z]?)\s*】"),
+        re.compile(r"(表|図|化|式)\s*([0-9０-９]+(?:\s*[\-－―]\s*[0-9０-９]+)?[A-Za-z]?)"),
+        re.compile(r"\b(Table)\s+([0-9]+(?:\s*[\-–]\s*[0-9]+)?[A-Za-z]?)\b", re.I),
+        re.compile(r"\b(Fig(?:ure)?\.?)\s*([0-9]+(?:\s*[\-–]\s*[0-9]+)?[A-Za-z]?)\b", re.I),
+    ]
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+    for text in texts:
+        s = str(text or "")
+        for pat in patterns:
+            m = pat.search(s)
+            if not m:
+                continue
+            head = m.group(1)
+            num = re.sub(r"\s+", "", m.group(2).translate(fw2hw))
+            if re.match(r"fig", head, re.I):
+                return f"Fig. {num}"
+            if re.match(r"table", head, re.I):
+                return f"Table {num}"
+            return f"{head}{num}"
+    return ""
+
+
+def _google_patents_image_kind(label: str, source_section: str = "") -> str:
+    label = str(label or "")
+    if re.search(r"表|Table", label, re.I):
+        return "table"
+    if re.search(r"図|Fig", label, re.I):
+        return "figure"
+    if "化" in label:
+        return "chemical"
+    if "式" in label:
+        return "formula"
+    if source_section == "drawings":
+        return "figure"
+    return "image"
+
+
 @dataclass
 class PatentHit:
     """検索結果1件"""
@@ -486,41 +622,18 @@ def fetch_patent_full_text(
                 except Exception:
                     pass
 
-                # 実施例の表 (画像) を抽出。Google Patents は description 内の表を
-                # patentimages.storage.googleapis.com の <img> として埋め込む。
+                # 図面・表画像を抽出。Google Patents は図面セクションの図や
+                # description 内の表を patentimages の <img> / meta として埋め込む。
                 try:
-                    images_data = page.evaluate("""() => {
-                      const desc = document.querySelector('#description');
-                      if (!desc) return [];
-                      const imgs = Array.from(desc.querySelectorAll('img'));
-                      return imgs.map(im => {
-                        // 直近の「文字塊」を caption として拾う (前方への遡り)
-                        let cur = im;
-                        let context = '';
-                        for (let step = 0; step < 8; step++) {
-                          cur = cur.previousElementSibling || (cur.parentElement);
-                          if (!cur) break;
-                          const t = (cur.textContent || '').trim();
-                          if (t.length >= 10 && t.length < 600) {
-                            context = t.slice(0, 300);
-                            break;
-                          }
-                        }
-                        return {
-                          src: im.src,
-                          alt: im.alt || '',
-                          width: im.naturalWidth || im.width || 0,
-                          height: im.naturalHeight || im.height || 0,
-                          context: context,
-                        };
-                      }).filter(o => o.src);
-                    }""")
+                    images_data = page.evaluate(_GOOGLE_PATENTS_IMAGE_JS)
                     if images_data:
-                        # caption から「表N」「Table N」を抽出して label に
                         for im in images_data:
-                            ctx = im.get("context", "")
-                            mlabel = re.search(r'(表\s*\d+|Table\s*\d+|Fig(?:ure)?\.?\s*\d+)', ctx, re.I)
-                            im["label"] = mlabel.group(1) if mlabel else ""
+                            label = _extract_google_patents_image_label(im)
+                            im["raw_label"] = im.get("label") or ""
+                            im["label"] = label
+                            im["kind"] = _google_patents_image_kind(
+                                label, im.get("source_section") or ""
+                            )
                         result["images"] = images_data
                 except Exception:
                     pass

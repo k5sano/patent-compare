@@ -43,6 +43,13 @@ from services.comparison.response import (
     save_response_single,
     update_comparison_cell,
 )
+from services.comparison_chat_service import (
+    apply_judgment_override,
+    build_cell_context,
+    chat_cell,
+    get_cell_chat_history,
+    list_unmet_cells,
+)
 
 __all__ = [
     "annotate_all_citations",
@@ -61,6 +68,11 @@ __all__ = [
     "save_response_multi",
     "save_response_single",
     "update_comparison_cell",
+    "apply_judgment_override",
+    "build_cell_context",
+    "chat_cell",
+    "get_cell_chat_history",
+    "list_unmet_cells",
     "_backup_existing_annotated_pdf",
     "_canonical_digits",
     "_decorate_comparison_with_notation",

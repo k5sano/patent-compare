@@ -11,6 +11,8 @@
 5. 拒絶理由構成の方針
 """
 
+import html
+import re
 from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import (
@@ -25,6 +27,7 @@ from modules.cited_ref_notation import (
     comment_of as _ref_comment_of,
     display_judgment as _display_judgment,
     expand as _expand_ref,
+    normalize as _normalize_ref,
 )
 
 
@@ -87,6 +90,27 @@ def _set_cell(ws, row, col, value, font=None, fill=None, alignment=None, border=
     if border:
         cell.border = border
     return cell
+
+
+def _plain_excel_text(value):
+    """Excel出力用にHTML/画面表示マーカーをプレーンテキスト化する。"""
+    if value is None:
+        return ""
+    text = str(value)
+    if not text:
+        return ""
+    text = html.unescape(text)
+    text = text.replace("<<HL>>", "").replace("<</HL>>", "")
+    text = text.replace("<<UL>>", "").replace("<</UL>>", "")
+    text = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", text)
+    text = re.sub(r"(?i)</\s*(p|div|li|tr|h[1-6])\s*>", "\n", text)
+    text = re.sub(r"(?i)<\s*li(?:\s+[^>]*)?>", "・", text)
+    text = re.sub(r"(?i)<\s*/?\s*(ul|ol|table|tbody|thead|tr|td|th|span|strong|b|em|i|p|div|h[1-6])(?:\s+[^>]*)?>", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _keyword_color(gid):
@@ -399,6 +423,11 @@ def _format_comp_for_paste(comp):
 
     raw = comp.get("cited_location") or ""
     loc_only = _strip_comment_memo_from_loc(raw)
+    if loc_only:
+        try:
+            loc_only = _normalize_ref(loc_only)
+        except Exception:
+            pass
 
     # manual comment ("...") 抽出
     from modules.cited_ref_notation import comment_of
@@ -915,65 +944,75 @@ def _format_analysis_value(value):
     if value is None or value == "":
         return "(未取得)"
     if isinstance(value, str):
-        return value or "(未取得)"
+        return _plain_excel_text(value) or "(未取得)"
     if isinstance(value, list):
         if not value:
             return "(未取得)"
         if all(isinstance(x, str) for x in value):
-            joined = "、".join(x for x in value if x)
+            joined = "、".join(_plain_excel_text(x) for x in value if _plain_excel_text(x))
             return joined or "(未取得)"
         lines = []
         for x in value:
             if isinstance(x, dict):
                 code = (x.get("code") or "").strip()
-                lab = (x.get("label") or "").strip()
-                if not code and not lab:
+                lab = _plain_excel_text(x.get("label") or "")
+                if code or lab:
+                    lines.append(f"{code}（{lab}）" if lab else code)
                     continue
-                lines.append(f"{code}（{lab}）" if lab else code)
+                formatted = _format_analysis_value(x)
+                if formatted and formatted != "(未取得)":
+                    lines.append(formatted)
             elif x not in (None, ""):
-                lines.append(str(x))
+                lines.append(_plain_excel_text(x))
         return "\n".join(lines) if lines else "(未取得)"
     if isinstance(value, dict):
         parts = []
         for k, v in value.items():
             if isinstance(k, str) and k.startswith("_"):
                 continue  # _note 等の内部メタはスキップ
+            clean_key = _plain_excel_text(k)
             if isinstance(v, dict) and "items" in v:
                 # F-term grouped: {theme: {theme_label, items: [{code, label}, ...]}}
                 items = v.get("items") or []
                 joined = "、".join(
-                    f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
+                    f"{x.get('code', '')}（{_plain_excel_text(x.get('label', ''))}）" if x.get("label")
                     else x.get("code", "")
                     for x in items
                     if x.get("code") or x.get("label")
                 )
                 if not joined:
                     continue
-                tlab = (v.get("theme_label") or "").strip()
-                parts.append(f"{k}（{tlab}）: {joined}" if tlab else f"{k}: {joined}")
+                tlab = _plain_excel_text(v.get("theme_label") or "")
+                parts.append(f"{clean_key}（{tlab}）: {joined}" if tlab else f"{clean_key}: {joined}")
             elif isinstance(v, list):
                 if not v:
                     continue
                 if all(isinstance(x, dict) for x in v):
                     formatted = "、".join(
-                        f"{x.get('code', '')}（{x.get('label', '')}）" if x.get("label")
+                        f"{x.get('code', '')}（{_plain_excel_text(x.get('label', ''))}）" if x.get("label")
                         else x.get("code", "")
                         for x in v
                         if x.get("code") or x.get("label")
                     )
+                    if not formatted:
+                        formatted = "\n".join(
+                            _format_analysis_value(x)
+                            for x in v
+                            if _format_analysis_value(x) != "(未取得)"
+                        )
                 else:
-                    formatted = "、".join(str(x) for x in v if x not in (None, ""))
+                    formatted = "、".join(_plain_excel_text(x) for x in v if x not in (None, ""))
                 if formatted:
-                    parts.append(f"{k}: {formatted}")
+                    parts.append(f"{clean_key}: {formatted}")
             elif isinstance(v, dict):
                 # ネスト dict は再帰的に整形
                 formatted = _format_analysis_value(v)
                 if formatted and formatted != "(未取得)":
-                    parts.append(f"{k}: {formatted}")
+                    parts.append(f"{clean_key}: {formatted}")
             elif v not in (None, ""):
-                parts.append(f"{k}: {v}")
+                parts.append(f"{clean_key}: {_plain_excel_text(v)}")
         return "\n".join(parts) if parts else "(未取得)"
-    return str(value)
+    return _plain_excel_text(value)
 
 
 def _build_rich_keyword_text(value, keywords=None):

@@ -4,13 +4,13 @@
     {
       "requirement_id": "1A",
       "judgment": "○",
-      "cited_location": "0010;0011",
+      "cited_location": "10,11",
       "judgment_reason": "成分Aが記載されている。"
     },
     {
       "requirement_id": "1B",
       "judgment": "△",
-      "cited_location": "T1;T2",
+      "cited_location": "T1,2",
       "judgment_reason": "成分Bは表で一部記載されている。"
     }
   ],

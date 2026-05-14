@@ -48,6 +48,7 @@ SECTION_KEYWORDS_EN = [
 
 # --- 請求項パターン ---
 CLAIM_PATTERN_JP = re.compile(r'【請求項(\d+)】')
+CLAIM_PATTERN_JP_BRACKET = re.compile(r'\[\s*請求\s*項\s*([0-9０-９]+)\s*\]?')
 CLAIM_SECTION_START = re.compile(r'【特許請求の範囲】|【書類名】\s*特許請求の範囲')
 CLAIM_SECTION_END = re.compile(r'【発明の詳細な説明】|【書類名】\s*明細書')
 
@@ -75,6 +76,44 @@ DEPENDENCY_PATTERN_EN = re.compile(
 
 # --- 表の検出パターン ---
 TABLE_PATTERN = re.compile(r'【(表\d+)】|【(Table\s*\d+)】|\[(表\d+)\]|\[(Table\s*\d+)\]')
+
+
+def _env_int(name, default=None):
+    import os
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _resolve_ocr_max_workers(target_count, requested=None):
+    """OCR worker count tuned for many-core desktops.
+
+    Tesseract is forced to OMP_THREAD_LIMIT=1 in _ocr_pixmap, so page-level
+    concurrency is useful. Still, spawning 32 Tesseract processes tends to
+    saturate memory and disk I/O. Default cap is 8; override with
+    PATENT_COMPARE_OCR_MAX_WORKERS or OCR_MAX_WORKERS.
+    """
+    import os
+    target_count = max(0, int(target_count or 0))
+    if target_count <= 0:
+        return 0
+    cap = _env_int("PATENT_COMPARE_OCR_MAX_WORKERS", None)
+    if cap is None:
+        cap = _env_int("OCR_MAX_WORKERS", None)
+    if cap is None:
+        cap = min(os.cpu_count() or 4, 8)
+    cap = max(1, int(cap))
+    if requested is None:
+        requested = cap
+    try:
+        requested = int(requested)
+    except (TypeError, ValueError):
+        requested = cap
+    return max(1, min(target_count, requested, cap))
 
 
 def detect_format(text):
@@ -135,9 +174,7 @@ def extract_text_from_pdf(pdf_path, ocr_threshold=200, ocr_lang='jpn', max_worke
     doc.close()
 
     if ocr_targets:
-        if max_workers is None:
-            max_workers = min(len(ocr_targets), os.cpu_count() or 4)
-        max_workers = max(1, int(max_workers))
+        max_workers = _resolve_ocr_max_workers(len(ocr_targets), max_workers)
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {
                 ex.submit(_ocr_pixmap, pn, png, ocr_lang): pn
@@ -504,6 +541,39 @@ def parse_claims_jp(full_text):
     return claims
 
 
+def parse_claims_jp_bracket(full_text):
+    """WO日本語OCRに多い `[請求 項 1]` 形式の請求項を抽出する。"""
+    claims = []
+    claim_matches = list(CLAIM_PATTERN_JP_BRACKET.finditer(full_text or ""))
+    if not claim_matches:
+        return claims
+    for i, match in enumerate(claim_matches):
+        raw_num = match.group(1).translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        try:
+            claim_num = int(raw_num)
+        except ValueError:
+            continue
+        start = match.end()
+        end = claim_matches[i + 1].start() if i + 1 < len(claim_matches) else len(full_text)
+        claim_text = full_text[start:end].strip()
+        claim_text = re.sub(r'\s+', ' ', claim_text).strip()
+        # ISR/IPER など後続の非請求項セクションが混じる場合は切る。
+        claim_text = re.split(
+            r'\bINTERNATIONAL SEARCH REPORT\b|国際調査報告',
+            claim_text,
+            maxsplit=1,
+        )[0].strip()
+        dep_text = re.sub(r'\s+', '', claim_text)
+        dependencies = _detect_dependencies(dep_text)
+        claims.append({
+            "number": claim_num,
+            "text": claim_text,
+            "dependencies": dependencies,
+            "is_independent": len(dependencies) == 0,
+        })
+    return claims
+
+
 def parse_claims_en(full_text):
     """英語特許の請求項を抽出"""
     claims = []
@@ -844,8 +914,11 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
     # ファイル名からフォーマットヒントを取得
     filename_hint = _guess_format_from_filename(pdf_path)
 
-    # ファイル名がWO/US/EPなら最初から英語OCRで抽出
-    if filename_hint and filename_hint != "JP":
+    # WO/EP は J-PlatPat 由来だと日本語公報画像のことが多い。
+    # eng 単独 OCR は日本語をローマ字ノイズ化するため、英日併用で読む。
+    if filename_hint in ("WO", "EP"):
+        first_lang = 'jpn+eng'
+    elif filename_hint and filename_hint != "JP":
         first_lang = 'eng'
     else:
         first_lang = 'jpn'
@@ -890,9 +963,15 @@ def extract_patent_pdf(pdf_path, doc_type="hongan"):
     bib = detect_bibliographic_info(pages, pdf_path=pdf_path)
 
     # 請求項・段落抽出（フォーマット別分岐）
+    cjk_chars = len(_CJK_CHAR_RE.findall(full_text or ""))
+    is_japanese_wo_text = fmt != "JP" and cjk_chars >= 200
+
     if fmt == "JP":
         claims = parse_claims_jp(full_text)
         paragraphs = parse_paragraphs_jp(full_text, pages)
+    elif is_japanese_wo_text:
+        claims = parse_claims_jp(full_text) or parse_claims_jp_bracket(full_text)
+        paragraphs = parse_paragraphs_en(full_text, pages, fmt=fmt)
     else:
         claims = parse_claims_en(full_text)
         paragraphs = parse_paragraphs_en(full_text, pages, fmt=fmt)

@@ -8,16 +8,20 @@ J-PlatPat の画面操作で番号照会を実行し、内部の公報 PDF URL �
 
 from __future__ import annotations
 
+import base64
+import io
 import os
 import re
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
 import fitz
 import requests
+import urllib3
 
 
 JPLATPAT_NUMBER_INQUIRY_URL = "https://www.j-platpat.inpit.go.jp/p0000"
@@ -29,6 +33,25 @@ _HEADERS = {
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
 }
+
+
+def _requests_get_with_tls_fallback(url: str, *, headers: dict | None = None,
+                                    timeout: float = 30.0):
+    """GET with certifi and a Windows-friendly SSL fallback."""
+    kwargs = {"headers": headers or {}, "timeout": timeout}
+    try:
+        import certifi
+        kwargs["verify"] = certifi.where()
+    except Exception:
+        pass
+    try:
+        return requests.get(url, **kwargs)
+    except requests.exceptions.SSLError:
+        if os.environ.get("PATENT_COMPARE_INSECURE_SSL_FALLBACK", "1") == "0":
+            raise
+        kwargs["verify"] = False
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        return requests.get(url, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -107,6 +130,95 @@ def normalize_jp_patent_number(raw: str) -> JplatpatPatentNo:
     raise ValueError("現在は JP 公開番号(A、例: 特開2024-123456 / JP2024123456A) と JP 登録番号(B、例: JP7250676B2 / 特許7250676)に対応しています")
 
 
+def normalize_jplatpat_patent_number(raw: str) -> JplatpatPatentNo:
+    """J-PlatPat PDF 取得向けに番号を正規化する。
+
+    JP 番号は番号照会/固定URL、外国公報は J-PlatPat 固定URLで扱える形式へ寄せる。
+    """
+    try:
+        return normalize_jp_patent_number(raw)
+    except ValueError as jp_error:
+        text = (raw or "").strip()
+        if not text:
+            raise jp_error
+        work = text.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        work = re.sub(r"[－−―—ー]", "-", work)
+        work = re.sub(r"(号公報|公報|明細書|号)", " ", work)
+        work = re.sub(r"[()（）「」【】『』,，\s]+", " ", work).strip()
+
+        # J-PlatPat 固定URL上の EP 公報番号は 9 桁ゼロ埋め
+        # 例: EP4663406A1 -> EP-A-004663406
+        ep_compact = re.sub(r"[\s\-]", "", work.upper())
+        m = re.search(r"EP(?:([AB]))?(\d{1,9})(?:([AB])\d?)?$", ep_compact, re.IGNORECASE)
+        if m:
+            prefix_kind = (m.group(1) or "").upper()
+            suffix_kind = (m.group(3) or "").upper()
+            kind_code = suffix_kind or prefix_kind or "A"
+            if kind_code not in {"A", "B"}:
+                kind_code = "A"
+            serial = m.group(2).zfill(9)
+            compact_serial = str(int(serial)) if serial.isdigit() else serial.lstrip("0")
+            doc_id = f"EP{compact_serial}{kind_code}"
+            return JplatpatPatentNo(
+                raw=text,
+                number=f"EP-{kind_code}-{serial}",
+                display_number=f"EP-{kind_code}-{serial}",
+                filename_stem=doc_id,
+                doc_id=doc_id,
+                inquiry_selectors=(),
+                kind="foreign_publication",
+                fixed_url=f"{JPLATPAT_ORIGIN}/c1801/PU/EP-{kind_code}-{serial}/50/ja",
+            )
+
+        # J-PlatPat 固定URLの US 公開公報はパス上では US-A-yyyy-nnnnnnn、
+        # 画面表示・内部 API では US-A-yyyy/nnnnnnn。
+        m = re.search(r"US\s*-?\s*(?:A\s*-?\s*)?(\d{4})\s*[-/]?\s*(\d{4,7})\s*A?\d?", work, re.IGNORECASE)
+        if m:
+            year = m.group(1)
+            serial = m.group(2).zfill(7)
+            return JplatpatPatentNo(
+                raw=text,
+                number=f"US-A-{year}-{serial}",
+                display_number=f"US-A-{year}/{serial}",
+                filename_stem=f"US{year}{serial}A",
+                doc_id=f"US{year}{serial}A",
+                inquiry_selectors=(),
+                kind="foreign_publication",
+                fixed_url=f"{JPLATPAT_ORIGIN}/c1801/PU/US-A-{year}-{serial}/50/ja",
+            )
+
+        m = re.search(r"US\s*-?\s*(?:B\s*-?\s*)?([\d,]{7,9})\s*B\d?", work, re.IGNORECASE)
+        if m:
+            serial = m.group(1).replace(",", "")
+            return JplatpatPatentNo(
+                raw=text,
+                number=f"US-B-{serial}",
+                display_number=f"US-B-{serial}",
+                filename_stem=f"US{serial}B",
+                doc_id=f"US{serial}B",
+                inquiry_selectors=(),
+                kind="foreign_publication",
+                fixed_url=f"{JPLATPAT_ORIGIN}/c1801/PU/US-B-{serial}/50/ja",
+            )
+
+        m = re.search(r"WO\s*-?\s*(?:A\s*-?\s*)?(\d{4})\s*[-/]?\s*(\d{1,6})\s*A?\d?", work, re.IGNORECASE)
+        if m:
+            year = m.group(1)
+            serial = m.group(2).zfill(6)
+            return JplatpatPatentNo(
+                raw=text,
+                number=f"WO-A-{year}-{serial}",
+                display_number=f"WO-A-{year}/{serial}",
+                filename_stem=f"WO{year}{serial}A",
+                doc_id=f"WO{year}{serial}A",
+                inquiry_selectors=(),
+                kind="foreign_publication",
+                fixed_url=f"{JPLATPAT_ORIGIN}/c1801/PU/WO-A-{year}-{serial}/50/ja",
+            )
+
+        raise jp_error
+
+
 def normalize_jp_registration_number(raw: str) -> JplatpatPatentNo:
     """後方互換用。登録番号だけでなく公開番号も受け付ける。"""
     return normalize_jp_patent_number(raw)
@@ -130,7 +242,7 @@ def download_jplatpat_pdf(
             "error": "playwright が未インストールです: pip install playwright && playwright install chromium",
         }
 
-    target = normalize_jp_patent_number(patent_id)
+    target = normalize_jplatpat_patent_number(patent_id)
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     output_path = save_dir / f"{target.filename_stem}.pdf"
@@ -145,10 +257,14 @@ def download_jplatpat_pdf(
     try:
         with sync_playwright() as p:
             browser = _launch_chromium(p, headless=headless)
-            context = browser.new_context(locale="ja-JP", viewport={"width": 1280, "height": 900})
+            context = browser.new_context(
+                locale="ja-JP",
+                viewport={"width": 1280, "height": 900},
+                ignore_https_errors=True,
+            )
             page = context.new_page()
             try:
-                if target.kind == "publication":
+                if target.kind in ("publication", "foreign_publication"):
                     log(f"固定URLを開いています: {target.display_number}")
                     result = _open_fixed_url_and_pick_result(page, target, timeout_ms=timeout_ms)
                 else:
@@ -167,6 +283,21 @@ def download_jplatpat_pdf(
                     result = _pick_search_result(search_payload, target)
 
                 doc_page = _open_document_page(page, result, target, timeout_ms=timeout_ms)
+                if target.kind == "foreign_publication":
+                    num_pages = _download_foreign_document_pdf(
+                        doc_page, result, target, output_path,
+                        timeout_ms=timeout_ms, log=log,
+                    )
+                    return {
+                        "success": True,
+                        "path": str(output_path),
+                        "patent_id": target.raw,
+                        "doc_id": target.doc_id,
+                        "jplatpat_doc_number": _result_doc_number(result, target),
+                        "title": result.get("INVEN_NAME") or "",
+                        "num_pages": num_pages,
+                        "source": "jplatpat",
+                    }
                 page_urls = _fetch_pdf_page_urls(doc_page, result, target, timeout_ms=timeout_ms)
                 if not page_urls:
                     raise RuntimeError("J-PlatPat から PDF URL を取得できませんでした")
@@ -247,7 +378,13 @@ def _open_fixed_url_and_pick_result(page, target: JplatpatPatentNo, *, timeout_m
     if not target.fixed_url:
         raise RuntimeError("固定URLを生成できませんでした")
     with page.expect_response(
-        lambda r: "/web/patnumber/wsp0102" in r.url and r.request.method == "POST",
+        lambda r: (
+            r.request.method == "POST"
+            and (
+                "/web/patnumber/wsp0102" in r.url
+                or "/web/patnumber/wsp0202" in r.url
+            )
+        ),
         timeout=timeout_ms,
     ) as response_info:
         page.goto(target.fixed_url, wait_until="load", timeout=timeout_ms)
@@ -257,7 +394,12 @@ def _open_fixed_url_and_pick_result(page, target: JplatpatPatentNo, *, timeout_m
 
 
 def _result_doc_number(result: dict, target: JplatpatPatentNo) -> str:
+    for doc in (result.get("DOCU_NUM_LIST") or []):
+        value = doc.get("DOCU_NUM_DISP")
+        if value:
+            return str(value)
     for key in (
+        "REP_DOCU_NUM_DISP",
         "PUBLI_NUM_DISP",
         "PUBL_NUM_DISP",
         "PUB_NUM_DISP",
@@ -278,9 +420,15 @@ def _pick_search_result(payload: dict, target: JplatpatPatentNo) -> dict:
         raise RuntimeError("番号照会で該当文献が見つかりませんでした")
     for item in results:
         haystack = " ".join(str(v) for v in item.values() if v is not None)
-        compact = re.sub(r"[\s\-]", "", haystack)
-        target_compact = re.sub(r"[\s\-]", "", target.number)
-        if target.number in haystack or target_compact in compact:
+        compact = re.sub(r"[\s\-/]", "", haystack)
+        target_compact = re.sub(r"[\s\-/]", "", target.number)
+        display_compact = re.sub(r"[\s\-/]", "", target.display_number)
+        if (
+            target.number in haystack
+            or target.display_number in haystack
+            or target_compact in compact
+            or display_compact in compact
+        ):
             if not item.get("ISN"):
                 raise RuntimeError("J-PlatPat 応答に ISN がありません")
             return item
@@ -298,7 +446,11 @@ def _open_document_page(page, result: dict, target: JplatpatPatentNo, *, timeout
             page.check("#p0107_docDispScreenFormal_radio1-input", timeout=3000)
         except Exception:
             pass
-        link = page.locator(f"text={doc_num}").first
+        link = (
+            page.locator(f"text={doc_num}").last
+            if target.kind == "foreign_publication"
+            else page.locator(f"text={doc_num}").first
+        )
         with page.expect_popup(timeout=timeout_ms) as popup_info:
             link.click(timeout=timeout_ms)
         popup = popup_info.value
@@ -370,16 +522,211 @@ def _request_pdf_page_url(page, result: dict, target: JplatpatPatentNo, page_num
     return info
 
 
+def _foreign_docu_data_kind(info: dict, target: JplatpatPatentNo) -> str:
+    name = str(info.get("DOCU_NAME") or target.display_number or "")
+    m = re.search(r"-(A\d?|B\d?)-", name, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r"([AB]\d?)$", target.doc_id, re.IGNORECASE)
+    if m:
+        kind = m.group(1).upper()
+        return "A1" if kind == "A" else "B1" if kind == "B" else kind
+    return "A1"
+
+
+def _post_jplatpat_json(page, path: str, body: dict, *, timeout_ms: int,
+                        service_id: str | None = None) -> dict:
+    """Post JSON through Playwright's request context using the browser session."""
+    if service_id:
+        gw_resp = page.context.request.post(
+            f"{JPLATPAT_ORIGIN}/app/docgw/wsc1101",
+            headers={"content-type": "application/json;charset=UTF-8", **_HEADERS},
+            data={"SERVICE_ID": service_id},
+            timeout=timeout_ms,
+        )
+        if not gw_resp.ok:
+            raise RuntimeError(f"wsc1101 status={gw_resp.status} service={service_id}")
+
+    last_error = None
+    for attempt in range(2):
+        try:
+            resp = page.context.request.post(
+                f"{JPLATPAT_ORIGIN}{path}",
+                headers={"content-type": "application/json;charset=UTF-8", **_HEADERS},
+                data=body,
+                timeout=timeout_ms,
+            )
+            if not resp.ok:
+                raise RuntimeError(f"{path} status={resp.status}")
+            return resp.json()
+        except Exception as e:
+            last_error = e
+            if attempt == 0:
+                try:
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    time.sleep(1.0)
+    raise RuntimeError(f"{path} JSON API 呼び出しに失敗しました: {last_error}")
+
+
+def _fetch_foreign_docu_info(page, result: dict, target: JplatpatPatentNo,
+                             *, timeout_ms: int) -> dict:
+    body = {
+        "ISN": str(result.get("ISN") or ""),
+        "DOCU_KEY": _result_doc_number(result, target),
+        "FOREIGN_DOCU_DISP_MODE": 0,
+        "UPD_INFO_ACQUISITION_FLG": 0,
+        "DOCU_TYPE_ACQUISITION_FLG": 0,
+        "OTID": None,
+    }
+    return _post_jplatpat_json(
+        page, "/app/comdocu/wsp1601", body,
+        timeout_ms=timeout_ms, service_id="WSP1601",
+    )
+
+
+def _pick_foreign_primary_docu(info: dict) -> dict:
+    for item in info.get("KIND_OF_DOCU_INFO") or []:
+        if not item.get("EXISTS_FLG"):
+            continue
+        kind = str(item.get("DOCU_DATA_KIND") or "").strip().upper()
+        if kind not in {"J", "4"} and item.get("DOCU_NUM"):
+            return item
+    raise RuntimeError("外国公報のページデータ情報を取得できませんでした")
+
+
+def _fetch_foreign_page_data(page, docu_key: str, data_kind: str, page_num: int,
+                             total_pages: int, *, timeout_ms: int) -> dict:
+    body = {
+        "DOCU_KEY": docu_key,
+        "ALL_PAGE_CNT": total_pages,
+        "START_PAGE": page_num,
+        "END_PAGE": page_num,
+        "LANG": "ja",
+        "AIPN_FLG": 0,
+        "DOCU_DATA_KIND": data_kind,
+        "OTID": None,
+    }
+    payload = _post_jplatpat_json(
+        page, "/app/comdocu/wsp1701", body,
+        timeout_ms=timeout_ms, service_id="WSP1701",
+    )
+    return payload.get("DOCU_DATA") or {}
+
+
+def _prepare_foreign_page_image(image_bytes: bytes) -> tuple[bytes, float, float]:
+    """J-PlatPat の高解像度ページ画像を表示向けPDF用に軽量化する。"""
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            im = im.convert("RGB")
+            # A4 150dpi 相当。ブラウザ表示と注釈作業には十分で、元の
+            # 300dpi 前後の画像をそのまま埋めるよりかなり軽くなる。
+            im.thumbnail((1240, 1754), Image.Resampling.LANCZOS)
+            out = io.BytesIO()
+            im.save(out, format="JPEG", quality=66, optimize=True)
+            w, h = im.size
+            return out.getvalue(), float(w), float(h)
+    except Exception:
+        return image_bytes, 595.0, 842.0
+
+
+def _insert_text_page(doc, text: str, page_num: int) -> None:
+    page = doc.new_page(width=595, height=842)
+    body = re.sub(r"<[^>]+>", " ", text or "")
+    body = re.sub(r"\s+", " ", body).strip()
+    page.insert_textbox(
+        fitz.Rect(36, 36, 559, 806),
+        f"Page {page_num}\n\n{body[:6000]}",
+        fontsize=9,
+        fontname="helv",
+    )
+
+
+def _download_foreign_document_pdf(page, result: dict, target: JplatpatPatentNo,
+                                   output_path: Path, *, timeout_ms: int,
+                                   log: Callable[[str], None]) -> int:
+    info = _fetch_foreign_docu_info(page, result, target, timeout_ms=timeout_ms)
+    primary = _pick_foreign_primary_docu(info)
+    total_pages = _to_int(primary.get("ALL_PAGE_CNT")) or 1
+    docu_key = str(primary.get("DOCU_NUM") or "")
+    data_kind = _foreign_docu_data_kind(info, target)
+    log(f"外国公報ページデータ {total_pages} ページを取得しています")
+
+    pdf = fitz.open()
+    try:
+        for page_num in range(1, total_pages + 1):
+            if page_num > 1:
+                time.sleep(1.0)
+            data = _fetch_foreign_page_data(
+                page, docu_key, data_kind, page_num, total_pages,
+                timeout_ms=timeout_ms,
+            )
+            drawing = data.get("DRAWING_DATA") or ""
+            if drawing:
+                image_bytes = base64.b64decode(drawing)
+                image_bytes, w, h = _prepare_foreign_page_image(image_bytes)
+                out_page = pdf.new_page(width=595, height=842)
+                out_page.insert_image(out_page.rect, stream=image_bytes)
+            else:
+                _insert_text_page(pdf, data.get("TEXT_DATA") or "", page_num)
+        pdf.save(str(output_path))
+    finally:
+        pdf.close()
+    return total_pages
+
+
+def _cookie_header(context, url: str) -> str:
+    try:
+        cookies = context.cookies(url)
+    except Exception:
+        cookies = []
+    return "; ".join(
+        f"{c.get('name')}={c.get('value')}"
+        for c in cookies
+        if c.get("name") and c.get("value") is not None
+    )
+
+
+def _download_pdf_bytes(context, full_url: str, *, timeout_ms: int) -> bytes:
+    try:
+        resp = context.request.get(full_url, headers=_HEADERS, timeout=timeout_ms)
+        if resp.ok:
+            body = resp.body()
+            if body.startswith(b"%PDF-"):
+                return body
+            raise RuntimeError("PDF 応答のマジックバイトが不正です")
+        raise RuntimeError(f"status={resp.status}")
+    except Exception as playwright_error:
+        headers = dict(_HEADERS)
+        cookie = _cookie_header(context, full_url)
+        if cookie:
+            headers["Cookie"] = cookie
+        resp = _requests_get_with_tls_fallback(
+            full_url,
+            headers=headers,
+            timeout=max(1.0, timeout_ms / 1000.0),
+        )
+        resp.raise_for_status()
+        body = resp.content or b""
+        if not body.startswith(b"%PDF-"):
+            raise RuntimeError(
+                "PDF 応答のマジックバイトが不正です "
+                f"(Playwright error: {playwright_error})"
+            )
+        return body
+
+
 def _download_page_pdfs(context, urls: Iterable[str], *, timeout_ms: int) -> list[Path]:
     temp_dir = Path(tempfile.mkdtemp(prefix="jplatpat_pdf_"))
     paths: list[Path] = []
     for i, url in enumerate(urls, start=1):
         full_url = url if str(url).startswith("http") else f"{JPLATPAT_ORIGIN}{url}"
-        resp = context.request.get(full_url, headers=_HEADERS, timeout=timeout_ms)
-        if not resp.ok:
-            raise RuntimeError(f"PDF ページ取得失敗(page={i}, status={resp.status})")
+        if i > 1:
+            time.sleep(1.0)
+        body = _download_pdf_bytes(context, full_url, timeout_ms=timeout_ms)
         path = temp_dir / f"page_{i:04d}.pdf"
-        path.write_bytes(resp.body())
+        path.write_bytes(body)
         paths.append(path)
     return paths
 

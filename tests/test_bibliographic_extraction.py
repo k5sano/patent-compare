@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from modules.pdf_extractor import detect_bibliographic_info
+from modules.pdf_extractor import (
+    detect_bibliographic_info,
+    parse_claims_jp_bracket,
+    _resolve_ocr_max_workers,
+)
 
 
 def _pages(text):
@@ -104,3 +108,29 @@ class TestEmpty:
     def test_no_bibliographic_markers(self):
         text = "本発明は、化粧料に関する。【背景技術】"
         assert detect_bibliographic_info(_pages(text)) == {}
+
+
+def test_parse_japanese_wo_bracket_claims_from_ocr_text():
+    text = """
+    [請求 項 1] ポリ オレ フィン 系 樹脂 フィルム。
+    [請求 項 2] 請求 項 1 に 記載 のポリオレフィン系樹脂フィルム。
+    INTERNATIONAL SEARCH REPORT
+    """
+
+    claims = parse_claims_jp_bracket(text)
+
+    assert [c["number"] for c in claims] == [1, 2]
+    assert claims[0]["is_independent"] is True
+    assert claims[1]["dependencies"] == [1]
+    assert "INTERNATIONAL SEARCH REPORT" not in claims[1]["text"]
+
+
+def test_resolve_ocr_max_workers_respects_env_cap(monkeypatch):
+    monkeypatch.setenv("PATENT_COMPARE_OCR_MAX_WORKERS", "8")
+    assert _resolve_ocr_max_workers(20, None) == 8
+    assert _resolve_ocr_max_workers(20, 12) == 8
+    assert _resolve_ocr_max_workers(3, None) == 3
+
+    monkeypatch.setenv("PATENT_COMPARE_OCR_MAX_WORKERS", "bad")
+    monkeypatch.setenv("OCR_MAX_WORKERS", "6")
+    assert _resolve_ocr_max_workers(20, None) == 6

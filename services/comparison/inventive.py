@@ -6,6 +6,16 @@ from __future__ import annotations
 import json
 
 from services.case_service import get_case_dir, load_case_meta
+
+
+def _load_hongan(case_dir):
+    hongan_path = case_dir / "hongan.json"
+    if hongan_path.exists():
+        with open(hongan_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
 def inventive_step_prompt(case_id):
     """進歩性判断プロンプトを生成"""
     from modules.inventive_step_analyzer import generate_inventive_step_prompt
@@ -46,7 +56,10 @@ def inventive_step_prompt(case_id):
             keywords = json.load(f)
 
     field = meta.get("field", "cosmetics")
-    prompt_text = generate_inventive_step_prompt(segs, responses, citations_meta, keywords, field)
+    hongan = _load_hongan(case_dir)
+    prompt_text = generate_inventive_step_prompt(
+        segs, responses, citations_meta, keywords, field, hongan=hongan
+    )
 
     prompts_dir = case_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
@@ -76,10 +89,15 @@ def inventive_step_response(case_id, raw_text):
     return {"success": data is not None, "data": data, "errors": errors}, 200
 
 
-def inventive_step_execute(case_id, model=None):
-    """直接実行: 進歩性判断プロンプト → Claude CLI → パース"""
+def inventive_step_execute(case_id, model=None, effort=None):
+    """直接実行: 進歩性判断プロンプト → Claude CLI → パース。
+
+    進歩性判断は証拠量が大きく推論負荷も高いため、既定モデルは opus 推奨。
+    """
     from modules.inventive_step_analyzer import (
-        generate_inventive_step_prompt, parse_inventive_step_response
+        generate_inventive_step_prompt,
+        get_inventive_step_defaults,
+        parse_inventive_step_response,
     )
     from modules.claude_client import call_claude, ClaudeClientError
 
@@ -119,8 +137,9 @@ def inventive_step_execute(case_id, model=None):
             keywords = json.load(f)
 
     field = meta.get("field", "cosmetics")
+    hongan = _load_hongan(case_dir)
     prompt_text = generate_inventive_step_prompt(
-        segs, responses, citations_meta, keywords, field
+        segs, responses, citations_meta, keywords, field, hongan=hongan
     )
 
     prompts_dir = case_dir / "prompts"
@@ -128,8 +147,11 @@ def inventive_step_execute(case_id, model=None):
     with open(prompts_dir / "inventive_step_prompt.txt", "w", encoding="utf-8") as f:
         f.write(prompt_text)
 
+    defaults = get_inventive_step_defaults()
+    model = model or defaults["default_model"]
+    effort = effort or defaults["default_effort"]
     try:
-        raw_response = call_claude(prompt_text, timeout=600, model=model)
+        raw_response = call_claude(prompt_text, timeout=1200, model=model, effort=effort)
     except ClaudeClientError as e:
         return {"error": str(e), "phase": "claude_call"}, 502
 

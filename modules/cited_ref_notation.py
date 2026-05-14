@@ -43,7 +43,7 @@ _FW_ALPHA = str.maketrans(
     "abcdefghijklmnopqrstuvwxyz",
 )
 _FW_PUNCT = str.maketrans({
-    "；": ";", "，": ",", "－": "-", "ー": "-", "～": "-", "〜": "-",
+    "；": ";", "，": ",", "、": ",", "－": "-", "ー": "-", "～": "-", "〜": "-",
     "（": "(", "）": ")", "［": "[", "］": "]", "／": "/", "　": " ",
 })
 
@@ -139,6 +139,7 @@ def display_judgment(j: str) -> str:
 # 各トークンを判別する正規表現
 # 順序重要: 接頭辞が長いものから（CL > C）
 _TOK_CLAIM   = re.compile(r"^CL([0-9,\-]+)$", re.IGNORECASE)
+_TOK_PAGE_LIST = re.compile(r"^P([0-9,\-]+)$", re.IGNORECASE)
 _TOK_PAGE_LINE = re.compile(r"^P([0-9]+)G([0-9]+)(?:-([0-9]+))?$", re.IGNORECASE)
 _TOK_PAGE    = re.compile(r"^P([0-9]+)([ABCDLR])?(?:([0-9]+)(?:-([0-9]+))?)?$", re.IGNORECASE)
 _TOK_COLUMN  = re.compile(r"^C([0-9]+)(?:G([0-9]+)(?:-([0-9]+))?)?$", re.IGNORECASE)
@@ -208,6 +209,9 @@ def _classify_token(tok: str) -> ParsedRef:
 
     if m := _TOK_CLAIM.match(tok):
         return ParsedRef(kind="claim", raw=raw, values=_expand_int_list(m.group(1)))
+    if m := _TOK_PAGE_LIST.match(tok):
+        vals = _expand_int_list(m.group(1))
+        return ParsedRef(kind="page", raw=raw, values=vals, page=vals[0] if len(vals) == 1 else None)
     if m := _TOK_PAGE_LINE.match(tok):
         page = int(m.group(1))
         lf = int(m.group(2))
@@ -429,6 +433,8 @@ def expand_ref(ref: ParsedRef) -> str:
     if k == "eq":
         return f"数{_format_int_list(ref.values)}"
     if k == "page":
+        if ref.values:
+            return f"{_format_int_list(ref.values)}ページ"
         out = f"{ref.page}ページ"
         if ref.quad:
             out += _QUAD_LABEL.get(ref.quad, ref.quad)
@@ -537,6 +543,7 @@ def normalize(text: str) -> str:
     """
     if not text or not text.strip():
         return text or ""
+    text = _natural_to_compact(text)
     p = parse(text)
     if p.is_empty():
         return text  # パース不能なら元のまま (壊さない)
@@ -550,6 +557,7 @@ def normalize(text: str) -> str:
         "chem":    "K",
         "formula": "E",
         "eq":      "S",
+        "page":    "P",
     }
 
     order = []  # 種類の出現順 (重複なし)
@@ -558,7 +566,12 @@ def normalize(text: str) -> str:
     unknown_parts = []
 
     for ref in p.refs:
-        if ref.kind == "page" or ref.kind == "column":
+        if ref.kind == "page" and ref.values:
+            if ref.kind not in order:
+                order.append(ref.kind)
+                by_kind[ref.kind] = []
+            by_kind[ref.kind].extend(ref.values or [])
+        elif ref.kind == "page" or ref.kind == "column":
             page_or_column.append((len(order), ref))
             order.append(ref.kind + "__raw__")  # raw として個別に並べる
         elif ref.kind == "unknown":
@@ -597,10 +610,23 @@ def normalize(text: str) -> str:
 
     base = ";".join(s for s in parts if s)
     if p.comment:
-        base = (base + ";" if base else "") + f"/{p.comment}"
+        base = (base if base else "") + f"/{p.comment}"
     if p.memo:
         base = (base + ";" if base else "") + f"//{p.memo}"
     return base or text
+
+
+def _natural_to_compact(text: str) -> str:
+    """自然文寄りの参照表記を保存用コンパクト記法へ寄せる。"""
+    s = _normalize(text)
+    s = re.sub(r"段落\s*【\s*([0-9]{1,6})\s*】", r"\1", s)
+    s = re.sub(r"【\s*([0-9]{1,6})\s*】", r"\1", s)
+    s = re.sub(r"段落\s*([0-9]{1,6})", r"\1", s)
+    s = re.sub(r"請求\s*項\s*([0-9][0-9,\-]*)", r"CL\1", s)
+    s = re.sub(r"表\s*([0-9][0-9,\-]*)", r"T\1", s)
+    s = re.sub(r"図\s*([0-9][0-9,\-]*[A-Za-z]?)", r"F\1", s)
+    s = re.sub(r"([0-9][0-9,\-]*)\s*ページ", r"P\1", s)
+    return s
 
 
 def comment_of(text: str) -> str:

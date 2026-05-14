@@ -10,6 +10,7 @@ from modules.cited_ref_notation import (
     expand,
     expand_ref,
     memo_of,
+    normalize,
     normalize_judgment,
     parse,
 )
@@ -313,3 +314,13 @@ class TestDisplayJudgment:
     ])
     def test_display(self, inp, expected):
         assert display_judgment(inp) == expected
+
+
+class TestNormalizeCompactPasteNotation:
+    def test_same_kind_refs_are_joined(self):
+        assert normalize("CL1;CL2;CL3") == "CL1-3"
+        assert normalize("T1;T2;T3") == "T1-3"
+        assert normalize("P1;P2;P3") == "P1-3"
+
+    def test_zero_padded_paragraphs_are_compacted(self):
+        assert normalize("【0001】;段落【0002】;T1;T2/コメント") == "1,2;T1,2/コメント"

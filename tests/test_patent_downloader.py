@@ -48,3 +48,25 @@ class TestIsJpPatentIdBranches:
 
         assert patent_downloader.is_jp_patent_id("特開2024-123456") is False
 
+
+class TestIsJplatpatPatentIdBranches:
+    @pytest.mark.parametrize("pid", [
+        "特開2024-123456",
+        "JP2024123456A",
+        "EP4663406A1",
+        "EP-A-004663406",
+        "US2022/0111622A1",
+        "US-A-2022/0111622",
+        "WO2020/255643A1",
+        "WO-A-2020/255643",
+    ])
+    def test_accepts_supported_jplatpat_forms(self, pid):
+        assert patent_downloader.is_jplatpat_patent_id(pid) is True
+
+    @pytest.mark.parametrize("pid", [
+        "not a patent",
+        "",
+        None,
+    ])
+    def test_rejects_unsupported_forms(self, pid):
+        assert patent_downloader.is_jplatpat_patent_id(pid) is False

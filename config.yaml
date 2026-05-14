@@ -40,6 +40,16 @@ prompt:
     - 背景技術
     - 技術分野
 
+# 進歩性判断プロンプト設定
+inventive_step:
+  max_total_chars: 120000
+  max_hongan_chars: 30000
+  max_citation_evidence_chars: 60000
+  max_per_para_chars: 400
+  max_per_table_chars: 1000
+  default_model: opus
+  default_effort: high
+
 # 予備調査 (Step 2 サブタブ) 設定
 preliminary_research:
   default_field: cosmetics

@@ -63,7 +63,7 @@ def search_run_execute(case_id):
       "formula": "...",
       "formula_level": "narrow" | "medium" | "wide" | "custom",
       "source": "jplatpat" | "google_patents",
-      "max_results": 50,
+      "max_results": 100,
       "auto_click_search": true  # jplatpat のみ
     }
     """
@@ -71,7 +71,7 @@ def search_run_execute(case_id):
     formula = (body.get("formula") or "").strip()
     level = body.get("formula_level") or "custom"
     source = body.get("source") or "jplatpat"
-    max_results = int(body.get("max_results") or 50)
+    max_results = int(body.get("max_results") or 100)
     parent_run_id = body.get("parent_run_id") or None
 
     if not formula:
@@ -168,7 +168,7 @@ def jplatpat_session_scrape(case_id):
     body = request.get_json() or {}
     formula = (body.get("formula") or "").strip()
     level = body.get("formula_level") or "custom"
-    max_results = int(body.get("max_results") or 50)
+    max_results = int(body.get("max_results") or 100)
     parent_run_id = body.get("parent_run_id") or None
     save_run = bool(body.get("save_run", True))
 

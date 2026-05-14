@@ -1206,17 +1206,27 @@ def find_citation_pdf(input_dir, citation_id):
 
     fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
 
-    cid_hw = citation_id.translate(fw2hw)
-    normalized = re.sub(r'[\s\-/]', '', cid_hw)
-    digits = re.sub(r'[^\d]', '', cid_hw)
+    def _pdf_match_keys(value):
+        raw = str(value or "").translate(fw2hw).upper()
+        compact = re.sub(r'[\s\-/]', '', raw)
+        keys = {compact} if compact else set()
+        # 外国公報の kind code (A1/B2 等) はファイル名側で落ちていることがある。
+        m = re.match(r'^(WO|EP|US|CN|KR|FR|GB|DE|CA|AU)(.+?)([A-Z]\d?)$', compact)
+        if m:
+            keys.add(m.group(1) + m.group(2))
+        return {k for k in keys if k}
+
+    normalized_keys = _pdf_match_keys(citation_id)
+    digit_keys = {re.sub(r'[^\d]', '', k) for k in normalized_keys}
+    digit_keys = {d for d in digit_keys if len(d) >= 6}
 
     for pdf_file in input_dir.glob("*.pdf"):
         stem = pdf_file.stem
-        stem_hw = stem.translate(fw2hw)
-        stem_normalized = re.sub(r'[\s\-/]', '', stem_hw)
-        if stem_normalized == normalized:
+        stem_keys = _pdf_match_keys(stem)
+        if normalized_keys & stem_keys:
             return pdf_file
-        if len(digits) >= 6 and digits in stem_normalized:
+        stem_normalized = next(iter(stem_keys), "")
+        if any(digits in stem_normalized for digits in digit_keys):
             return pdf_file
 
     return None

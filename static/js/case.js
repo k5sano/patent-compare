@@ -29,6 +29,7 @@ const _MODEL_OPTIONS = [
   { group: 'GLM', value: 'glm-fast', label: 'GLM-4.7 (高速・低コスト)', scopes: ['text'] },
   { group: 'GLM', value: 'glm-haiku', label: 'GLM-4.5-Air (最軽量)', scopes: ['text'] },
   { group: 'Local AI (Ollama)', value: 'local-ai', label: 'Qwen2.5 7B (軽作業)', scopes: ['text'] },
+  { group: 'Local AI (Ollama)', value: 'qwen2.5-vl', label: 'Qwen2.5-VL 7B (ローカル表OCR)', scopes: ['vision'] },
   { group: 'Local AI (Ollama)', value: 'local-qwen14b', label: 'Qwen2.5 14B (軽作業・高め)', scopes: ['text'] },
   { group: 'Local AI (Ollama)', value: 'local-coder14b', label: 'Qwen2.5 Coder 14B (コード下書き)', scopes: ['text'] },
   { group: 'Local AI (Ollama)', value: 'local-gemma4-e2b', label: 'Gemma4 e2b (軽作業・検証用)', scopes: ['text'] },
@@ -41,6 +42,7 @@ function _modelStorageKey(key) { return `pc-model:${key}`; }
 function _modelProvider(value) {
   if (!value) return 'claude';
   if (value === 'local' || value === 'local-ai' || value.startsWith('local-') || value.startsWith('ollama-')) return 'local';
+  if (value.startsWith('qwen2.5-vl') || value.startsWith('qwen2.5vl') || value.startsWith('qwen-vl')) return 'local';
   if (value.startsWith('codex-') || value.startsWith('openai-')) return 'codex';
   if (value.startsWith('glm-')) return 'glm';
   return 'claude';
@@ -2126,8 +2128,9 @@ function renderSearchReport(report) {
     const gpUrl = c.google_patents_url
       ? ` <a href="${_escapeHtml(c.google_patents_url)}" target="_blank" style="color:#60a5fa; font-size:0.75rem;">Google Patents</a>`
       : '';
+    const checkedAttr = c.fetch_status === 'ok' ? '' : ' checked';
     const checkbox = id
-      ? `<input type="checkbox" class="sr-cit-check" data-num="${c.num}" ${c.fetch_status==='ok'?'disabled':''}>`
+      ? `<input type="checkbox" class="sr-cit-check" data-num="${c.num}" data-fetch-status="${_escapeHtml(c.fetch_status || '')}"${checkedAttr}>`
       : `<span style="color:var(--text2);">—</span>`;
     return `<tr>
       <td>${checkbox}</td>
@@ -2981,7 +2984,6 @@ async function extractHonganTables() {
   const btn = document.getElementById('btn-extract-hongan-tables');
   const progress = document.getElementById('hongan-tables-progress');
   const result = document.getElementById('hongan-tables-result');
-  if (!confirm('本願PDFから図表を Vision で抽出します。\n1 表あたり約 25 秒、サブスク消費 $0.05〜0.12/表 の目安です。続行しますか？')) return;
   btn.disabled = true;
   progress.textContent = '';
   progress.style.display = 'block';
@@ -5586,7 +5588,8 @@ function renderCompSummaryTable() {
           const loc = _compLocHtml(comp, citId);
           const editedBadge = comp._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(comp._edited_at) + '">✏</span>' : '';
           const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'comparison\',\'' + _escapeAttr(segId) + '\')">✏</button>';
-          body += '<td class="comp-td-reason">' + editedBadge + reason + loc + editBtn + '</td>';
+          const chatBtn = '<button class="comp-chat-btn" title="このセルについて壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + _escapeAttr(segId) + '\',\'comparison\')">💬</button>';
+          body += '<td class="comp-td-reason">' + editedBadge + reason + loc + editBtn + chatBtn + '</td>';
         } else {
           body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
         }
@@ -5624,7 +5627,8 @@ function renderCompSummaryTable() {
             const loc = _compLocHtml(sub, citId);
             const editedBadge = sub._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(sub._edited_at) + '">✏</span>' : '';
             const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'sub_claim\',\'' + claim.claim_number + '\')">✏</button>';
-            body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + editedBadge + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span> ' + editBtn + '</td>';
+            const chatBtn = '<button class="comp-chat-btn" title="この従属請求項について壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + claim.claim_number + '\',\'sub_claim\')">💬</button>';
+            body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + editedBadge + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span> ' + editBtn + chatBtn + '</td>';
           } else {
             body += '<td style="color:var(--text2);">—</td>';
           }
@@ -5770,6 +5774,351 @@ async function saveCompEdit() {
   } finally {
     btn.disabled = false;
     btn.textContent = '保存';
+  }
+}
+
+// ----------------------------------------------------------------
+// 対比セル単位の壁打ちチャット
+// ----------------------------------------------------------------
+window._compChatCtx = null;  // {citId, segId, targetKind, context}
+window._compChatWindowWired = false;
+
+function _getVisibleCompCitationIds() {
+  const boxes = Array.from(document.querySelectorAll('#comp-summary-colbar .comp-col-toggle'));
+  if (!boxes.length) return null;
+  return boxes
+    .filter(cb => cb.checked)
+    .map(cb => cb.getAttribute('data-cit-id'))
+    .filter(Boolean);
+}
+
+function _resetCompChatWindowPosition() {
+  const box = document.querySelector('#comp-chat-modal .comp-chat-box');
+  if (!box || box.classList.contains('comp-chat-fullscreen')) return;
+  if (box.classList.contains('comp-chat-floating')) return;
+  box.style.left = '';
+  box.style.top = '';
+}
+
+function _ensureCompChatWindowBehavior() {
+  if (window._compChatWindowWired) return;
+  window._compChatWindowWired = true;
+  const modal = document.getElementById('comp-chat-modal');
+  const box = modal && modal.querySelector('.comp-chat-box');
+  const head = modal && modal.querySelector('.comp-chat-head');
+  if (!modal || !box || !head) return;
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    if (box.classList.contains('comp-chat-fullscreen')) return;
+    const rect = box.getBoundingClientRect();
+    box.classList.add('comp-chat-floating');
+    box.style.width = rect.width + 'px';
+    box.style.height = rect.height + 'px';
+    box.style.left = rect.left + 'px';
+    box.style.top = rect.top + 'px';
+    dragging = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    head.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  head.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = box.getBoundingClientRect();
+    const maxLeft = Math.max(0, window.innerWidth - Math.min(rect.width, window.innerWidth));
+    const maxTop = Math.max(0, window.innerHeight - 48);
+    const left = Math.min(maxLeft, Math.max(0, startLeft + e.clientX - startX));
+    const top = Math.min(maxTop, Math.max(0, startTop + e.clientY - startY));
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+  });
+
+  const stop = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { head.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  head.addEventListener('pointerup', stop);
+  head.addEventListener('pointercancel', stop);
+}
+
+function toggleCompChatFullscreen() {
+  const box = document.querySelector('#comp-chat-modal .comp-chat-box');
+  if (!box) return;
+  const full = !box.classList.contains('comp-chat-fullscreen');
+  if (full) {
+    const rect = box.getBoundingClientRect();
+    box.dataset.restoreLeft = box.style.left || (rect.left + 'px');
+    box.dataset.restoreTop = box.style.top || (rect.top + 'px');
+    box.dataset.restoreWidth = box.style.width || (rect.width + 'px');
+    box.dataset.restoreHeight = box.style.height || (rect.height + 'px');
+    box.classList.add('comp-chat-fullscreen');
+  } else {
+    box.classList.remove('comp-chat-fullscreen');
+    box.classList.add('comp-chat-floating');
+    box.style.left = box.dataset.restoreLeft || '2vw';
+    box.style.top = box.dataset.restoreTop || '2vh';
+    box.style.width = box.dataset.restoreWidth || 'min(1180px, 96vw)';
+    box.style.height = box.dataset.restoreHeight || 'min(820px, 92vh)';
+  }
+}
+
+function _compChatSetStatus(text, type) {
+  const el = document.getElementById('comp-chat-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = type === 'error' ? '#fca5a5' : type === 'success' ? '#86efac' : 'var(--text2)';
+}
+
+function _compChatTarget(citId, segId) {
+  const resp = _compSummaryData && _compSummaryData.responses && _compSummaryData.responses[citId];
+  return resp && (resp.comparisons || []).find(c => String(c.requirement_id) === String(segId));
+}
+
+function _renderCompChatContext(ctx) {
+  const root = document.getElementById('comp-chat-context-body');
+  if (!root) return;
+  if (!ctx) { root.innerHTML = '<p class="muted">セルを選択してください。</p>'; return; }
+  const seg = ctx.segment || {};
+  const cur = ctx.current_judgment || {};
+  const paras = ctx.relevant_paragraphs || [];
+  const tables = ctx.relevant_tables || [];
+  const hints = ctx.chemistry_hints || [];
+  let html = '';
+  html += '<h4>構成要件</h4><pre>' + _escapeHtml((seg.id || '') + ' ' + (seg.text || '')) + '</pre>';
+  html += '<h4>現在の判定</h4><pre>' +
+    _escapeHtml((cur.category || '—') + '\n' + (cur.reason || '') + '\n' + (cur.cited_location || '') + '\n' + (cur.cited_text || '')) +
+    '</pre>';
+  html += '<h4>関連段落</h4>';
+  if (paras.length) {
+    html += paras.map(p => '<pre>【' + _escapeHtml(p.para_no || '') + '】 ' + _escapeHtml(p.text || '') + '</pre>').join('');
+  } else {
+    html += '<pre>ユーザー文や現在判定から段落番号を検出できませんでした。質問文に「131段落」「【0131】」のように入れると周辺段落を拾います。</pre>';
+  }
+  if (tables.length) {
+    html += '<h4>関連表</h4>';
+    html += tables.map(t => '<pre>' +
+      _escapeHtml((t.label || ('表' + (t.index || ''))) + (t.page ? ` / P${t.page}` : '') + '\n' + (t.text || '')) +
+      '</pre>').join('');
+  }
+  if (hints.length) {
+    html += '<h4>化学メモ</h4>' + hints.map(h => '<pre>' + _escapeHtml(h.term + ': ' + h.hint) + '</pre>').join('');
+  }
+  root.innerHTML = html;
+}
+
+function _renderCompChatMessages(messages) {
+  const root = document.getElementById('comp-chat-messages');
+  if (!root) return;
+  const rows = messages || [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="comp-chat-msg"><div class="comp-chat-msg-body" style="color:var(--text2);">このセルの壁打ちはまだありません。</div></div>';
+    return;
+  }
+  root.innerHTML = rows.map(m => {
+    const role = m.role === 'user' ? 'user' : 'assistant';
+    const label = role === 'user' ? 'あなた' : 'AI';
+    return '<div class="comp-chat-msg comp-chat-msg-' + role + '">' +
+      '<div class="comp-chat-msg-role">' + label + ' ' + _escapeHtml(m.created_at || '') + '</div>' +
+      '<div class="comp-chat-msg-body">' + _escapeHtml(m.content || '') + '</div>' +
+      '</div>';
+  }).join('');
+  root.scrollTop = root.scrollHeight;
+}
+
+function _latestCompChatSuggestion(messages) {
+  const rows = messages || [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const m = rows[i] || {};
+    if (m.role === 'assistant' && m.suggested_override) return m.suggested_override;
+  }
+  return null;
+}
+
+function _prefillCompChatOverride(ctx) {
+  const cur = (ctx && ctx.current_judgment) || {};
+  document.getElementById('comp-chat-judgment').value = cur.category || '';
+  document.getElementById('comp-chat-reason').value = cur.reason || '';
+  document.getElementById('comp-chat-loc').value = cur.cited_location || '';
+  document.getElementById('comp-chat-text').value = cur.cited_text || '';
+  document.getElementById('comp-chat-note').value = '';
+}
+
+function _fillCompChatSuggestion(suggestion) {
+  if (!suggestion || !suggestion.fields) return false;
+  const f = suggestion.fields || {};
+  if (Object.prototype.hasOwnProperty.call(f, 'judgment')) {
+    document.getElementById('comp-chat-judgment').value = f.judgment || '';
+  }
+  if (f.judgment_reason) document.getElementById('comp-chat-reason').value = f.judgment_reason;
+  if (f.cited_location) document.getElementById('comp-chat-loc').value = f.cited_location;
+  if (f.cited_text) document.getElementById('comp-chat-text').value = f.cited_text;
+  document.getElementById('comp-chat-note').value = suggestion.user_note || '壁打ち上書き文案';
+  return true;
+}
+
+async function openCompChat(citId, segId, targetKind) {
+  const modal = document.getElementById('comp-chat-modal');
+  if (!modal) return;
+  _ensureCompChatWindowBehavior();
+  _resetCompChatWindowPosition();
+  targetKind = targetKind || 'comparison';
+  window._compChatCtx = {citId, segId, targetKind, context: null};
+  const targetLabel = targetKind === 'sub_claim' ? `請求項${segId}` : segId;
+  document.getElementById('comp-chat-title').textContent = `${citId} / ${targetLabel}`;
+  document.getElementById('comp-chat-input').value = '';
+  _compChatSetStatus('読込中...');
+  modal.style.display = 'flex';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/comparison/${encodeURIComponent(citId)}/chat?segment_id=${encodeURIComponent(segId)}&target_kind=${encodeURIComponent(targetKind)}`);
+    const d = await resp.json();
+    if (!resp.ok || d.error) { _compChatSetStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    window._compChatCtx.context = d.context || null;
+    _renderCompChatContext(d.context);
+    _renderCompChatMessages(d.messages || []);
+    _prefillCompChatOverride(d.context);
+    if (_fillCompChatSuggestion(_latestCompChatSuggestion(d.messages || []))) {
+      _compChatSetStatus('前回の上書き文案を左欄に復元しました', 'success');
+    } else {
+      _compChatSetStatus('');
+    }
+  } catch (e) {
+    _compChatSetStatus(e.message, 'error');
+  }
+}
+
+function closeCompChat() {
+  const modal = document.getElementById('comp-chat-modal');
+  if (modal) modal.style.display = 'none';
+  window._compChatCtx = null;
+}
+
+async function sendCompChatMessage() {
+  const ctx = window._compChatCtx;
+  if (!ctx) return;
+  const ta = document.getElementById('comp-chat-input');
+  const message = (ta.value || '').trim();
+  if (!message) return;
+  const model = (typeof getPickerModel === 'function') ? getPickerModel('comparison-chat', 'sonnet') : 'sonnet';
+  _compChatSetStatus(`LLM(${model}) 応答待ち...`);
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/comparison/${encodeURIComponent(ctx.citId)}/chat`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({segment_id: ctx.segId, target_kind: ctx.targetKind || 'comparison', message, model}),
+    });
+    const d = await resp.json();
+    _renderCompChatMessages(d.messages || []);
+    if (d.context) {
+      ctx.context = d.context;
+      _renderCompChatContext(d.context);
+    }
+    if (!resp.ok || d.error) { _compChatSetStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    ta.value = '';
+    const sug = d.suggested_override || null;
+    if (_fillCompChatSuggestion(sug)) {
+      if (sug.apply && sug.judgment_changed) {
+        _compChatSetStatus(`上書き文案を自動保存中 (${sug.from_judgment || '—'}→${sug.to_judgment || '—'})...`);
+        await applyCompChatOverride({auto: true});
+      } else {
+        _compChatSetStatus('上書き文案を左欄に反映しました', 'success');
+      }
+    } else {
+      _compChatSetStatus('応答受信', 'success');
+    }
+  } catch (e) {
+    _compChatSetStatus(e.message, 'error');
+  }
+}
+
+async function applyCompChatOverride(options) {
+  options = options || {};
+  const ctx = window._compChatCtx;
+  if (!ctx) return;
+  const fields = {
+    judgment: document.getElementById('comp-chat-judgment').value || '',
+    judgment_reason: document.getElementById('comp-chat-reason').value || '',
+    cited_location: document.getElementById('comp-chat-loc').value || '',
+    cited_text: document.getElementById('comp-chat-text').value || '',
+  };
+  const userNote = document.getElementById('comp-chat-note').value || '';
+  _compChatSetStatus('上書き保存中...');
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/comparison/${encodeURIComponent(ctx.citId)}/judgment/override`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        segment_id: ctx.segId,
+        target_kind: ctx.targetKind || 'comparison',
+        fields,
+        user_note: userNote || (options.auto ? '壁打ち上書き文案を自動反映' : ''),
+      }),
+    });
+    const d = await resp.json();
+    if (!resp.ok || d.error) { _compChatSetStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    if (_compSummaryData && _compSummaryData.responses && d.doc) {
+      _compSummaryData.responses[ctx.citId] = d.doc;
+      renderCompSummaryTable();
+    }
+    _compChatSetStatus(options.auto ? '壁打ち結論に従って自動更新しました' : '上書き保存しました', 'success');
+  } catch (e) {
+    _compChatSetStatus(e.message, 'error');
+  }
+}
+
+async function openUnmetCellsPanel() {
+  const modal = document.getElementById('comp-chat-modal');
+  if (!modal) return;
+  _ensureCompChatWindowBehavior();
+  _resetCompChatWindowPosition();
+  window._compChatCtx = null;
+  document.getElementById('comp-chat-title').textContent = '未充足セル一覧';
+  document.getElementById('comp-chat-messages').innerHTML = '';
+  document.getElementById('comp-chat-input').value = '';
+  document.getElementById('comp-chat-judgment').value = '';
+  document.getElementById('comp-chat-reason').value = '';
+  document.getElementById('comp-chat-loc').value = '';
+  document.getElementById('comp-chat-text').value = '';
+  document.getElementById('comp-chat-note').value = '';
+  modal.style.display = 'flex';
+  _compChatSetStatus('読込中...');
+  try {
+    const selected = _getVisibleCompCitationIds();
+    if (selected && selected.length === 0) {
+      document.getElementById('comp-chat-context-body').innerHTML = '<pre>表示中の文献がありません。Step 6の「表示する列」で文献を選択してください。</pre>';
+      _compChatSetStatus('0 件');
+      return;
+    }
+    const qs = selected ? ('?' + selected.map(id => 'citation_id=' + encodeURIComponent(id)).join('&')) : '';
+    const resp = await fetch(`/case/${CASE_ID}/comparison/unmet-cells${qs}`);
+    const d = await resp.json();
+    if (!resp.ok || d.error) { _compChatSetStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
+    const cells = d.cells || [];
+    if (!cells.length) {
+      document.getElementById('comp-chat-context-body').innerHTML = '<pre>未充足・部分充足セルはありません。</pre>';
+    } else {
+      document.getElementById('comp-chat-context-body').innerHTML =
+        '<h4>未充足セル' + (selected ? '（表示中の文献のみ）' : '') + '</h4>' + cells.map(c =>
+          '<button type="button" class="comp-chat-unmet-row" onclick="openCompChat(\'' +
+          _escapeAttr(c.citation_id) + '\',\'' + _escapeAttr(c.segment_id) + '\',\'' + _escapeAttr(c.target_kind || 'comparison') + '\')">' +
+          '<strong>' + _escapeHtml(c.citation_id) + ' / ' + _escapeHtml(c.segment_id) + ' / ' + _escapeHtml(c.judgment || '—') + '</strong><br>' +
+          '<span style="color:var(--text2);">' + _escapeHtml(c.segment_text || '') + '</span><br>' +
+          _escapeHtml(c.reason || '') +
+          '</button>'
+        ).join('');
+    }
+    _compChatSetStatus(`${cells.length} 件`);
+  } catch (e) {
+    _compChatSetStatus(e.message, 'error');
   }
 }
 
@@ -7441,7 +7790,7 @@ async function srJppScrape() {
   const formula = (document.getElementById('sr-formula').value || '').trim();
   if (!formula) { alert('検索式を入力してください (ラン保存に必要)'); return; }
   const level = document.getElementById('sr-level').value;
-  const maxResults = parseInt(document.getElementById('sr-max').value || '50', 10);
+  const maxResults = parseInt(document.getElementById('sr-max').value || '100', 10);
   const btn = document.getElementById('btn-jpp-scrape');
   if (btn) btn.disabled = true;
   _srJppSetStatus('結果を読み取り中…', 'info');
@@ -7720,7 +8069,7 @@ async function searchRunExecute() {
   if (!formula) { alert('検索式を入力してください'); return; }
   const level = document.getElementById('sr-level').value;
   let source = document.getElementById('sr-source').value;
-  const maxResults = parseInt(document.getElementById('sr-max').value || '50', 10);
+  const maxResults = parseInt(document.getElementById('sr-max').value || '100', 10);
 
   // J-PlatPat 自動遷移トグルが OFF の場合は式の保存のみ
   const autoToggle = document.getElementById('sr-enable-jplatpat-auto');
@@ -8609,7 +8958,6 @@ function srToggleTableSel(pid, checked) {
 }
 
 async function srExtractOneTable(pid, btn) {
-  if (!confirm(`引例 ${pid} の図表を Vision で抽出します。\n所要 1〜2 分、サブスク消費 約 $0.05〜$0.3。続行しますか？`)) return;
   const orig = btn.textContent;
   btn.disabled = true;
   btn.textContent = '⏳';
@@ -8759,12 +9107,6 @@ async function srExtractTablesBulk() {
     return true;
   });
 
-  let confirmMsg = `選択した ${sel.length} 件の引例の図表を Vision で抽出します。\n1 件 1〜2 分、合計サブスク消費 ${(sel.length * 0.3).toFixed(1)} 程度の見込み。`;
-  if (needsFetch.length > 0) {
-    confirmMsg += `\n\nうち ${needsFetch.length} 件は PDF/画像 未取得のため、先に全文取得を試みます。`;
-  }
-  confirmMsg += `\n続行しますか？`;
-  if (!confirm(confirmMsg)) return;
   const lbl = document.getElementById('sr-pkm-bulk-status');
 
   // 事前取得フェーズ
@@ -8787,14 +9129,6 @@ async function srExtractTablesBulk() {
       return !(ft && Array.isArray(ft.images) && ft.images.length > 0);
     });
     if (stillEmpty.length > 0) {
-      const skip = confirm(
-        `次の ${stillEmpty.length} 件は全文取得しても抽出可能な画像/PDFが見つかりませんでした。\nこれらをスキップして残り ${sel.length - stillEmpty.length} 件で抽出を続行しますか？\n\n` +
-        stillEmpty.slice(0, 10).join('\n') + (stillEmpty.length > 10 ? '\n...' : ''),
-      );
-      if (!skip) {
-        if (lbl) lbl.textContent = '';
-        return;
-      }
       // 抽出可能なものだけに絞る
       const skipSet = new Set(stillEmpty);
       for (let k = sel.length - 1; k >= 0; k--) {

@@ -12,6 +12,7 @@ import pytest
 
 from modules.jplatpat_pdf_downloader import (
     download_jplatpat_pdf,
+    normalize_jplatpat_patent_number,
     normalize_jp_patent_number,
     normalize_jp_registration_number,
 )
@@ -70,6 +71,52 @@ class TestNormalizeRegistrationNumber:
         assert a == b
 
 
+class TestNormalizeForeignPublicationNumber:
+    """J-PlatPat 固定URLで扱う外国公報番号"""
+
+    @pytest.mark.parametrize("raw", [
+        "EP4663406A1",
+        "ep4663406a1",
+        "EP-A-004663406",
+        "EP 4663406 A1",
+    ])
+    def test_ep_publication_variants(self, raw):
+        target = normalize_jplatpat_patent_number(raw)
+        assert target.number == "EP-A-004663406"
+        assert target.display_number == "EP-A-004663406"
+        assert target.kind == "foreign_publication"
+        assert target.doc_id == "EP4663406A"
+        assert target.fixed_url.endswith("/PU/EP-A-004663406/50/ja")
+
+    @pytest.mark.parametrize("raw", [
+        "US2022/0111622A1",
+        "us2022/0111622a1",
+        "US-A-2022/0111622",
+        "US 2022 0111622 A1",
+    ])
+    def test_us_publication_variants(self, raw):
+        target = normalize_jplatpat_patent_number(raw)
+        assert target.number == "US-A-2022-0111622"
+        assert target.display_number == "US-A-2022/0111622"
+        assert target.kind == "foreign_publication"
+        assert target.doc_id == "US20220111622A"
+        assert target.fixed_url.endswith("/PU/US-A-2022-0111622/50/ja")
+
+    @pytest.mark.parametrize("raw", [
+        "WO2020/255643A1",
+        "wo2020/255643a1",
+        "WO-A-2020/255643",
+        "WO 2020 255643 A1",
+    ])
+    def test_wo_publication_variants(self, raw):
+        target = normalize_jplatpat_patent_number(raw)
+        assert target.number == "WO-A-2020-255643"
+        assert target.display_number == "WO-A-2020/255643"
+        assert target.kind == "foreign_publication"
+        assert target.doc_id == "WO2020255643A"
+        assert target.fixed_url.endswith("/PU/WO-A-2020-255643/50/ja")
+
+
 class TestNormalizeRejects:
     @pytest.mark.parametrize("raw", [
         "",
@@ -82,9 +129,7 @@ class TestNormalizeRejects:
 
     @pytest.mark.parametrize("raw", [
         "abc",
-        "WO2024/123456",  # WO/再表は今回未対応
         "再表2012-029514",
-        "US7250676",      # US は対象外
     ])
     def test_unknown_format_raises(self, raw):
         with pytest.raises(ValueError):

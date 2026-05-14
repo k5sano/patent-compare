@@ -10,6 +10,7 @@ import pytest
 from modules.patent_downloader import (
     build_google_patents_url,
     build_google_patents_url_candidates,
+    build_jplatpat_url,
 )
 
 
@@ -101,6 +102,20 @@ class TestAsciiCodes:
     def test_ep(self):
         cands = build_google_patents_url_candidates("EP3719056A1")
         assert cands[0] == f"{GP}/EP3719056A1/en"
+
+
+class TestJplatpatFixedUrl:
+    def test_ep_publication_is_zero_padded_to_jplatpat_form(self):
+        url = build_jplatpat_url("EP4663406A1")
+        assert url.endswith("/PU/EP-A-004663406/50/ja")
+
+    def test_us_publication_uses_path_safe_jplatpat_form(self):
+        url = build_jplatpat_url("US2022/0111622A1")
+        assert url.endswith("/PU/US-A-2022-0111622/50/ja")
+
+    def test_wo_publication_uses_path_safe_jplatpat_form(self):
+        url = build_jplatpat_url("WO2020/255643A1")
+        assert url.endswith("/PU/WO-A-2020-255643/50/ja")
 
 
 class TestEdgeCases:

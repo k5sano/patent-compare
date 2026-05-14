@@ -182,6 +182,49 @@ def test_export_excel_paste_sheet_uses_compact_notation(copy_case_fixture):
     assert ws["C3"].value == "x10/備考メモ"
 
 
+def test_export_excel_paste_sheet_normalizes_same_kind_refs(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    resp_path = case_dir / "responses" / "JP2030000002A.json"
+    response = json.loads(resp_path.read_text(encoding="utf-8"))
+    response["comparisons"][0]["judgment"] = "○"
+    response["comparisons"][0]["cited_location"] = "請求項1;CL2;表1;T2;【0001】/コメント"
+    resp_path.write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    result, code = export_excel("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"])["ペースト用"]
+    assert ws["C3"].value == "CL1,2;T1,2;1/コメント"
+
+
+def test_export_full_report_hongan_analysis_strips_html(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    analysis = {
+        "template_id": "hongan_v0.1",
+        "version": "0.1",
+        "sections": [{
+            "id": 1,
+            "title": "発明の本質",
+            "items": [{
+                "id": "1.1",
+                "label": "発明の一言要約",
+                "value": "<ul><li><<HL>>成分A<</HL>></li><li>請求項1</li></ul>",
+            }],
+        }],
+    }
+    (case_dir / "analysis").mkdir(exist_ok=True)
+    (case_dir / "analysis" / "hongan_analysis.json").write_text(
+        json.dumps(analysis, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result, code = export_full_report("smoke")
+
+    assert code == 200
+    ws = load_workbook(result["path"])["本願解析結果"]
+    assert ws["C3"].value == "・成分A\n・請求項1"
+
+
 def test_export_full_report_highlights_inventive_step_terms(copy_case_fixture):
     case_dir = copy_case_fixture("smoke")
     inv = {

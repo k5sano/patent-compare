@@ -144,5 +144,41 @@ def test_requirement_first_prompt_uses_page_lines_for_fake_wo_paragraphs():
         segments, citations, keywords, field="cosmetics", hongan=None,
     )
 
-    assert "P7G18-22(実施例)" in prompt
+    assert "P7G18-22 (実施例)" in prompt
     assert "段落0001(実施例)" not in prompt
+
+
+def test_requirement_first_prompt_uses_evidence_chunks_once_for_large_claims():
+    segments = [{
+        "claim_number": 1,
+        "is_independent": True,
+        "dependencies": [],
+        "segments": [
+            {"id": "1A", "text": "成分Aを含むこと"},
+            {"id": "1B", "text": "成分Bを含むこと"},
+        ],
+    }]
+    keywords = [{
+        "group_id": 1,
+        "label": "成分A",
+        "segment_ids": ["1A"],
+        "keywords": [{"term": "成分A"}],
+    }]
+    long_claim = "成分Aを含む請求項の長い説明。" * 200
+    citations = [{
+        "patent_number": "WOIMAGE",
+        "label": "WOIMAGE",
+        "claims": [{"number": 1, "text": long_claim}],
+        "paragraphs": [{"id": "0001", "section": "実施例", "text": "成分Aを含む実施例。"}],
+        "tables": [],
+    }]
+
+    prompt = generate_prompt_requirement_first(
+        segments, citations, keywords, field="cosmetics", hongan=None,
+    )
+
+    assert "## 引例エビデンスチャンク" in prompt
+    assert "[C1-CL" in prompt
+    # キーワードヒットしない構成要件ごとに長い請求項全文を再掲しない。
+    assert prompt.count("参考請求項抜粋") == 0
+    assert len(prompt) < 50000

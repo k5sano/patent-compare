@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import fitz
+import requests
 
 from services import table_extractor
 from services.table_extractor import ExtractedTable
@@ -97,3 +98,78 @@ def test_extract_tables_from_pdf_crops_caption_page(monkeypatch, tmp_path):
     assert summary["n_table"] == 1
     assert summary["tables"][0]["source"] == "crop"
     assert summary["missing_table_references"] == []
+
+
+def test_find_ocr_table_pages_prefers_hash_table_markers(monkeypatch):
+    def fake_extract_text_from_pdf(_path, **_kwargs):
+        return [
+            {"page": 1, "text": "上記結果を 表 1 、 表 2 に示す。\n[0108] [#1] 実施例表"},
+            {"page": 2, "text": "WO page\n[#2] 比較例表\n表 1 及び 表 2 の注記"},
+        ]
+
+    import modules.pdf_extractor as pdf_extractor
+    monkeypatch.setattr(pdf_extractor, "extract_text_from_pdf", fake_extract_text_from_pdf)
+
+    pages = table_extractor.find_ocr_table_pages("dummy.pdf")
+
+    assert [(p["page_num"], p["caption_label"]) for p in pages] == [
+        (1, "表1"),
+        (2, "表2"),
+    ]
+
+
+def test_table_llm_workers_are_model_aware(monkeypatch):
+    monkeypatch.delenv("PATENT_COMPARE_QWEN_VL_WORKERS", raising=False)
+    monkeypatch.delenv("PATENT_COMPARE_TABLE_LLM_WORKERS", raising=False)
+
+    assert table_extractor._table_llm_max_workers(5, "qwen2.5-vl") == 1
+    assert table_extractor._table_llm_max_workers(5, "qwen2.5vl:7b") == 1
+    assert table_extractor._table_llm_max_workers(5, "sonnet") == 4
+
+    monkeypatch.setenv("PATENT_COMPARE_QWEN_VL_WORKERS", "2")
+    monkeypatch.setenv("PATENT_COMPARE_TABLE_LLM_WORKERS", "6")
+    assert table_extractor._table_llm_max_workers(5, "qwen2.5-vl") == 2
+    assert table_extractor._table_llm_max_workers(5, "codex-opus") == 5
+
+
+def test_extract_tables_from_image_records_retries_ssl_without_verify(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeResp:
+        content = b"fake-png"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append(kwargs.get("verify"))
+        if len(calls) == 1:
+            raise requests.exceptions.SSLError("bad local CA")
+        return FakeResp()
+
+    def fake_llm(image_path, *, model, caption_hint=None, effort="low", **kwargs):
+        assert Path(image_path).exists()
+        assert Path(image_path).read_bytes() == b"fake-png"
+        assert caption_hint == "表１"
+        return ExtractedTable(
+            is_table=True,
+            image_path=str(image_path),
+            title="表１",
+            headers=["項目", "値"],
+            rows=[{"cells": ["Sa", "1.0"]}],
+            model=model,
+        )
+
+    monkeypatch.setattr(table_extractor.requests, "get", fake_get)
+    monkeypatch.setattr(table_extractor, "extract_table_via_claude", fake_llm)
+
+    summary = table_extractor.extract_tables_from_image_records(
+        [{"src": "https://patentimages.storage.googleapis.com/x/table.png", "label": "表１"}],
+        tmp_path / "out",
+        "特開2024-144627",
+        model="sonnet",
+    )
+
+    assert calls[-1] is False
+    assert summary["n_error"] == 0
+    assert summary["n_table"] == 1

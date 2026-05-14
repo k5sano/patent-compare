@@ -77,6 +77,62 @@ def edit_comparison_cell(case_id, citation_id):
     ))
 
 
+@bp.route("/case/<case_id>/comparison/unmet-cells", methods=["GET"])
+def comparison_unmet_cells(case_id):
+    from services.comparison_service import list_unmet_cells
+    citation_ids = request.args.getlist("citation_id")
+    if not citation_ids:
+        raw = (request.args.get("citation_ids") or "").strip()
+        if raw:
+            citation_ids = [x.strip() for x in raw.split(",") if x.strip()]
+    return _svc_response(list_unmet_cells(case_id, citation_ids if citation_ids else None))
+
+
+@bp.route("/case/<case_id>/comparison/<citation_id>/cell-context", methods=["GET"])
+def comparison_cell_context(case_id, citation_id):
+    from services.comparison_service import build_cell_context
+    segment_id = (request.args.get("segment_id") or "").strip()
+    target_kind = (request.args.get("target_kind") or "comparison").strip()
+    if not segment_id:
+        return jsonify({"error": "segment_id は必須です"}), 400
+    return jsonify(build_cell_context(case_id, citation_id, segment_id, target_kind=target_kind))
+
+
+@bp.route("/case/<case_id>/comparison/<citation_id>/chat", methods=["GET", "POST"])
+def comparison_cell_chat(case_id, citation_id):
+    from services.comparison_service import chat_cell, get_cell_chat_history
+    if request.method == "GET":
+        segment_id = (request.args.get("segment_id") or "").strip()
+        target_kind = (request.args.get("target_kind") or "comparison").strip()
+        if not segment_id:
+            return jsonify({"error": "segment_id は必須です"}), 400
+        return _svc_response(get_cell_chat_history(case_id, citation_id, segment_id, target_kind=target_kind))
+    body = request.get_json(silent=True) or {}
+    return _svc_response(chat_cell(
+        case_id,
+        citation_id,
+        body.get("segment_id", ""),
+        body.get("message", ""),
+        model=body.get("model"),
+        target_kind=body.get("target_kind", "comparison"),
+    ))
+
+
+@bp.route("/case/<case_id>/comparison/<citation_id>/judgment/override", methods=["POST"])
+def comparison_judgment_override(case_id, citation_id):
+    from services.comparison_service import apply_judgment_override
+    body = request.get_json(silent=True) or {}
+    return _svc_response(apply_judgment_override(
+        case_id,
+        citation_id,
+        body.get("segment_id", ""),
+        body.get("fields") or {},
+        user_note=body.get("user_note", ""),
+        chat_ref=body.get("chat_ref"),
+        target_kind=body.get("target_kind", "comparison"),
+    ))
+
+
 @bp.route("/case/<case_id>/citation/<citation_id>/paragraph/<para_id>", methods=["GET"])
 def get_citation_paragraph(case_id, citation_id, para_id):
     """対比結果で参照された段落 (例: 【0053】) の本文を返す。"""
@@ -196,7 +252,9 @@ def inventive_step_response(case_id):
 def inventive_step_execute(case_id):
     from services.comparison_service import inventive_step_execute
     body = request.get_json(silent=True) or {}
-    return _svc_response(inventive_step_execute(case_id, model=body.get("model")))
+    return _svc_response(inventive_step_execute(
+        case_id, model=body.get("model"), effort=body.get("effort")
+    ))
 
 
 # ===== API =====
