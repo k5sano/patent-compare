@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from services.case_service import get_case_dir, load_case_meta
@@ -21,6 +23,68 @@ from services.comparison.response import _normalize_cited_locations_inplace
 from services.comparison.expert import _compare_execute_expert_squad
 
 logger = logging.getLogger(__name__)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _comparison_progress_path(case_id: str) -> Path:
+    return get_case_dir(case_id) / "comparison_progress.json"
+
+
+def _write_progress_file(path: Path, payload: dict) -> None:
+    """対比進捗を原子的に保存する。進捗表示用なので失敗しても本処理は止めない。"""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        logger.debug("comparison progress write failed: %s", path, exc_info=True)
+
+
+def get_comparison_progress(case_id: str):
+    """直近の Step 5 対比進捗を返す。"""
+    case_dir = get_case_dir(case_id)
+    path = _comparison_progress_path(case_id)
+    if not path.exists():
+        return {"status": "none", "total": 0, "completed": 0, "saved": 0, "failed": 0}, 200
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"status": "error", "error": f"進捗ファイル読込エラー: {e}"}, 500
+    responses_dir = case_dir / "responses"
+
+    def _safe_stem(value) -> str:
+        return "".join(ch for ch in str(value or "") if ch not in '/\\:*?"<>|').strip()
+
+    def _has_response_for_item(item: dict) -> bool:
+        candidates = []
+        for key in ("citation_id", "doc_id"):
+            value = item.get(key)
+            if value:
+                candidates.append(str(value))
+                safe = _safe_stem(value)
+                if safe and safe not in candidates:
+                    candidates.append(safe)
+        for value in item.get("saved_docs") or []:
+            if value:
+                candidates.append(str(value))
+                safe = _safe_stem(value)
+                if safe and safe not in candidates:
+                    candidates.append(safe)
+        for stem in candidates:
+            if stem and (responses_dir / f"{stem}.json").exists():
+                return True
+        return False
+
+    for item in (data.get("items") or {}).values():
+        if isinstance(item, dict):
+            item["has_response"] = _has_response_for_item(item)
+    return data, 200
+
+
 def _compare_execute_per_citation_parallel(
     *, case_id, citations, segs, keywords, hongan, field,
     model, known_cit_ids, max_workers=2, effort=None, mode="requirement_first",
@@ -79,11 +143,76 @@ def _compare_execute_per_citation_parallel(
         label = cit.get("patent_number") or cit.get("label") or cit.get("doc_number") or "unknown"
         return "".join(ch for ch in str(label) if ch not in '/\\:*?"<>|').strip() or "unknown"
 
+    progress_path = _comparison_progress_path(case_id)
+    progress_lock = threading.Lock()
+    progress = {
+        "status": "running",
+        "execution_mode": "per_citation",
+        "case_id": case_id,
+        "model": model,
+        "provider": provider,
+        "mode_used": mode,
+        "parallel": max_workers,
+        "total": len(citations),
+        "completed": 0,
+        "saved": 0,
+        "failed": 0,
+        "started_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "items": {},
+    }
+    for i, cit in enumerate(citations, start=1):
+        label = _safe_label(cit)
+        citation_id = (
+            cit.get("id")
+            or cit.get("citation_id")
+            or cit.get("patent_number")
+            or cit.get("doc_number")
+            or label
+        )
+        progress["items"][label] = {
+            "index": i,
+            "doc_id": label,
+            "citation_id": citation_id,
+            "stage": "queued",
+            "message": "待機中",
+        }
+
+    def _save_progress_unlocked():
+        items = list((progress.get("items") or {}).values())
+        progress["completed"] = sum(1 for x in items if x.get("stage") in ("done", "error"))
+        progress["saved"] = sum(1 for x in items if x.get("stage") == "done")
+        progress["failed"] = sum(1 for x in items if x.get("stage") == "error")
+        progress["updated_at"] = _now_iso()
+        if progress["completed"] >= progress["total"]:
+            progress["status"] = "done" if progress["failed"] == 0 else "partial"
+            progress["finished_at"] = progress["updated_at"]
+        _write_progress_file(progress_path, progress)
+
+    def _mark_progress(doc_id, *, stage=None, message=None, **extra):
+        with progress_lock:
+            item = progress["items"].setdefault(doc_id, {"doc_id": doc_id})
+            if stage:
+                item["stage"] = stage
+            if message is not None:
+                item["message"] = message
+            item.update(extra)
+            if stage in ("prompt", "running") and not item.get("started_at"):
+                item["started_at"] = _now_iso()
+            if stage in ("done", "error"):
+                item["finished_at"] = _now_iso()
+            _save_progress_unlocked()
+
+    with progress_lock:
+        _save_progress_unlocked()
+
     def _one(cit):
         safe_label = _safe_label(cit)
         try:
+            _mark_progress(safe_label, stage="prompt", message="プロンプト生成中")
             prompt_text = _gen(segs, [cit], keywords, field, hongan=hongan)
         except Exception as e:
+            _mark_progress(safe_label, stage="error", message="プロンプト生成失敗", error=str(e))
             return {"doc_id": safe_label, "ok": False,
                     "error": f"prompt生成失敗: {e}", "char_count": 0, "response_length": 0}
 
@@ -93,12 +222,20 @@ def _compare_execute_per_citation_parallel(
         except OSError:
             pass
 
+        _mark_progress(
+            safe_label,
+            stage="running",
+            message="LLM実行中",
+            prompt_chars=len(prompt_text),
+            timeout_sec=timeout,
+        )
         call_kwargs = {"timeout": timeout, "model": model}
         if effort is not None:
             call_kwargs["effort"] = effort
         try:
             raw = call_claude(prompt_text, **call_kwargs)
         except ClaudeNotFoundError as e:
+            _mark_progress(safe_label, stage="error", message="LLMが利用できません", error=str(e))
             return {
                 "doc_id": safe_label, "ok": False, "error": str(e),
                 "phase": "llm_not_available",
@@ -107,6 +244,7 @@ def _compare_execute_per_citation_parallel(
                 "char_count": len(prompt_text), "response_length": 0,
             }
         except ClaudeTimeoutError as e:
+            _mark_progress(safe_label, stage="error", message="LLMタイムアウト", error=str(e))
             return {
                 "doc_id": safe_label, "ok": False, "error": str(e),
                 "phase": "llm_timeout",
@@ -116,6 +254,7 @@ def _compare_execute_per_citation_parallel(
                 "char_count": len(prompt_text), "response_length": 0,
             }
         except ClaudeExecutionError as e:
+            _mark_progress(safe_label, stage="error", message="LLM実行エラー", error=str(e))
             return {
                 "doc_id": safe_label, "ok": False, "error": str(e),
                 "phase": "llm_execution",
@@ -124,6 +263,7 @@ def _compare_execute_per_citation_parallel(
                 "char_count": len(prompt_text), "response_length": 0,
             }
         except ClaudeClientError as e:
+            _mark_progress(safe_label, stage="error", message="LLMエラー", error=str(e))
             return {
                 "doc_id": safe_label, "ok": False, "error": str(e),
                 "phase": "llm_unknown",
@@ -139,6 +279,13 @@ def _compare_execute_per_citation_parallel(
 
         result, errors = parse_response(raw, all_segment_ids)
         if not result:
+            _mark_progress(
+                safe_label,
+                stage="error",
+                message="LLM応答のJSON解析失敗",
+                errors=errors,
+                response_length=len(raw),
+            )
             return {"doc_id": safe_label, "ok": False, "errors": errors,
                     "char_count": len(prompt_text), "response_length": len(raw)}
 
@@ -154,6 +301,14 @@ def _compare_execute_per_citation_parallel(
                 json.dump(doc_result, f, ensure_ascii=False, indent=2)
             saved.append(resolved)
 
+        _mark_progress(
+            safe_label,
+            stage="done",
+            message="保存済み",
+            saved_docs=saved,
+            resolved=resolved_log,
+            response_length=len(raw),
+        )
         return {
             "doc_id": safe_label, "ok": True, "saved": saved,
             "errors": errors, "resolved": resolved_log,
@@ -172,6 +327,8 @@ def _compare_execute_per_citation_parallel(
             try:
                 r = fut.result()
             except Exception as e:
+                safe_label = _safe_label(futures.get(fut) or {})
+                _mark_progress(safe_label, stage="error", message="内部エラー", error=str(e))
                 all_errors.append(f"_one fatal: {e}")
                 continue
             char_total += r.get("char_count", 0)
@@ -187,7 +344,7 @@ def _compare_execute_per_citation_parallel(
                 phase = f" [{r.get('phase')}]" if r.get("phase") else ""
                 all_errors.append(f"{r['doc_id']}{phase}: {err_msg}")
 
-    return {
+    final_payload = {
         "success": len(saved_docs) > 0,
         "errors": all_errors,
         "saved_docs": saved_docs,
@@ -201,10 +358,25 @@ def _compare_execute_per_citation_parallel(
         "fallback_to_legacy": fallback_to_legacy,
         "execution_mode": "per_citation",
         "split_by_citation": True,
-    }, 200
+    }
+    with progress_lock:
+        progress["result"] = {
+            "success": final_payload["success"],
+            "saved_docs": saved_docs,
+            "errors": all_errors,
+        }
+        _save_progress_unlocked()
+    return final_payload, 200
 
 
-def compare_execute(case_id, citation_ids, model=None, mode="requirement_first", effort=None):
+def compare_execute(
+    case_id,
+    citation_ids,
+    model=None,
+    mode="requirement_first",
+    effort=None,
+    per_citation=False,
+):
     """直接実行: 対比プロンプト → Claude CLI → パース
 
     Parameters:
@@ -216,6 +388,8 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
               keywords.json が無い案件では自動的に legacy にフォールバック。
         effort: 'low'/'medium'/'high'/'xhigh'/'max'。
                 None なら call_claude のデフォルト (high)。
+        per_citation: True の場合、モデルや環境変数に関係なく
+                1 citation = 1 LLM 呼び出しで実行する。
     """
     if os.environ.get("COMPARE_MODE", "").strip().lower() == "expert_squad":
         return _compare_execute_expert_squad(
@@ -256,13 +430,24 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
 
     citations = []
     empty_ids = []
+    skipped_citation_ids = []
+    load_errors = []
     for cit_id in citation_ids:
         cit, err = _load_citation_for_prompt(case_id, cit_id, case_dir)
         if err:
-            return {"error": err}, 404
+            skipped_citation_ids.append(cit_id)
+            load_errors.append(err)
+            continue
         if _is_empty_citation(cit):
             empty_ids.append((cit_id, cit))
         citations.append(cit)
+
+    if skipped_citation_ids and not citations:
+        return {
+            "error": "再対比対象の引用文献が見つかりません",
+            "skipped_citation_ids": skipped_citation_ids,
+            "errors": load_errors,
+        }, 404
 
     if empty_ids:
         msgs = [_empty_citation_error(cid, c) for cid, c in empty_ids]
@@ -296,7 +481,8 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
             hongan = json.load(f)
 
     # per-citation 実行:
-    # - COMPARE_PER_CITATION=1 ならモデル/件数を問わず有効化 (Opus は直列推奨)。
+    # - per_citation=True または COMPARE_PER_CITATION=1 ならモデル/件数を問わず有効化
+    #   (Opus は直列推奨)。
     # - 旧来互換として COMPARE_PARALLEL>=2 かつ lightweight モデルなら自動並列。
     # 未指定時の重量モデルは従来どおり統合方式。
     import os as _os
@@ -312,6 +498,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         parallel_workers = 2
     per_citation_env = _os.environ.get("COMPARE_PER_CITATION", "").strip().lower()
     per_citation_explicit = per_citation_env in ("1", "true", "yes", "on")
+    per_citation_requested = bool(per_citation)
     model_l = (model or "").lower()
     is_lightweight = (
         ("sonnet" in model_l)
@@ -319,7 +506,7 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
         or ("mini" in model_l)
         or ("glm" in model_l)
     )
-    use_per_citation = per_citation_explicit or (
+    use_per_citation = per_citation_requested or per_citation_explicit or (
         parallel_workers >= 2 and is_lightweight and len(citations) >= 2
     )
     if use_per_citation:
@@ -328,13 +515,17 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
             workers = parallel_workers
         else:
             workers = 2 if is_lightweight else 1
-        return _compare_execute_per_citation_parallel(
+        result, status = _compare_execute_per_citation_parallel(
             case_id=case_id, citations=citations, segs=segs,
             keywords=keywords, hongan=hongan, field=field,
             model=model, known_cit_ids=known_cit_ids,
             max_workers=workers, effort=effort, mode=mode,
             fallback_to_legacy=fallback_to_legacy,
         )
+        if skipped_citation_ids:
+            result["skipped_citation_ids"] = skipped_citation_ids
+            result["errors"] = load_errors + list(result.get("errors") or [])
+        return result, status
 
     prompt_text = _gen(segs, citations, keywords, field, hongan=hongan)
 
@@ -453,7 +644,8 @@ def compare_execute(case_id, citation_ids, model=None, mode="requirement_first",
 
     return {
         "success": result is not None,
-        "errors": errors,
+        "errors": load_errors + errors,
+        "skipped_citation_ids": skipped_citation_ids,
         "saved_docs": saved_docs,
         "num_docs": len(saved_docs),
         "resolved": resolved_log,  # ID 吸着の履歴 (デバッグ用)

@@ -128,15 +128,20 @@ def check_segments_freshness(case_id):
           "newest_response_mtime": float | None,
           "stale_by_mtime": bool,            # segments_mtime > oldest_response_mtime
           "current_segment_count": int,
-          "missing_in_responses": [str],      # 現分節 ID で どの response にも無いもの
+          "missing_in_responses": [str],      # いずれかの response で不足している現分節 ID
+          "missing_by_response": {            # response ごとの不足 ID 群
+              "<citation_id>": [str], ...
+          },
           "orphans_in_responses": {           # responses 側にあるが現分節に無い ID 群
               "<citation_id>": [str], ...
           },
+          "recompare_citation_ids": [str],    # 実際に再対比が必要な citation_id
           "needs_recompare": bool,            # missing or orphans があれば True
         }
     """
     case_dir = get_case_dir(case_id)
-    if not load_case_meta(case_id):
+    meta = load_case_meta(case_id)
+    if not meta:
         return {"error": "案件が見つかりません"}, 404
 
     seg_path = case_dir / "segments.json"
@@ -151,14 +156,20 @@ def check_segments_freshness(case_id):
         "stale_by_mtime": False,
         "current_segment_count": 0,
         "missing_in_responses": [],
+        "missing_by_response": {},
         "orphans_in_responses": {},
         "citation_ids_with_responses": [],  # 「前回選択分」の自動再対比に使う
+        "recompare_citation_ids": [],       # 実際に再対比が必要な response ID
+        "stale_response_ids": [],            # case.yaml から削除済みだが responses に残る ID
+        "missing_citation_ids": [],          # case.yaml にはあるが citations/<id>.json が無い ID
         "needs_recompare": False,
     }
 
     current_ids = []
-    # claim_number → そのクレーム配下の segment_id 集合 (sub_claims 判定の解決に使う)
-    segs_by_claim: dict[int, list[str]] = {}
+    # claim_number → その従属クレーム配下の segment_id 集合 (sub_claims 判定の解決に使う)
+    # is_independent=true の請求項は、請求項番号が 2 以降でも comparisons 側で
+    # 分節単位に判定されるべきなので、sub_claims ではカバー済み扱いしない。
+    dependent_segs_by_claim: dict[int, list[str]] = {}
     if seg_path.exists():
         out["segments_mtime"] = seg_path.stat().st_mtime
         try:
@@ -167,8 +178,9 @@ def check_segments_freshness(case_id):
             current_ids = _get_all_segment_ids(segs)
             for claim in segs or []:
                 cn = claim.get("claim_number")
-                if isinstance(cn, int):
-                    segs_by_claim[cn] = [
+                is_independent = bool(claim.get("is_independent")) or cn == 1
+                if isinstance(cn, int) and not is_independent:
+                    dependent_segs_by_claim[cn] = [
                         s.get("id") for s in (claim.get("segments") or []) if s.get("id")
                     ]
         except (OSError, json.JSONDecodeError):
@@ -180,12 +192,41 @@ def check_segments_freshness(case_id):
         return out, 200
 
     # 集計対象: responses/*.json (アンダースコア始まりの作業ファイルは除外)
-    resp_files = [p for p in resp_dir.glob("*.json") if not p.name.startswith("_")]
+    all_resp_files = [p for p in resp_dir.glob("*.json") if not p.name.startswith("_")]
+    # case.yaml の citations が取れる案件では、削除済み文献の古い response を
+    # 自動再対比対象から除外する。これを怠ると、分節保存後の自動再対比が
+    # 「引用文献 '<old id>' が見つかりません」で全停止する。
+    meta_citation_ids = {
+        str(c.get("id"))
+        for c in (meta.get("citations") or [])
+        if isinstance(c, dict) and c.get("id")
+    }
+    active_citation_ids = {
+        cid for cid in meta_citation_ids
+        if (case_dir / "citations" / f"{cid}.json").exists()
+    }
+    out["missing_citation_ids"] = sorted(meta_citation_ids - active_citation_ids)
+    if active_citation_ids:
+        resp_files = [p for p in all_resp_files if p.stem in active_citation_ids]
+        out["stale_response_ids"] = sorted(
+            p.stem for p in all_resp_files if p.stem not in active_citation_ids
+        )
+    elif meta_citation_ids:
+        # case.yaml には文献が残っているが citation JSON が全て失われている。
+        # 自動再対比すると全件 404 になるため、対象なしとして扱う。
+        resp_files = []
+        out["stale_response_ids"] = sorted(p.stem for p in all_resp_files)
+    else:
+        # 古いテスト/手作業案件など citations メタが空のものは従来互換で全件を見る。
+        resp_files = all_resp_files
     if not resp_files:
+        if all_resp_files:
+            out["has_responses"] = True
+            out["response_count"] = len(all_resp_files)
         return out, 200
 
     out["has_responses"] = True
-    out["response_count"] = len(resp_files)
+    out["response_count"] = len(all_resp_files)
     out["citation_ids_with_responses"] = sorted(p.stem for p in resp_files)
 
     mtimes = [p.stat().st_mtime for p in resp_files]
@@ -195,6 +236,7 @@ def check_segments_freshness(case_id):
         out["stale_by_mtime"] = out["segments_mtime"] > out["oldest_response_mtime"]
 
     seen_in_responses = set()
+    missing_by_doc = {}
     orphans_per_doc = {}
     for p in resp_files:
         try:
@@ -204,28 +246,41 @@ def check_segments_freshness(case_id):
             continue
         comps = rdata.get("comparisons") or []
         ids = [(c.get("requirement_id") or "").strip() for c in comps if c.get("requirement_id")]
-        # sub_claims (請求項 2 以降) は claim_number ベースで判定が入る。
+        # sub_claims は従属請求項だけを claim_number ベースで判定する。
         # 該当 claim_number の全 segment_id を「seen 済」として扱う (= 個別分節の判定が
         # 無くてもクレーム単位で覆われていれば missing 扱いしない)。
+        # 独立請求項 (例: 請求項9の 9A〜9E) が古い応答で sub_claims に入っていても、
+        # 分節単位の再対比が必要なので seen 済にはしない。
         sub_claims = rdata.get("sub_claims") or []
         for sc in sub_claims:
             cn = sc.get("claim_number")
-            if isinstance(cn, int) and cn in segs_by_claim:
-                ids.extend(segs_by_claim[cn])
-        seen_in_responses.update(ids)
+            if isinstance(cn, int) and cn in dependent_segs_by_claim:
+                ids.extend(dependent_segs_by_claim[cn])
+        doc_seen = set(i for i in ids if i)
+        seen_in_responses.update(doc_seen)
+        if current_set:
+            missing = sorted(s for s in current_set if s not in doc_seen)
+            if missing:
+                missing_by_doc[p.stem] = missing
         # この文献の orphan = 現分節に無い response 側 ID
         orphans = sorted(set(i for i in ids if i and i not in current_set))
         if orphans:
             orphans_per_doc[p.stem] = orphans
 
     if current_set:
-        out["missing_in_responses"] = sorted(s for s in current_set if s not in seen_in_responses)
+        out["missing_in_responses"] = sorted({sid for ids in missing_by_doc.values() for sid in ids})
+    out["missing_by_response"] = missing_by_doc
     out["orphans_in_responses"] = orphans_per_doc
     # needs_recompare は実害がある場合のみ True にする。mtime 単独は除外:
     # 分節 ID が一致していれば古い judgment でも Excel に正しく反映されるため、
     # 「分節編集が対比より新しい」だけで警告を出すと「再対比したのに警告が消えない」
     # という UX 不具合になる (ID 整合がとれてれば実害無し)。
-    out["needs_recompare"] = bool(out["missing_in_responses"]) or bool(orphans_per_doc)
+    recompare_ids = set(missing_by_doc) | set(orphans_per_doc)
+    out["recompare_citation_ids"] = sorted(
+        cid for cid in recompare_ids
+        if not active_citation_ids or cid in active_citation_ids
+    )
+    out["needs_recompare"] = bool(out["recompare_citation_ids"])
     return out, 200
 
 

@@ -148,7 +148,7 @@ def test_chat_cell_extracts_natural_override(monkeypatch, isolated_project_root)
     assert sug["to_judgment"] == "○"
     assert sug["fields"]["judgment"] == "○"
     assert "ステアリン酸グリセリル" in sug["fields"]["judgment_reason"]
-    assert "【0131】" in sug["fields"]["cited_location"]
+    assert sug["fields"]["cited_location"] == "131"
 
 
 def test_sub_claim_chat_context_and_override(monkeypatch, isolated_project_root):
@@ -206,6 +206,31 @@ def test_apply_judgment_override_preserves_original(isolated_project_root):
     assert data["overrides"]["1A"]["original"]["judgment"] == "×"
     assert data["overrides"]["1A"]["user_note"] == "壁打ちで部分充足に変更"
     assert out["doc"]["comparisons"][0]["judgment_display"] == "△"
+
+    rows, status = svc.list_unmet_cells("C1")
+    assert status == 200
+    row = next(r for r in rows["cells"] if r["segment_id"] == "1A")
+    assert row["reviewed"] is True
+    assert row["override_note"] == "壁打ちで部分充足に変更"
+
+
+def test_apply_judgment_override_normalizes_paste_notation(isolated_project_root):
+    case = _make_case(isolated_project_root)
+
+    out, status = svc.apply_judgment_override(
+        "C1", "D1", "1A",
+        {
+            "judgment": "○",
+            "judgment_reason": "表4の備考付き根拠。",
+            "cited_location": "請求項1;CL2;表1;T2;T4;/備考",
+        },
+        user_note="記法正規化",
+    )
+
+    assert status == 200
+    data = json.loads((case / "responses" / "D1.json").read_text(encoding="utf-8"))
+    assert data["comparisons"][0]["cited_location"] == "CL1,2;T1,2,4/備考"
+    assert out["doc"]["comparisons"][0]["cited_location"] == "CL1,2;T1,2,4/備考"
 
 
 def test_list_unmet_cells(isolated_project_root):

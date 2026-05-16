@@ -182,3 +182,46 @@ def test_requirement_first_prompt_uses_evidence_chunks_once_for_large_claims():
     # キーワードヒットしない構成要件ごとに長い請求項全文を再掲しない。
     assert prompt.count("参考請求項抜粋") == 0
     assert len(prompt) < 50000
+
+
+def test_requirement_first_prompt_keeps_later_independent_claim_in_comparisons():
+    segments = [
+        {
+            "claim_number": 1,
+            "is_independent": True,
+            "dependencies": [],
+            "segments": [{"id": "1A", "text": "紙基材を有する"}],
+        },
+        {
+            "claim_number": 9,
+            "is_independent": True,
+            "dependencies": [],
+            "segments": [
+                {"id": "9A", "text": "容器本体を有する"},
+                {"id": "9B", "text": "発泡層を有する"},
+            ],
+        },
+        {
+            "claim_number": 10,
+            "is_independent": False,
+            "dependencies": [9],
+            "segments": [{"id": "10A", "text": "前記容器本体の底部が樹脂を含む"}],
+        },
+    ]
+    citations = [{
+        "patent_number": "JPTEST",
+        "label": "JPTEST",
+        "claims": [],
+        "paragraphs": [{"id": "0001", "section": "実施例", "text": "紙基材と容器本体と発泡層。"}],
+        "tables": [],
+    }]
+
+    prompt = generate_prompt_requirement_first(
+        segments, citations, keywords=[], field="materials", hongan=None,
+    )
+
+    assert "必ず全ての独立請求項の構成要件（1A, 9A, 9B）" in prompt
+    assert '"requirement_id": "9A"' in prompt
+    assert "claim_number=10" in prompt
+    assert "claim_number=9" not in prompt
+    assert "請求項番号が2以降でも「独立」と表示された請求項は、sub_claims ではなく comparisons" in prompt

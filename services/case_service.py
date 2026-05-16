@@ -1098,21 +1098,59 @@ def upload_citation(case_id, save_path, role="主引例", label=""):
 
 
 def delete_citation(case_id, citation_id):
-    """引用文献を個別削除"""
+    """引用文献を個別削除。
+
+    J-PlatPat 由来 ID は `JPA1993042929-000000` と
+    `JPA 1993042929-000000` のように空白入り/空白なしが混在しがちなので、
+    完全一致だけでなく英数字正規化キーでも関連ファイルを削除する。
+    """
     meta = load_case_meta(case_id)
     if not meta:
         return {"error": "案件が見つかりません"}, 404
 
     case_dir = get_case_dir(case_id)
 
-    for subdir in ["citations", "responses", "prompts"]:
-        for pattern in [f"{citation_id}.json", f"{citation_id}_prompt.txt", f"*{citation_id}*"]:
-            for f in (case_dir / subdir).glob(pattern):
-                f.unlink()
+    def _key(value):
+        return "".join(ch for ch in str(value or "") if ch.isalnum()).upper()
 
-    meta["citations"] = [c for c in meta.get("citations", []) if c["id"] != citation_id]
+    target_keys = {_key(citation_id)}
+    target_texts = {str(citation_id or "")}
+    for c in meta.get("citations", []) or []:
+        if not isinstance(c, dict):
+            continue
+        vals = [c.get("id"), c.get("label")]
+        if any(_key(v) in target_keys for v in vals):
+            for v in vals:
+                if v:
+                    target_keys.add(_key(v))
+                    target_texts.add(str(v))
+
+    deleted_files = []
+    for subdir in ["citations", "responses", "prompts", "input"]:
+        d = case_dir / subdir
+        if not d.exists():
+            continue
+        for f in list(d.iterdir()):
+            if not f.is_file():
+                continue
+            stem_key = _key(f.stem)
+            name_key = _key(f.name)
+            should_delete = (
+                stem_key in target_keys
+                or any(k and k in name_key for k in target_keys)
+                or any(t and t in f.name for t in target_texts)
+            )
+            if should_delete:
+                f.unlink()
+                deleted_files.append(str(f.relative_to(case_dir)))
+
+    meta["citations"] = [
+        c for c in meta.get("citations", [])
+        if not isinstance(c, dict)
+        or (_key(c.get("id")) not in target_keys and _key(c.get("label")) not in target_keys)
+    ]
     save_case_meta(case_id, meta)
-    return {"success": True}, 200
+    return {"success": True, "deleted_files": sorted(deleted_files)}, 200
 
 
 def clear_all_citations(case_id):

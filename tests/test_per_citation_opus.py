@@ -108,6 +108,36 @@ def test_compare_per_citation_env_enables_opus_serial(copy_case_fixture, monkeyp
     assert all(call["timeout"] == 600 for call in calls)
 
 
+def test_compare_per_citation_argument_enables_opus_serial(copy_case_fixture, monkeypatch):
+    case_dir = copy_case_fixture("smoke")
+    _add_second_citation(case_dir)
+    monkeypatch.delenv("COMPARE_MODE", raising=False)
+    monkeypatch.delenv("COMPARE_PER_CITATION", raising=False)
+    monkeypatch.delenv("COMPARE_PARALLEL", raising=False)
+
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        doc_id = "JP2030000003A" if "JP2030000003A" in prompt else "JP2030000002A"
+        return _comparison_response(doc_id)
+
+    monkeypatch.setattr("modules.claude_client.call_claude", fake_call)
+
+    result, status = execute.compare_execute(
+        "smoke",
+        ["JP2030000002A", "JP2030000003A"],
+        model="opus",
+        per_citation=True,
+    )
+
+    assert status == 200
+    assert result["execution_mode"] == "per_citation"
+    assert result["parallel"] == 1
+    assert set(result["saved_docs"]) == {"JP2030000002A", "JP2030000003A"}
+    assert len(calls) == 2
+
+
 def test_compare_opus_without_env_keeps_integrated_mode(copy_case_fixture, monkeypatch):
     case_dir = copy_case_fixture("smoke")
     _add_second_citation(case_dir)
@@ -142,6 +172,92 @@ def test_compare_opus_without_env_keeps_integrated_mode(copy_case_fixture, monke
     assert set(result["saved_docs"]) == {"JP2030000002A", "JP2030000003A"}
     assert len(calls) == 1
     assert calls[0]["model"] == "opus"
+
+
+def test_compare_execute_skips_deleted_citation_when_valid_targets_remain(
+    copy_case_fixture, monkeypatch
+):
+    copy_case_fixture("smoke")
+    monkeypatch.delenv("COMPARE_MODE", raising=False)
+    monkeypatch.delenv("COMPARE_PER_CITATION", raising=False)
+    monkeypatch.delenv("COMPARE_PARALLEL", raising=False)
+
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return _comparison_response("JP2030000002A")
+
+    monkeypatch.setattr("modules.claude_client.call_claude", fake_call)
+
+    result, status = execute.compare_execute(
+        "smoke",
+        ["JP2030000002A", "DELETED_DOC"],
+        model="opus",
+    )
+
+    assert status == 200
+    assert result["execution_mode"] == "integrated"
+    assert result["saved_docs"] == ["JP2030000002A"]
+    assert result["skipped_citation_ids"] == ["DELETED_DOC"]
+    assert any("DELETED_DOC" in e for e in result["errors"])
+    assert len(calls) == 1
+
+
+def test_compare_execute_resolves_spaced_jplatpat_id_to_existing_json(
+    copy_case_fixture, monkeypatch
+):
+    case_dir = copy_case_fixture("smoke")
+    src = case_dir / "citations" / "JP2030000002A.json"
+    data = json.loads(src.read_text(encoding="utf-8"))
+    data["patent_number"] = "JPA 1993042929-000000"
+    (case_dir / "citations" / "JPA1993042929-000000.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    meta_path = case_dir / "case.yaml"
+    meta = yaml.safe_load(meta_path.read_text(encoding="utf-8"))
+    meta.setdefault("citations", []).append(
+        {"id": "JPA1993042929-000000", "role": "主引例", "label": "JPA1993042929-000000"}
+    )
+    meta_path.write_text(yaml.safe_dump(meta, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.delenv("COMPARE_MODE", raising=False)
+    monkeypatch.delenv("COMPARE_PER_CITATION", raising=False)
+    monkeypatch.delenv("COMPARE_PARALLEL", raising=False)
+
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return _comparison_response("JPA 1993042929-000000")
+
+    monkeypatch.setattr("modules.claude_client.call_claude", fake_call)
+
+    result, status = execute.compare_execute(
+        "smoke",
+        ["JPA 1993042929-000000"],
+        model="opus",
+    )
+
+    assert status == 200
+    assert result["saved_docs"] == ["JPA1993042929-000000"]
+    assert result["skipped_citation_ids"] == []
+    assert len(calls) == 1
+
+
+def test_compare_execute_returns_404_when_all_targets_deleted(copy_case_fixture):
+    copy_case_fixture("smoke")
+
+    result, status = execute.compare_execute(
+        "smoke",
+        ["DELETED_DOC"],
+        model="opus",
+    )
+
+    assert status == 404
+    assert result["skipped_citation_ids"] == ["DELETED_DOC"]
+    assert "見つかりません" in result["error"]
 
 
 def test_compare_parallel_lightweight_still_uses_per_citation(copy_case_fixture, monkeypatch):

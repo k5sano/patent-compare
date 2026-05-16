@@ -225,13 +225,23 @@ def _open_with_pdf_xchange(pdf_path):
 def compare_execute(case_id):
     from services.comparison_service import compare_execute
     data = request.get_json() or {}
+    per_citation = data.get("per_citation")
+    if isinstance(per_citation, str):
+        per_citation = per_citation.strip().lower() in ("1", "true", "yes", "on")
     return _svc_response(compare_execute(
         case_id,
         data.get("citation_ids", []),
         model=data.get("model"),
         mode=data.get("mode") or "requirement_first",  # A: デフォルト切替
         effort=data.get("effort"),
+        per_citation=bool(per_citation),
     ))
+
+
+@bp.route("/case/<case_id>/comparison/progress", methods=["GET"])
+def comparison_progress(case_id):
+    from services.comparison_service import get_comparison_progress
+    return _svc_response(get_comparison_progress(case_id))
 
 
 # ===== 進歩性 =====

@@ -59,6 +59,11 @@ def annotate_citation(case_id, citation_id, force_new_file=False):
     if kw_path.exists():
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
+    segments = None
+    seg_path = case_dir / "segments.json"
+    if seg_path.exists():
+        with open(seg_path, "r", encoding="utf-8") as f:
+            segments = json.load(f)
 
     base_safe_name = re.sub(r'[<>:"/\\|?*]', '_', citation_id)
     migrate_from = case_dir / "output" / f"{base_safe_name}_annotated.pdf"
@@ -74,7 +79,8 @@ def annotate_citation(case_id, citation_id, force_new_file=False):
             response_data, citation_data, keywords,
             migrate_bookmarks_from=migrate_from,
             case_id=case_id,
-            citation_id=citation_id)
+            citation_id=citation_id,
+            segments=segments)
         return {
             "success": True,
             "filename": actual_path.name,
@@ -107,6 +113,11 @@ def annotate_all_citations(case_id, max_workers=None):
     if kw_path.exists():
         with open(kw_path, "r", encoding="utf-8") as f:
             keywords = json.load(f)
+    segments = None
+    seg_path = case_dir / "segments.json"
+    if seg_path.exists():
+        with open(seg_path, "r", encoding="utf-8") as f:
+            segments = json.load(f)
 
     output_dir = case_dir / "output"
     jobs = []
@@ -139,7 +150,7 @@ def annotate_all_citations(case_id, max_workers=None):
             citation_data = json.load(f)
         # ProcessPool にピックルして渡すため Path は str 化
         jobs.append((case_id, cit_id, str(pdf_path), str(output_dir),
-                     response_data, citation_data, keywords))
+                     response_data, citation_data, keywords, segments))
 
     results = list(pre_results)
     if jobs:

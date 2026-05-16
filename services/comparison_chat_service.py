@@ -527,6 +527,11 @@ def _build_prompt(context, message):
         "形式的な文言一致だけでなく、発明の技術的意義、引例の実施例・比較例、"
         "表中の成分・配合比、内在的物性、特許法29条1項/2項の使い分けを踏まえてください。\n"
         "根拠は段落番号・表番号・該当セル等を明記し、根拠がない場合は推測として区別してください。\n"
+        "cited_location は厳密なコンパクト記法で出力してください。段落番号は数字のみ、請求項は CL、"
+        "図は F、表は T、化は K、式は E、数は S、ページは P、コラムは C、行は G です。"
+        "同種は ,、種類が変わる時だけ ;、コメントは /、防備録メモは // を使います。"
+        "英字と数字を混同してはいけません。CL を 0L、T を 1、S を 8、G を 6、C を 0 にしないでください。"
+        "T4/備考 を T4;/備考 にしないでください。不明な文字は [判読不明] のまま残してください。\n"
         "出力は日本語で、(1)結論 (2)根拠 (3)既存判定を修正すべき点 (4)推奨上書き文案 の順に簡潔に答えてください。\n\n"
         "最後に必ず、次のJSONだけを ```json fenced block``` で付けてください。\n"
         "判定を更新すべきときは apply=true とし、judgment/reason/location/text を上書き文案として具体的に埋めてください。\n"
@@ -536,7 +541,7 @@ def _build_prompt(context, message):
         "    \"apply\": true,\n"
         "    \"judgment\": \"○|△|×|\",\n"
         "    \"judgment_reason\": \"対比表セルに保存する理由文\",\n"
-        "    \"cited_location\": \"段落・表番号等\",\n"
+        "    \"cited_location\": \"コンパクト記法 例: 20;F2;CL3;T4/備考 / P1A2-4 / C4G12 / F1,1a,5C\",\n"
         "    \"cited_text\": \"根拠となる引用本文\",\n"
         "    \"user_note\": \"壁打ちでの変更理由\"\n"
         "  }\n"
@@ -596,6 +601,12 @@ def _suggested_override_from_reply(reply, context):
             "cited_location": str(sug.get("cited_location") or sug.get("location") or "").strip(),
             "cited_text": str(sug.get("cited_text") or "").strip(),
         }
+        if fields["cited_location"]:
+            try:
+                from modules.cited_ref_notation import normalize as _norm
+                fields["cited_location"] = _norm(fields["cited_location"])
+            except Exception:
+                pass
         current_key = {
             "judgment": "category",
             "judgment_reason": "reason",
@@ -666,9 +677,14 @@ def _locations_from_text(text):
     for pat in pats:
         for m in re.finditer(pat, str(text or "")):
             s = re.sub(r"\s+", "", m.group(0)).translate(_FW_DIGITS)
+            try:
+                from modules.cited_ref_notation import normalize as _norm
+                s = _norm(s)
+            except Exception:
+                pass
             if s not in locs:
                 locs.append(s)
-    return "、".join(locs[:8])
+    return ";".join(locs[:8])
 
 
 def _suggested_override_from_natural_reply(reply, context, build_suggestion):
@@ -769,6 +785,12 @@ def apply_judgment_override(case_id, citation_id, segment_id, fields, user_note=
     for key in allowed:
         if key in fields and fields[key] is not None:
             comp[key] = str(fields[key])
+            if key == "cited_location" and comp[key]:
+                try:
+                    from modules.cited_ref_notation import normalize as _norm
+                    comp[key] = _norm(comp[key])
+                except Exception:
+                    pass
             updated[key] = comp[key]
 
     ts = _now()
@@ -818,11 +840,14 @@ def list_unmet_cells(case_id, citation_ids=None):
         if wanted is not None and path.stem not in wanted:
             continue
         data = _read_json(path, {})
+        overrides = data.get("overrides") or {}
         for comp in data.get("comparisons") or []:
             judgment = str(comp.get("judgment") or "").strip()
             if judgment == "○":
                 continue
             sid = str(comp.get("requirement_id") or "")
+            ov = overrides.get(sid) or {}
+            reviewed_at = comp.get("_edited_at") or ov.get("timestamp") or ""
             rows.append({
                 "target_kind": "comparison",
                 "citation_id": path.stem,
@@ -832,12 +857,17 @@ def list_unmet_cells(case_id, citation_ids=None):
                 "reason": comp.get("judgment_reason", ""),
                 "cited_location": comp.get("cited_location", ""),
                 "edited_at": comp.get("_edited_at", ""),
+                "reviewed": bool(reviewed_at),
+                "reviewed_at": reviewed_at,
+                "override_note": comp.get("_override_note") or ov.get("user_note", ""),
             })
         for comp in data.get("sub_claims") or []:
             judgment = str(comp.get("judgment") or "").strip()
             if judgment == "○":
                 continue
             cn = comp.get("claim_number")
+            ov = overrides.get(f"sub_claim:{cn}") or {}
+            reviewed_at = comp.get("_edited_at") or ov.get("timestamp") or ""
             rows.append({
                 "target_kind": "sub_claim",
                 "citation_id": path.stem,
@@ -847,5 +877,9 @@ def list_unmet_cells(case_id, citation_ids=None):
                 "reason": comp.get("judgment_reason", ""),
                 "cited_location": comp.get("cited_location", ""),
                 "edited_at": comp.get("_edited_at", ""),
+                "reviewed": bool(reviewed_at),
+                "reviewed_at": reviewed_at,
+                "override_note": comp.get("_override_note") or ov.get("user_note", ""),
             })
+    rows.sort(key=lambda r: (1 if r.get("reviewed") else 0, r.get("citation_id", ""), r.get("segment_id", "")))
     return {"cells": rows, "count": len(rows), "citation_ids": sorted(wanted) if wanted is not None else None}, 200

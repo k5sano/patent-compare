@@ -67,12 +67,24 @@ def _build_cited_location_notation_rules():
     return """## cited_location の記法ルール（必ず厳守）
 `cited_location` フィールドは以下の **コンパクト記法**で出力してください。検索報告書への自動転記のため、自然文ではなく次の形式に統一します。
 
+### 厳密な記載ルール（最重要）
+- 英字と数字を混同しないでください。`CL` を `0L`、`T` を `1`、`S` を `8`、
+  `G` を `6`、`C` を `0` にしてはいけません。
+- 記号を勝手に別記号へ変換しないでください。区切りは `;`、コメントは `/`、
+  防備録メモは `//`、範囲指定は `-`、複数要素の区切りは `,` です。
+- 不明な文字は推測で確定せず、`[判読不明]` と出力してください。
+- 例示の記号列・コードは 1 文字ずつ厳密に保持してください。
+- 出力時に全角・半角や記号の形を不必要に変更しないでください。
+- 意味の通りやすさより、元の表記ルールを優先してください。
+- 例示中の区切り位置を勝手に補わないでください。例: `T4/備考` は正しく、
+  `T4;/備考` ではありません。
+
 ### 接頭辞
 | 種類 | 接頭辞 | 例 |
 |---|---|---|
 | 段落 | （なし、数字のみ） | `21` / `41-45` / `21,39` |
 | 請求項 | `CL` | `CL1` / `CL1,5` / `CL1-3` |
-| 図 | `F` | `F1` / `F1a` / `F5C` |
+| 図 | `F` | `F1` / `F1a` / `F5C` / `F1,1a,5C` |
 | 表 | `T` | `T4` |
 | 化学構造（化N） | `K` | `K2` |
 | 数式（式N） | `E` | `E3` |
@@ -92,22 +104,26 @@ def _build_cited_location_notation_rules():
 ### 出力例
 - 段落20と図2と請求項3で開示: `20;F2;CL3`
 - 段落21,39と段落41-45で開示: `21,39,41-45`
+- 表4に備考付きで記載: `T4/備考`
 - 表4の段落15に記載: `T4;15`
 - **表1と表2に記載**: `T1,2`     ← `T1;T2` ❌ 同種は ; ではなく , で連結
 - **段落23と段落24に記載**: `23,24`  ← `0023;0024` ❌ ゼロパディング不要
 - **再表/WO等で段落番号がない箇所**: `P12G8-11` ← 12ページ8-11行。段組みが明確なら `P12A8-11` / `P12B8-11` 等
 - 段落20で記載されているが上位概念のみ: `20/上位概念のみ`
+- ページ左上欄 2-4 行: `P1A2-4`
+- コラム4の12行: `C4G12`
+- 図1、図1a、図5C: `F1,1a,5C`（`F1,6,F1a,F5C` にしない）
 
 **判定が ○ または △ の時は `cited_location` 必須 (空文字禁止)**:
 - 引例本文が乏しくファミリー文献 (例「WO2019107497 の EP 対応」「同一発明の JP/US 対応」)
   を根拠にする場合でも、**本引例自体から** 最も近い記載 (請求項番号 `CL1`、段落番号
-  `0023`、表番号 `T4` 等) を **必ず 1 つ以上引用** すること
+  `23`、表番号 `T4` 等) を **必ず 1 つ以上引用** すること
 - 開示が要約レベルしかなくても `CL1` など最低 1 件は入れる
 - 「ファミリー参照のみで本引例には該当箇所なし」と判断するなら judgment は × にする
 - 空文字 `""` を許すのは judgment が × の時 **のみ**
 - **△ で「複合要件の一部のみ開示」と書いた場合**は、その「開示されている部分」の
   記載箇所を必ず cited_location に入れる (例: 本願「A+B+C+D」のうち A,B,C が記載
-  なら `0023,0024;T1,2`)。「記載なし」と判定理由に書きながら cited_location が
+  なら `23,24;T1,2`)。「記載なし」と判定理由に書きながら cited_location が
   空 → 矛盾なので × か ○ に修正すること
 
 **記法の禁止事項**:
@@ -121,6 +137,21 @@ def _build_cited_location_notation_rules():
 - **段落番号にゼロパディングしない**: `0023;0024` ❌ → `23,24` ✓
   / `00230;00450` ❌ → `230,450` ✓ (内部で 4 桁化される)
 - 全角数字・全角英字も認識するがなるべく半角で
+
+**特に注意する既知の誤変換**:
+- `CL` → `0L` にしない
+- `T` → `1` にしない
+- `S` → `8` にしない
+- `G` → `6` にしない
+- `C4G12` を `04G12` にしない
+- `;` を `:` にしない
+- `//` を別文字にしない
+- `F1,1a,5C` を `F1,6,F1a,F5C` にしない
+- `T4/備考` を `T4;/備考` にしない
+
+**出力前セルフチェック**:
+次の文字列が誤変換されていないか必ず確認してから JSON を出力してください。
+`CL / F / T / K / E / S / // / ; / , / - / P / A / B / C / D / R / L / G / C4G12 / P1A2-4 / F1,1a,5C / T4/備考`
 """
 
 
@@ -347,7 +378,10 @@ def _build_judgment_criteria():
   - 好適範囲だけと比較していないか?
 
 ### 6. 従属請求項 (sub_claims) は「追加された限定」のみを判定する (★)
-- 従属請求項 (請求項 2 以降) は通常「請求項 N の○○であって、さらに △△ である」という
+- `sub_claims` に入れるのは **is_independent=false の従属請求項のみ**。
+  請求項番号が 2 以降でも `is_independent=true` の請求項は独立請求項であり、
+  請求項1と同じく `comparisons` に各構成要件 (例: 9A, 9B, 9C...) を分節単位で出力する。
+- 従属請求項は通常「請求項 N の○○であって、さらに △△ である」という
   形式。判定対象は **追加された△△部分のみ** (請求項 1 の構成は別途判定済なので重複評価しない)
 - judgment_reason は **追加限定にフォーカスして** 書く
   - 例: 請求項3 「請求項1 の組成物であって、グリセロール化シリコーン樹脂の質量比が 0.8 以上」
@@ -635,13 +669,15 @@ def _build_citations_section(citations):
 
 def _build_output_format_multi(citations, segments):
     """複数文献対応の出力フォーマット指定"""
-    # 請求項1の分節IDリスト
-    claim1_ids = []
+    # 独立請求項の分節IDリスト。
+    # 請求項番号が 2 以降でも is_independent=true なら comparisons 側で
+    # 分節単位に判定させる (例: 請求項9 = 9A〜9E)。
+    independent_ids = []
     sub_claims = []
     for claim in segments:
-        if claim["claim_number"] == 1:
+        if claim.get("is_independent", False) or claim.get("claim_number") == 1:
             for seg in claim["segments"]:
-                claim1_ids.append(seg["id"])
+                independent_ids.append(seg["id"])
         else:
             sub_claims.append(claim)
 
@@ -654,12 +690,12 @@ def _build_output_format_multi(citations, segments):
 
     # 比較結果のサンプル（最初の分節2つ分）
     example_comparisons = []
-    for seg_id in claim1_ids[:2]:
+    for seg_id in independent_ids[:2]:
         example_comparisons.append(f"""        {{
             "requirement_id": "{seg_id}",
             "judgment": "○ or △ or ×",
             "judgment_reason": "判定理由を具体的に記載",
-            "cited_location": "コンパクト記法 例: 20;F2;CL3 (段落20+図2+請求項3) / 21,39,41-45 (段落の複数+範囲) / 20;\\\"備考",
+            "cited_location": "コンパクト記法 例: 20;F2;CL3 / 21,39,41-45 / T4/備考 / P1A2-4 / C4G12 / F1,1a,5C",
             "section_type": "実施例 or 定義 or クレーム or 言及",
             "cited_text": "引用文献の該当記載をそのまま抜粋",
             "formulation_reason": "配合理由があれば記載（化粧品分野）",
@@ -692,7 +728,7 @@ def _build_output_format_multi(citations, segments):
             "requirement_text": "★ 追加された限定事項のみ (請求項1部分は除く)",
             "judgment": "○ or △ or ×",
             "judgment_reason": "★ 追加限定にフォーカス。請求項1部分は冗長判定しない。根拠タイプを括弧書きで明記",
-            "cited_location": "コンパクト記法 (例: 20 / CL3 / T4;15 等)",
+            "cited_location": "コンパクト記法 (例: 20 / CL3 / T4;15 / T4/備考 / P1A2-4 / C4G12)",
             "cited_text": "引用文献の該当記載をそのまま抜粋",
             "note": ""
         }}""")
@@ -704,14 +740,17 @@ def _build_output_format_multi(citations, segments):
     ]
     /* ★ sub_claims 配列には **必ず {sub_claim_count} 件すべて** を出力すること
        (claim_number={', '.join(sub_claim_ids)} / requirement_id={sub_claim_seg_ids_label})。
-       1 件だけで省略せず、全件分の判定を必須とする。 */"""
+       1 件だけで省略せず、全件分の判定を必須とする。
+       ただし is_independent=true の独立請求項は sub_claims に入れず、
+       comparisons に各 segment ID で分節単位に出力する。 */"""
 
     # 単一文献の場合
     if len(citations) == 1:
         doc_id = doc_list[0]["id"]
         role = doc_list[0]["role"]
         return f"""## 出力フォーマット
-以下のJSON形式で回答してください。必ず全ての構成要件（{', '.join(claim1_ids)}）について判定を含めてください。
+以下のJSON形式で回答してください。必ず全ての独立請求項の構成要件（{', '.join(independent_ids)}）について判定を含めてください。
+請求項番号が2以降でも「独立」と表示された請求項は、sub_claims ではなく comparisons に分節単位で出力してください。
 
 ```json
 {{
@@ -719,7 +758,7 @@ def _build_output_format_multi(citations, segments):
     "document_role": "{role}",
     "comparisons": [
 {comparisons_str},
-        ... （全ての構成要件 {', '.join(claim1_ids)} について記載）
+        ... （全ての独立請求項の構成要件 {', '.join(independent_ids)} について記載）
     ]{sub_claim_example},
     "overall_summary": "この引用文献の概要と本願との関連性を3-5文で記述",
     "category_suggestion": "X or Y or A（X=単独で拒絶可能, Y=組合せで拒絶可能, A=参考文献）",
@@ -729,7 +768,8 @@ def _build_output_format_multi(citations, segments):
 
 ### 出力時の注意
 - judgment は必ず「○」「△」「×」のいずれかを使用してください
-- cited_location は **コンパクト記法**（数字=段落、CL=請求項、F=図、T=表、K=化、E=式、S=数、; で連結、, で複数、- で範囲）で出力してください。自然文（「段落【0020】」等）は禁止
+- cited_location は **コンパクト記法**（数字=段落、CL=請求項、F=図、T=表、K=化、E=式、S=数、P=ページ、C=コラム、G=行、; で異種連結、, で同種複数、- で範囲、/ でコメント、// で防備録メモ）で出力してください。自然文（「段落【0020】」等）は禁止
+- `CL`/`F`/`T`/`K`/`E`/`S`/`P`/`A`/`B`/`C`/`D`/`R`/`L`/`G` と数字を混同しないでください。例: `C4G12`、`P1A2-4`、`F1,1a,5C`、`T4/備考` を 1 文字ずつ保持してください
 - cited_text は引用文献の記載をそのまま抜粋してください（要約ではなく原文）
 - ×（不一致）の場合でも judgment_reason に「該当する記載なし」等の理由を記載してください"""
 
@@ -741,7 +781,7 @@ def _build_output_format_multi(citations, segments):
         "document_role": "{d['role']}",
         "comparisons": [
 {comparisons_str},
-            ... （全構成要件 {', '.join(claim1_ids)} について）
+            ... （全ての独立請求項の構成要件 {', '.join(independent_ids)} について）
         ]{sub_claim_example},
         "overall_summary": "文献の概要",
         "category_suggestion": "X or Y or A",
@@ -769,7 +809,8 @@ def _build_output_format_multi(citations, segments):
     return f"""## 出力フォーマット
 **{len(citations)}件の文献それぞれについて**、以下のJSON形式で回答してください。
 全文献の結果を `results` 配列にまとめてください。
-必ず全ての構成要件（{', '.join(claim1_ids)}）について各文献ごとに判定を含めてください。{sub_claim_required_msg}
+必ず全ての独立請求項の構成要件（{', '.join(independent_ids)}）について各文献ごとに判定を含めてください。
+請求項番号が2以降でも「独立」と表示された請求項は、sub_claims ではなく comparisons に分節単位で出力してください。{sub_claim_required_msg}
 
 ```json
 {{
@@ -782,7 +823,8 @@ def _build_output_format_multi(citations, segments):
 ### 出力時の注意
 - **文献ごとに独立して判定**してください（文献間の組合せ判断は不要）
 - judgment は必ず「○」「△」「×」のいずれかを使用してください
-- cited_location は **コンパクト記法**（数字=段落、CL=請求項、F=図、T=表、K=化、E=式、S=数、; で連結、, で複数、- で範囲）で出力してください。自然文（「段落【0020】」等）は禁止
+- cited_location は **コンパクト記法**（数字=段落、CL=請求項、F=図、T=表、K=化、E=式、S=数、P=ページ、C=コラム、G=行、; で異種連結、, で同種複数、- で範囲、/ でコメント、// で防備録メモ）で出力してください。自然文（「段落【0020】」等）は禁止
+- `CL`/`F`/`T`/`K`/`E`/`S`/`P`/`A`/`B`/`C`/`D`/`R`/`L`/`G` と数字を混同しないでください。例: `C4G12`、`P1A2-4`、`F1,1a,5C`、`T4/備考` を 1 文字ずつ保持してください
 - cited_text は引用文献の記載をそのまま抜粋してください（要約ではなく原文）
 - ×（不一致）の場合でも judgment_reason に「該当する記載なし」等の理由を記載してください
 - **全{len(citations)}件の文献について必ず結果を含めてください**

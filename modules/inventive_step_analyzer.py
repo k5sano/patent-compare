@@ -424,58 +424,151 @@ def _table_map(citation):
     return result
 
 
+def _evidence_category(resp):
+    role = _norm_id(resp.get("document_role", "")).upper()
+    category = _norm_id(resp.get("category_suggestion", "")).upper()
+    if role in ("X", "Y") or category in ("X", "Y"):
+        return "xy"
+    return "other"
+
+
+def _positive_count(resp):
+    return sum(1 for c in resp.get("comparisons", []) or [] if c.get("judgment") == "○")
+
+
+def _lookup_doc(citations_meta, doc_id):
+    return citations_meta.get(doc_id) or citations_meta.get(str(doc_id)) or {}
+
+
+def _referenced_paragraph_lines(resp, para_lookup, table_lookup, judgments, para_limit):
+    lines = []
+    for comp in resp.get("comparisons", []) or []:
+        judgment = comp.get("judgment")
+        if judgment not in judgments:
+            continue
+        req_id = comp.get("requirement_id", "?")
+        loc = comp.get("cited_location", "")
+        para_ids = _extract_para_ids(loc)
+        if judgment == "○":
+            para_ids = para_ids[:1]
+        for pid in para_ids:
+            para = para_lookup.get(pid)
+            if para:
+                lines.append(
+                    f"**{req_id}（{judgment}）←【{_norm_id(para.get('id'))}】**: "
+                    f"{_clip(para.get('text'), para_limit)}"
+                )
+        for tid in _extract_table_ids(loc):
+            table = table_lookup.get(tid) or table_lookup.get(f"T{tid}")
+            if table:
+                lines.append(
+                    f"**{req_id}（{judgment}）← 表{tid}**:\n"
+                    f"{_clip(_table_text(table), MAX_PER_TABLE_CHARS)}"
+                )
+    return lines
+
+
+def _build_citation_doc_evidence(doc_id, resp, cit, *, full_text=False):
+    lines = [f"\n### {doc_id}"]
+
+    problem_paras = [
+        p for p in cit.get("paragraphs", []) or []
+        if _section_matches(p, "課題", "効果", "目的")
+    ]
+    if problem_paras:
+        lines.append("#### 引例の課題・効果")
+        lines.extend(_format_para(p) for p in problem_paras[:4])
+
+    tables = cit.get("tables", []) or []
+    if tables:
+        lines.append("#### 引例の実施例表・数値データ")
+        selected_tables = tables if full_text else tables[:3]
+        for t in selected_tables:
+            tid = _norm_id(t.get("id") or t.get("table_number") or "?")
+            lines.append(f"**表{tid}**")
+            lines.append(_clip(_table_text(t), MAX_PER_TABLE_CHARS))
+
+    if full_text:
+        paras = cit.get("paragraphs", []) or []
+        if paras:
+            lines.append("#### 引例全文段落（X/Y 優先投入）")
+            lines.extend(_format_para(p, MAX_PER_PARA_CHARS) for p in paras)
+
+    para_lookup = _para_map(cit)
+    table_lookup = _table_map(cit)
+    if full_text:
+        evidence_lines = _referenced_paragraph_lines(
+            resp, para_lookup, table_lookup, {"○", "△", "×"}, MAX_PER_PARA_CHARS
+        )
+        label = "#### 対比で参照された段落・表（○△× 全根拠）"
+    else:
+        evidence_lines = _referenced_paragraph_lines(
+            resp, para_lookup, table_lookup, {"△", "×"}, MAX_PER_PARA_CHARS
+        )
+        evidence_lines.extend(
+            _referenced_paragraph_lines(
+                resp, para_lookup, table_lookup, {"○"}, max(120, min(200, MAX_PER_PARA_CHARS // 2))
+            )
+        )
+        label = "#### 対比で参照された段落・表（△・×の根拠、○は短縮）"
+    if evidence_lines:
+        lines.append(label)
+        lines.extend(evidence_lines)
+
+    return "\n".join(lines)
+
+
+def _join_budgeted_doc_blocks(blocks, budget):
+    if budget <= 0:
+        return ""
+    out = []
+    used = 0
+    for block in blocks:
+        if not block:
+            continue
+        sep = "\n" if out else ""
+        remain = budget - used - len(sep)
+        if remain <= 0:
+            break
+        if len(block) <= remain:
+            out.append(block)
+            used += len(sep) + len(block)
+        else:
+            out.append(_clip(block, remain))
+            break
+    return "\n".join(out)
+
+
 def _build_citation_evidence(responses, citations_meta):
     """対比結果で参照された段落・表の生本文を引用する。"""
     if not citations_meta:
         return ""
 
-    lines = ["## 引用文献の証拠（本文・表からの抽出）"]
-
+    xy_blocks = []
+    other_blocks = []
     for doc_id, resp in responses.items():
-        cit = citations_meta.get(doc_id) or citations_meta.get(str(doc_id)) or {}
+        cit = _lookup_doc(citations_meta, doc_id)
         if not cit:
             continue
+        if _evidence_category(resp) == "xy":
+            xy_blocks.append((_positive_count(resp), _build_citation_doc_evidence(doc_id, resp, cit, full_text=True)))
+        else:
+            other_blocks.append(_build_citation_doc_evidence(doc_id, resp, cit, full_text=False))
 
-        lines.append(f"\n### {doc_id}")
+    xy_blocks = [block for _score, block in sorted(xy_blocks, key=lambda x: x[0], reverse=True)]
+    xy_budget = int(MAX_CITATION_EVIDENCE_CHARS * 0.7)
+    other_budget = MAX_CITATION_EVIDENCE_CHARS - xy_budget
+    xy_text = _join_budgeted_doc_blocks(xy_blocks, xy_budget)
+    other_text = _join_budgeted_doc_blocks(other_blocks, other_budget)
 
-        problem_paras = [
-            p for p in cit.get("paragraphs", []) or []
-            if _section_matches(p, "課題", "効果", "目的")
-        ]
-        if problem_paras:
-            lines.append("#### 引例の課題・効果")
-            lines.extend(_format_para(p) for p in problem_paras[:4])
-
-        tables = cit.get("tables", []) or []
-        if tables:
-            lines.append("#### 引例の実施例表・数値データ")
-            for t in tables[:3]:
-                tid = _norm_id(t.get("id") or t.get("table_number") or "?")
-                lines.append(f"**表{tid}**")
-                lines.append(_clip(_table_text(t), MAX_PER_TABLE_CHARS))
-
-        para_lookup = _para_map(cit)
-        table_lookup = _table_map(cit)
-        evidence_lines = []
-        for comp in resp.get("comparisons", []) or []:
-            if comp.get("judgment") not in ("△", "×"):
-                continue
-            req_id = comp.get("requirement_id", "?")
-            loc = comp.get("cited_location", "")
-            for pid in _extract_para_ids(loc):
-                para = para_lookup.get(pid)
-                if para:
-                    evidence_lines.append(f"**{req_id} ←【{_norm_id(para.get('id'))}】**: {_clip(para.get('text'), MAX_PER_PARA_CHARS)}")
-            for tid in _extract_table_ids(loc):
-                table = table_lookup.get(tid) or table_lookup.get(f"T{tid}")
-                if table:
-                    evidence_lines.append(f"**{req_id} ← 表{tid}**:\n{_clip(_table_text(table), MAX_PER_TABLE_CHARS)}")
-
-        if evidence_lines:
-            lines.append("#### 対比で参照された段落・表（△・×の根拠）")
-            lines.extend(evidence_lines)
-
-    text = "\n".join(lines)
+    parts = ["## 引用文献の証拠（本文・表からの抽出）"]
+    if xy_text:
+        parts.append("### X/Y 文献（厚め投入・○数順）")
+        parts.append(xy_text)
+    if other_text:
+        parts.append("### その他文献（軽量投入）")
+        parts.append(other_text)
+    text = "\n".join(parts)
     if text.strip() == "## 引用文献の証拠（本文・表からの抽出）":
         return ""
     return _clip(text, MAX_CITATION_EVIDENCE_CHARS)

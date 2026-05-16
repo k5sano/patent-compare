@@ -78,6 +78,37 @@ def test_delete_citation_removes_registered_files_and_meta(copy_case_fixture):
     assert case_service.load_case_meta("smoke")["citations"] == []
 
 
+def test_delete_citation_removes_spaced_jplatpat_variants(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    meta = case_service.load_case_meta("smoke")
+    meta["citations"] = [{
+        "id": "JPA1993042929-000000",
+        "role": "主引例",
+        "label": "JPA1993042929-000000",
+    }]
+    case_service.save_case_meta("smoke", meta)
+    for sub in ("citations", "responses", "prompts", "input"):
+        (case_dir / sub).mkdir(exist_ok=True)
+    (case_dir / "citations" / "JPA1993042929-000000.json").write_text("{}", encoding="utf-8")
+    (case_dir / "responses" / "JPA 1993042929-000000.json").write_text("{}", encoding="utf-8")
+    (case_dir / "responses" / "JPA1993042929-000000.json").write_text("{}", encoding="utf-8")
+    (case_dir / "prompts" / "JPA 1993042929-000000.txt").write_text("prompt", encoding="utf-8")
+    (case_dir / "prompts" / "A_B_JPA1993042929-000000_prompt.txt").write_text("prompt", encoding="utf-8")
+    (case_dir / "input" / "JPA1993042929-000000.pdf").write_bytes(b"%PDF-1.4")
+
+    result, code = case_service.delete_citation("smoke", "JPA1993042929-000000")
+
+    assert code == 200
+    assert result["success"] is True
+    assert not (case_dir / "citations" / "JPA1993042929-000000.json").exists()
+    assert not (case_dir / "responses" / "JPA 1993042929-000000.json").exists()
+    assert not (case_dir / "responses" / "JPA1993042929-000000.json").exists()
+    assert not (case_dir / "prompts" / "JPA 1993042929-000000.txt").exists()
+    assert not (case_dir / "prompts" / "A_B_JPA1993042929-000000_prompt.txt").exists()
+    assert not (case_dir / "input" / "JPA1993042929-000000.pdf").exists()
+    assert case_service.load_case_meta("smoke")["citations"] == []
+
+
 def test_clear_all_citations_keeps_case_but_empties_work_files(copy_case_fixture):
     case_dir = copy_case_fixture("smoke")
     (case_dir / "prompts" / "JP2030000002A_prompt.txt").write_text("prompt", encoding="utf-8")
@@ -90,4 +121,3 @@ def test_clear_all_citations_keeps_case_but_empties_work_files(copy_case_fixture
     assert case_service.load_case_meta("smoke")["citations"] == []
     for sub in ("citations", "responses", "prompts"):
         assert list((case_dir / sub).iterdir()) == []
-

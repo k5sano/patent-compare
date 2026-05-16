@@ -32,11 +32,12 @@ from modules.cited_ref_notation import (
 
 
 # --- スタイル定義 ---
-FONT_TITLE = Font(name="游ゴシック", size=14, bold=True)
-FONT_HEADER = Font(name="游ゴシック", size=10, bold=True)
-FONT_NORMAL = Font(name="游ゴシック", size=10)
-FONT_SMALL = Font(name="游ゴシック", size=10)
-FONT_JUDGMENT = Font(name="游ゴシック", size=12, bold=True)
+EXCEL_FONT_NAME = "メイリオ"
+FONT_TITLE = Font(name=EXCEL_FONT_NAME, size=14, bold=True)
+FONT_HEADER = Font(name=EXCEL_FONT_NAME, size=10, bold=True)
+FONT_NORMAL = Font(name=EXCEL_FONT_NAME, size=10)
+FONT_SMALL = Font(name=EXCEL_FONT_NAME, size=10)
+FONT_JUDGMENT = Font(name=EXCEL_FONT_NAME, size=12, bold=True)
 
 FILL_GREEN = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")   # ○
 FILL_YELLOW = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")  # △
@@ -45,15 +46,17 @@ FILL_HEADER = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="s
 FILL_HEADER_LIGHT = PatternFill(start_color="D9E2F3", end_color="D9E2F3", fill_type="solid")
 FILL_SECTION = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
 
-FONT_WHITE = Font(name="游ゴシック", size=10, bold=True, color="FFFFFF")
+FONT_WHITE = Font(name=EXCEL_FONT_NAME, size=10, bold=True, color="FFFFFF")
 
 # PDF 注釈と同じキーワードグループ色。Excel はセル内の部分背景が弱いため、
 # コメント内では文字色 + 太字で近似する。
 GROUP_HIGHLIGHT_COLORS = [
-    "FF9999", "C7A6FF", "FF99D9", "99BFFF",
-    "99FFB3", "FFD180", "80F2D9", "BFC4CC",
+    "FFFF9999", "FFC7A6FF", "FFFF99D9", "FF99BFFF",
+    "FF99FFB3", "FFFFD180", "FF80F2D9", "FFBFC4CC",
 ]
-IMPORTANT_TERM_COLOR = "EF4444"
+IMPORTANT_TERM_COLOR = "FFEF4444"
+_ILLEGAL_XML_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+_MAX_EXCEL_CELL_CHARS = 32767
 
 ALIGNMENT_CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
 ALIGNMENT_LEFT = Alignment(horizontal="left", vertical="top", wrap_text=True)
@@ -80,6 +83,8 @@ def _get_judgment_fill(judgment):
 
 def _set_cell(ws, row, col, value, font=None, fill=None, alignment=None, border=None):
     """セルに値とスタイルを設定"""
+    if isinstance(value, str):
+        value = _excel_safe_text(value)
     cell = ws.cell(row=row, column=col, value=value)
     if font:
         cell.font = font
@@ -90,6 +95,17 @@ def _set_cell(ws, row, col, value, font=None, fill=None, alignment=None, border=
     if border:
         cell.border = border
     return cell
+
+
+def _excel_safe_text(value, max_chars=_MAX_EXCEL_CELL_CHARS):
+    """Excel XML に安全な文字列へ正規化する。"""
+    text = str(value or "")
+    if not text:
+        return ""
+    text = _ILLEGAL_XML_RE.sub("", text)
+    if len(text) > max_chars:
+        text = text[: max_chars - 15].rstrip() + "\n...[truncated]"
+    return text
 
 
 def _plain_excel_text(value):
@@ -110,7 +126,7 @@ def _plain_excel_text(value):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return _excel_safe_text(text.strip())
 
 
 def _keyword_color(gid):
@@ -119,6 +135,10 @@ def _keyword_color(gid):
     except (TypeError, ValueError):
         i = 1
     return GROUP_HIGHLIGHT_COLORS[(i - 1) % len(GROUP_HIGHLIGHT_COLORS)]
+
+
+def _rich_font(color, bold=False):
+    return InlineFont(rFont=EXCEL_FONT_NAME, color=color, b=bold)
 
 
 def _keyword_highlight_index(keywords):
@@ -152,25 +172,25 @@ def _find_keyword_positions(text, index):
 
 
 def _append_rich_important(rt, text, keywords):
-    text = str(text or "")
+    text = _excel_safe_text(text)
     if not text:
         return
     positions = _find_keyword_positions(text, _keyword_highlight_index(keywords))
     if not positions:
-        rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text))
+        rt.append(TextBlock(_rich_font(IMPORTANT_TERM_COLOR, bold=True), text))
         return
     prev = 0
     for p in positions:
         if p["start"] > prev:
-            rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text[prev:p["start"]]))
-        rt.append(TextBlock(InlineFont(color=p["color"], b=True), text[p["start"]:p["end"]]))
+            rt.append(TextBlock(_rich_font(IMPORTANT_TERM_COLOR, bold=True), text[prev:p["start"]]))
+        rt.append(TextBlock(_rich_font(p["color"], bold=True), text[p["start"]:p["end"]]))
         prev = p["end"]
     if prev < len(text):
-        rt.append(TextBlock(InlineFont(color=IMPORTANT_TERM_COLOR, b=True), text[prev:]))
+        rt.append(TextBlock(_rich_font(IMPORTANT_TERM_COLOR, bold=True), text[prev:]))
 
 
 def _append_rich_keywords(rt, text, keywords):
-    text = str(text or "")
+    text = _excel_safe_text(text)
     if not text:
         return
     positions = _find_keyword_positions(text, _keyword_highlight_index(keywords))
@@ -181,7 +201,7 @@ def _append_rich_keywords(rt, text, keywords):
     for p in positions:
         if p["start"] > prev:
             rt.append(text[prev:p["start"]])
-        rt.append(TextBlock(InlineFont(color=p["color"], b=True), text[p["start"]:p["end"]]))
+        rt.append(TextBlock(_rich_font(p["color"], bold=True), text[p["start"]:p["end"]]))
         prev = p["end"]
     if prev < len(text):
         rt.append(text[prev:])
@@ -295,37 +315,18 @@ def _populate_comparison_sheets(wb, case_meta, segments, responses, citations_me
               fill=FILL_RED)
     row += 2
 
-    # ===== セクション2: 請求項1の対比表 =====
-    claim1 = None
-    sub_claims = []
-    for claim in segments:
-        if claim["claim_number"] == 1:
-            claim1 = claim
+    # ===== セクション2: 請求項順の対比表 =====
+    # 独立請求項は分節単位、従属請求項は請求項単位で、segments.json の順番を保つ。
+    for idx, claim in enumerate(segments):
+        if idx > 0:
+            row += 1
+        if claim.get("is_independent") or claim.get("claim_number") == 1:
+            row = _write_claim_comparison(ws, row, claim, citation_order,
+                                          responses, citations_meta, case_meta,
+                                          keywords=keywords)
         else:
-            sub_claims.append(claim)
-
-    if claim1 is None:
-        # 請求項1がない場合は最初の独立請求項を使用
-        for claim in segments:
-            if claim.get("is_independent"):
-                claim1 = claim
-                break
-
-    if claim1:
-        row = _write_claim_comparison(ws, row, claim1, citation_order,
-                                       responses, citations_meta, case_meta,
-                                       keywords=keywords)
-        row += 2
-
-    # ===== セクション3: 従属請求項の対比表 =====
-    if sub_claims:
-        ws.merge_cells(start_row=row, start_column=1,
-                       end_row=row, end_column=2 + num_citations)
-        _set_cell(ws, row, 1, "従属請求項", font=FONT_TITLE, fill=FILL_SECTION)
-        row += 1
-
-        row = _write_sub_claims_table(ws, row, sub_claims, citation_order,
-                                       responses, citations_meta, keywords=keywords)
+            row = _write_sub_claims_table(ws, row, [claim], citation_order,
+                                          responses, citations_meta, keywords=keywords)
         row += 2
 
     # ===== セクション4: 文献リスト =====
@@ -407,7 +408,7 @@ def _format_comp_for_paste(comp):
     JS 側 `_formatCompForPaste` と同等。
       - judgment ○ → prefix なし
       - judgment △ → "?"
-      - judgment × → "x"
+      - judgment × → "!"
       - cited_location は raw 記法 (展開しない)。" コメントと // メモは除外。
       - 末尾: コメント (manual) があれば "/<comment>"。
         なければ judgment_reason (△/× のみ、短縮形) を "/" で付ける。
@@ -419,7 +420,7 @@ def _format_comp_for_paste(comp):
     if j == "△":
         prefix = "?"
     elif j == "×":
-        prefix = "x"
+        prefix = "!"
 
     raw = comp.get("cited_location") or ""
     loc_only = _strip_comment_memo_from_loc(raw)
@@ -498,52 +499,36 @@ def _write_paste_sheet(wb, segments, citation_order, responses, citations_meta, 
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=2 + num_cit)
     _set_cell(ws, row, 1,
               "貼付用フォーマット: 各引例の列をコピーして既存対比表へ縦方向に貼付け。"
-              "判定 ○ は prefix なし、△ は ?、× は x を冠。/ 以降はコメント。",
+              "判定 ○ は prefix なし、△ は ?、× は ! を冠。/ 以降はコメント。",
               font=FONT_SMALL, alignment=ALIGNMENT_LEFT,
               fill=FILL_HEADER_LIGHT, border=THIN_BORDER)
     row += 1
 
-    # 請求項を分類
-    claim1 = None
-    sub_claims = []
-    for claim in segments:
-        if claim.get("claim_number") == 1:
-            claim1 = claim
-        elif claim.get("is_independent") and claim1 is None:
-            claim1 = claim
-        else:
-            sub_claims.append(claim)
-    if claim1 is None and segments:
-        # フォールバック: 最初を独立クレームとみなす
-        claim1 = segments[0]
-        sub_claims = list(segments[1:])
-    sub_claims.sort(key=lambda c: c.get("claim_number") or 0)
-
-    # 請求項1 の分節 (空行なしで連続)
-    if claim1:
-        for seg in claim1.get("segments", []):
-            seg_id = seg.get("id", "")
-            seg_text = seg.get("text", "")
-            _set_cell(ws, row, 1, seg_id, font=FONT_NORMAL,
-                      alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
-            _set_cell(ws, row, 2, seg_text, font=FONT_NORMAL,
-                      alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
-            for i, cit_id in enumerate(citation_order):
-                resp = responses.get(cit_id, {})
-                comp = _find_comparison(resp, seg_id)
-                cell_val = _format_comp_for_paste(comp) if comp else ""
-                fill = _get_judgment_fill(comp.get("judgment", "")) if comp else None
-                _set_cell(ws, row, 3 + i, cell_val, font=FONT_NORMAL,
-                          alignment=ALIGNMENT_LEFT, border=THIN_BORDER, fill=fill)
+    # segments.json の請求項順を保つ。独立請求項は分節単位、従属請求項は請求項単位。
+    for idx_claim, claim in enumerate(segments):
+        if idx_claim > 0:
+            for col in range(1, 3 + num_cit):
+                _set_cell(ws, row, col, "", border=THIN_BORDER)
             row += 1
-
-    # 従属請求項 (各々の前に空行 1)
-    for claim in sub_claims:
-        # 空行
-        for col in range(1, 3 + num_cit):
-            _set_cell(ws, row, col, "", border=THIN_BORDER)
-        row += 1
         claim_num = claim.get("claim_number")
+        if claim.get("is_independent") or claim_num == 1:
+            for seg in claim.get("segments", []):
+                seg_id = seg.get("id", "")
+                seg_text = seg.get("text", "")
+                _set_cell(ws, row, 1, seg_id, font=FONT_NORMAL,
+                          alignment=ALIGNMENT_CENTER, border=THIN_BORDER)
+                _set_cell(ws, row, 2, seg_text, font=FONT_NORMAL,
+                          alignment=ALIGNMENT_LEFT, border=THIN_BORDER)
+                for i, cit_id in enumerate(citation_order):
+                    resp = responses.get(cit_id, {})
+                    comp = _find_comparison(resp, seg_id)
+                    cell_val = _format_comp_for_paste(comp) if comp else ""
+                    fill = _get_judgment_fill(comp.get("judgment", "")) if comp else None
+                    _set_cell(ws, row, 3 + i, cell_val, font=FONT_NORMAL,
+                              alignment=ALIGNMENT_LEFT, border=THIN_BORDER, fill=fill)
+                row += 1
+            continue
+
         # 通番ID: "{claim_num}a" 形 (1a/1b と並ぶ慣行に合わせる)
         # 元データに segments[0].id があればそれを優先 (既存形式へ追従)
         seg_id_default = f"{claim_num}a"
@@ -839,10 +824,24 @@ def _write_rejection_strategy(ws, row, citation_order, responses, num_citations)
 
 
 def _find_comparison(resp, segment_id):
-    """回答データから指定された構成要件の比較結果を検索"""
+    """回答データから指定された構成要件の比較結果を検索。
+
+    旧プロンプトでは、請求項2/4/8/9のような後続独立請求項が
+    ``sub_claims`` に入っていた。正式には再対比対象だが、完成版Excelの
+    空欄を減らすため、``requirement_id`` が一致する旧データを暫定利用する。
+    """
     for comp in resp.get("comparisons", []):
         if comp.get("requirement_id") == segment_id:
             return comp
+    for sc in resp.get("sub_claims", []):
+        if sc.get("requirement_id") == segment_id:
+            return sc
+    m = re.match(r"^(\d+)", str(segment_id or ""))
+    claim_number = int(m.group(1)) if m else None
+    if claim_number is not None:
+        for sc in resp.get("sub_claims", []):
+            if sc.get("claim_number") == claim_number:
+                return sc
     return None
 
 

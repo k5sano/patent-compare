@@ -59,10 +59,87 @@ def test_build_citation_evidence_includes_partial_and_negative_evidence():
     }
     text = _build_citation_evidence(responses, citations_meta)
     assert "引例の課題・効果" in text
-    assert "1B ←【0023】" in text
+    assert "1B（△）←【0023】" in text
     assert "短繊維長は2mm" in text
-    assert "1C ←【0030】" in text
+    assert "1C（×）←【0030】" in text
     assert "表1" in text
+
+
+def test_build_citation_evidence_x_reference_includes_all_paragraphs_and_tables():
+    responses = {
+        "DX": {
+            "document_role": "X",
+            "comparisons": [
+                {"requirement_id": "1A", "judgment": "○", "cited_location": "1"},
+                {"requirement_id": "1B", "judgment": "△", "cited_location": "2;T2"},
+                {"requirement_id": "1C", "judgment": "×", "cited_location": "3"},
+            ],
+        }
+    }
+    citations_meta = {
+        "DX": {
+            "paragraphs": [
+                {"id": "0001", "section": "背景", "text": "全文段落1。"},
+                {"id": "0002", "section": "実施例", "text": "全文段落2。"},
+                {"id": "0003", "section": "比較例", "text": "全文段落3。"},
+            ],
+            "tables": [
+                {"id": "1", "content": "表1 全件投入"},
+                {"id": "2", "content": "表2 全件投入"},
+                {"id": "3", "content": "表3 全件投入"},
+                {"id": "4", "content": "表4 全件投入"},
+            ],
+        }
+    }
+
+    text = _build_citation_evidence(responses, citations_meta)
+
+    assert "X/Y 文献" in text
+    assert "引例全文段落" in text
+    assert "全文段落1" in text
+    assert "全文段落2" in text
+    assert "全文段落3" in text
+    assert "表1 全件投入" in text
+    assert "表4 全件投入" in text
+    assert "1A（○）←【0001】" in text
+    assert "1B（△）←【0002】" in text
+    assert "1C（×）←【0003】" in text
+
+
+def test_build_citation_evidence_a_reference_keeps_lightweight_with_short_positive():
+    long_positive = "○根拠。" + "長い本文" * 80
+    responses = {
+        "DA": {
+            "document_role": "A",
+            "comparisons": [
+                {"requirement_id": "1A", "judgment": "○", "cited_location": "1,2"},
+                {"requirement_id": "1B", "judgment": "△", "cited_location": "3"},
+                {"requirement_id": "1C", "judgment": "×", "cited_location": "4"},
+            ],
+        }
+    }
+    citations_meta = {
+        "DA": {
+            "paragraphs": [
+                {"id": "0001", "section": "実施例", "text": long_positive},
+                {"id": "0002", "section": "実施例", "text": "○2番目の根拠段落。"},
+                {"id": "0003", "section": "実施例", "text": "△根拠段落。"},
+                {"id": "0004", "section": "比較例", "text": "×根拠段落。"},
+                {"id": "0005", "section": "本文", "text": "無関係な本文段落。"},
+            ],
+            "tables": [],
+        }
+    }
+
+    text = _build_citation_evidence(responses, citations_meta)
+
+    assert "その他文献" in text
+    assert "1B（△）←【0003】" in text
+    assert "1C（×）←【0004】" in text
+    assert "1A（○）←【0001】" in text
+    assert "○2番目の根拠段落" not in text
+    assert "無関係な本文段落" not in text
+    assert "...[trimmed]" in text
 
 
 def test_generate_prompt_uses_hongan_and_citation_evidence():

@@ -60,6 +60,7 @@ def _write_annotated_pdf(
     migrate_bookmarks_from=None,
     case_id=None,
     citation_id=None,
+    segments=None,
 ):
     """注釈PDFを書き出す。出力先がロック中なら別名にフォールバック。
 
@@ -79,7 +80,8 @@ def _write_annotated_pdf(
     try:
         result = annotate_citation_pdf(
             pdf_path, target, response_data, citation_data, keywords,
-            migrate_bookmarks_from=migrate_from)
+            migrate_bookmarks_from=migrate_from,
+            segments=segments)
         if case_id and citation_id:
             write_annotation_meta(
                 target,
@@ -99,7 +101,8 @@ def _write_annotated_pdf(
             alt = output_dir / f"{safe_name}_annotated_{ts}.pdf"
             result = annotate_citation_pdf(
                 pdf_path, alt, response_data, citation_data, keywords,
-                migrate_bookmarks_from=migrate_from)
+                migrate_bookmarks_from=migrate_from,
+                segments=segments)
             if case_id and citation_id:
                 write_annotation_meta(
                     alt,
@@ -186,14 +189,56 @@ def _load_citation_for_prompt(case_id, cit_id, case_dir):
     (search_runs/_hit_text/<id>.json) があれば本文を補完する。
     存在しない場合は (None, error_msg) を返す。
     """
-    cit_path = case_dir / "citations" / f"{cit_id}.json"
+    cit_path = _resolve_citation_json_path(case_id, cit_id, case_dir)
     if not cit_path.exists():
         return None, f"引用文献 '{cit_id}' が見つかりません"
     with open(cit_path, "r", encoding="utf-8") as f:
         citation = json.load(f)
-    citation = _enrich_citation_with_hit_text(case_id, cit_id, citation)
-    citation = _enrich_citation_with_extracted_tables(case_id, cit_id, citation)
+    resolved_id = cit_path.stem
+    citation = _enrich_citation_with_hit_text(case_id, resolved_id, citation)
+    citation = _enrich_citation_with_extracted_tables(case_id, resolved_id, citation)
     return citation, None
+
+
+def _resolve_citation_json_path(case_id, cit_id, case_dir):
+    """citation id の表記ゆれを吸収して citations/<id>.json を返す。
+
+    J-PlatPat 由来 ID は `JPA1993042929-000000` と
+    `JPA 1993042929-000000` のように、LLM 応答・古い response・prompt の
+    経路で空白入りに揺れることがある。自動再対比で古い response の stem が
+    渡されても、実体 JSON が空白なしで存在すればそこへ吸着する。
+    """
+    citations_dir = case_dir / "citations"
+    exact = citations_dir / f"{cit_id}.json"
+    if exact.exists():
+        return exact
+
+    def _key(value):
+        return "".join(ch for ch in str(value or "") if ch.isalnum()).upper()
+
+    wanted = _key(cit_id)
+    if not wanted:
+        return exact
+
+    # まず case.yaml の id / label から解決する。
+    meta = load_case_meta(case_id) or {}
+    for c in meta.get("citations") or []:
+        if not isinstance(c, dict):
+            continue
+        cand_id = c.get("id")
+        if not cand_id:
+            continue
+        keys = {_key(cand_id), _key(c.get("label"))}
+        if wanted in keys:
+            p = citations_dir / f"{cand_id}.json"
+            if p.exists():
+                return p
+
+    # 最後に実ファイル名で吸着する。case.yaml が古い/壊れている場合の保険。
+    for p in citations_dir.glob("*.json"):
+        if _key(p.stem) == wanted:
+            return p
+    return exact
 
 
 def _enrich_citation_with_extracted_tables(case_id, cit_id, citation):
@@ -222,9 +267,13 @@ def _enrich_citation_with_extracted_tables(case_id, cit_id, citation):
 def _annotate_worker(job):
     """プロセスプールのワーカー。ピックル可能にするためモジュールトップレベルに置く。
 
-    job: (case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords)
+    job: (case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords, segments)
     """
-    case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords = job
+    if len(job) >= 8:
+        case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords, segments = job
+    else:
+        case_id, cit_id, pdf_path, output_dir, response_data, citation_data, keywords = job
+        segments = None
     safe_name = re.sub(r'[<>:"/\\|?*]', '_', cit_id)
     migrate_from = Path(output_dir) / f"{safe_name}_annotated.pdf"
     try:
@@ -233,7 +282,8 @@ def _annotate_worker(job):
             response_data, citation_data, keywords,
             migrate_bookmarks_from=migrate_from,
             case_id=case_id,
-            citation_id=cit_id)
+            citation_id=cit_id,
+            segments=segments)
         return {"citation_id": cit_id, "success": True,
                 "filename": actual_path.name, **result}
     except Exception as e:

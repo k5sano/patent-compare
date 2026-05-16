@@ -108,6 +108,84 @@ class TestMatched:
         # response_count は 1 のまま (DOC1.json のみ)
         assert out["response_count"] == 1
 
+    def test_deleted_citation_response_is_not_auto_recompare_target(self, case_with_segments):
+        """case.yaml から削除済みの古い response は自動再対比対象に混ぜない。"""
+        case_id, case_dir = case_with_segments
+        meta = case_service.load_case_meta(case_id)
+        meta["citations"] = [{"id": "DOC1", "label": "DOC1"}]
+        case_service.save_case_meta(case_id, meta)
+        (case_dir / "citations" / "DOC1.json").write_text(
+            json.dumps({"patent_number": "DOC1", "paragraphs": []}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _make_response(case_dir, "DOC1", ["1A", "1B", "1C"])
+        _make_response(case_dir, "DELETED", ["1X"])
+
+        out, _ = check_segments_freshness(case_id)
+
+        assert out["has_responses"] is True
+        assert out["response_count"] == 2
+        assert out["citation_ids_with_responses"] == ["DOC1"]
+        assert out["stale_response_ids"] == ["DELETED"]
+        assert out["orphans_in_responses"] == {}
+        assert out["missing_in_responses"] == []
+        assert out["needs_recompare"] is False
+
+    def test_only_deleted_citation_responses_do_not_trigger_recompare(self, case_with_segments):
+        """削除済み文献の response しか残っていない場合、再対比対象は空にする。"""
+        case_id, case_dir = case_with_segments
+        meta = case_service.load_case_meta(case_id)
+        meta["citations"] = [{"id": "DOC1", "label": "DOC1"}]
+        case_service.save_case_meta(case_id, meta)
+        _make_response(case_dir, "DELETED", ["1X"])
+
+        out, _ = check_segments_freshness(case_id)
+
+        assert out["has_responses"] is True
+        assert out["response_count"] == 1
+        assert out["citation_ids_with_responses"] == []
+        assert out["stale_response_ids"] == ["DELETED"]
+        assert out["needs_recompare"] is False
+
+    def test_meta_citation_without_json_is_not_auto_recompare_target(self, case_with_segments):
+        """case.yaml に残るが citations JSON が無い文献は自動再対比対象にしない。"""
+        case_id, case_dir = case_with_segments
+        meta = case_service.load_case_meta(case_id)
+        meta["citations"] = [
+            {"id": "DOC1", "label": "DOC1"},
+            {"id": "JPA 1993042929-000000", "label": "欠落文献"},
+        ]
+        case_service.save_case_meta(case_id, meta)
+        (case_dir / "citations" / "DOC1.json").write_text(
+            json.dumps({"patent_number": "DOC1", "paragraphs": []}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _make_response(case_dir, "DOC1", ["1A", "1B", "1C"])
+        _make_response(case_dir, "JPA 1993042929-000000", ["1X"])
+
+        out, _ = check_segments_freshness(case_id)
+
+        assert out["citation_ids_with_responses"] == ["DOC1"]
+        assert out["missing_citation_ids"] == ["JPA 1993042929-000000"]
+        assert out["stale_response_ids"] == ["JPA 1993042929-000000"]
+        assert out["needs_recompare"] is False
+
+    def test_all_meta_citations_missing_json_do_not_trigger_recompare(self, case_with_segments):
+        case_id, case_dir = case_with_segments
+        meta = case_service.load_case_meta(case_id)
+        meta["citations"] = [{"id": "JPA 1993042929-000000", "label": "欠落文献"}]
+        case_service.save_case_meta(case_id, meta)
+        _make_response(case_dir, "JPA 1993042929-000000", ["1X"])
+
+        out, _ = check_segments_freshness(case_id)
+
+        assert out["has_responses"] is True
+        assert out["response_count"] == 1
+        assert out["citation_ids_with_responses"] == []
+        assert out["missing_citation_ids"] == ["JPA 1993042929-000000"]
+        assert out["stale_response_ids"] == ["JPA 1993042929-000000"]
+        assert out["needs_recompare"] is False
+
 
 class TestMissing:
     def test_segments_added_after_compare(self, case_with_segments):
@@ -217,6 +295,77 @@ class TestSubClaims:
             }, f, ensure_ascii=False)
         out, _ = check_segments_freshness(case_id)
         assert out["missing_in_responses"] == ["4A"]
+        assert out["needs_recompare"] is True
+
+    def test_independent_claim_after_claim1_is_not_covered_by_sub_claims(self, tmp_path, monkeypatch):
+        """請求項9などの後続独立請求項は sub_claims 一括判定でカバー済みにしない。"""
+        monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "cases").mkdir()
+        case_id = "2030-independent9"
+        case_service.create_minimal_case(case_id, title="x", field="cosmetics")
+        case_dir = tmp_path / "cases" / case_id
+        segs = [
+            {"claim_number": 1, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "1A", "text": "x"}]},
+            {"claim_number": 9, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "9A", "text": "y"}, {"id": "9B", "text": "z"}]},
+        ]
+        with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False)
+
+        rdir = case_dir / "responses"
+        rdir.mkdir(parents=True, exist_ok=True)
+        with open(rdir / "DOC1.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": "DOC1",
+                "comparisons": [{"requirement_id": "1A", "judgment": "○"}],
+                # 旧プロンプト由来の誤った形。これは 9A/9B をカバーした扱いにしない。
+                "sub_claims": [{"claim_number": 9, "requirement_id": "9A", "judgment": "○"}],
+            }, f, ensure_ascii=False)
+
+        out, _ = check_segments_freshness(case_id)
+        assert out["missing_in_responses"] == ["9A", "9B"]
+        assert out["missing_by_response"] == {"DOC1": ["9A", "9B"]}
+        assert out["recompare_citation_ids"] == ["DOC1"]
+        assert out["needs_recompare"] is True
+
+    def test_one_updated_response_does_not_mask_other_incomplete_responses(self, tmp_path, monkeypatch):
+        """1文献だけ新形式になっても、他文献の未対比分節は再対比対象に残す。"""
+        monkeypatch.setattr(case_service, "PROJECT_ROOT", tmp_path)
+        (tmp_path / "cases").mkdir()
+        case_id = "2030-per-doc-missing"
+        case_service.create_minimal_case(case_id, title="x", field="cosmetics")
+        case_dir = tmp_path / "cases" / case_id
+        segs = [
+            {"claim_number": 1, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "1A", "text": "x"}]},
+            {"claim_number": 9, "is_independent": True, "dependencies": [],
+             "segments": [{"id": "9A", "text": "y"}, {"id": "9B", "text": "z"}]},
+        ]
+        with open(case_dir / "segments.json", "w", encoding="utf-8") as f:
+            json.dump(segs, f, ensure_ascii=False)
+        rdir = case_dir / "responses"
+        rdir.mkdir(parents=True, exist_ok=True)
+        with open(rdir / "DOC1.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": "DOC1",
+                "comparisons": [
+                    {"requirement_id": "1A", "judgment": "○"},
+                    {"requirement_id": "9A", "judgment": "○"},
+                    {"requirement_id": "9B", "judgment": "○"},
+                ],
+            }, f, ensure_ascii=False)
+        with open(rdir / "DOC2.json", "w", encoding="utf-8") as f:
+            json.dump({
+                "document_id": "DOC2",
+                "comparisons": [{"requirement_id": "1A", "judgment": "○"}],
+                "sub_claims": [{"claim_number": 9, "requirement_id": "9A", "judgment": "○"}],
+            }, f, ensure_ascii=False)
+
+        out, _ = check_segments_freshness(case_id)
+        assert out["missing_in_responses"] == ["9A", "9B"]
+        assert out["missing_by_response"] == {"DOC2": ["9A", "9B"]}
+        assert out["recompare_citation_ids"] == ["DOC2"]
         assert out["needs_recompare"] is True
 
 

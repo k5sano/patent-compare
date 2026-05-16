@@ -285,6 +285,12 @@ def update_comparison_cell(case_id, citation_id, target_kind, target_key, fields
     for k in allowed:
         if k in fields and fields[k] is not None:
             target[k] = str(fields[k]) if not isinstance(fields[k], str) else fields[k]
+            if k == "cited_location" and target[k]:
+                try:
+                    from modules.cited_ref_notation import normalize as _norm
+                    target[k] = _norm(target[k])
+                except Exception:
+                    pass
             updated[k] = target[k]
 
     # 手動編集の証跡 (UI バッジ表示用)

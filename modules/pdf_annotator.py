@@ -35,6 +35,26 @@ _GROUP_COLORS = [
     (0.5, 0.95, 0.85),   # ティール系
 ]
 
+_CLAIM_MARKER_PREFIX = "__claim__:"
+
+
+def _claim_marker(claim_number):
+    try:
+        n = int(str(claim_number).translate(_FW2HW))
+    except (TypeError, ValueError):
+        return "__claims__"
+    return f"{_CLAIM_MARKER_PREFIX}{n}"
+
+
+def _claim_number_from_marker(marker):
+    text = str(marker or "")
+    if not text.startswith(_CLAIM_MARKER_PREFIX):
+        return None
+    try:
+        return int(text[len(_CLAIM_MARKER_PREFIX):])
+    except ValueError:
+        return None
+
 
 def annotate_citation_pdf(
     pdf_path,
@@ -43,6 +63,7 @@ def annotate_citation_pdf(
     citation,
     keywords=None,
     migrate_bookmarks_from=None,
+    segments=None,
 ):
     """引用文献PDFに対比結果の注釈を追加
 
@@ -54,6 +75,8 @@ def annotate_citation_pdf(
         keywords: キーワードグループ (keywords.json の内容, optional)
         migrate_bookmarks_from: 旧注釈PDF。ユーザー作成ブックマークだけを
             新PDFの「旧版から移行」配下へ移す (optional)
+        segments: segments.json の内容。指定時はブックマークを対比表と同じ
+            請求項順・分節順に並べる (optional)
 
     Returns:
         dict: 処理結果
@@ -76,14 +99,14 @@ def annotate_citation_pdf(
     label_count = _draw_segment_labels(doc, response, para_page_map, claims_page)
 
     # 3. ブックマーク: 段落番号の y 座標まで飛ぶ詳細 dest を作る。
-    #    この時点では元 PDF のページ番号で解決し、後でサマリーページ分だけ +1 する。
-    toc_entries = _build_toc_entries(response, doc, para_page_map, claims_page)
+    #    サマリーページは末尾に追加するので、元 PDF 側のページ番号はそのまま使う。
+    toc_entries = _build_toc_entries(response, doc, para_page_map, claims_page, segments=segments)
 
-    # 4. 先頭に注釈サマリーを挿入
+    # 4. 末尾に注釈サマリーを追加
     _insert_summary_page(doc, response, citation)
 
-    # 5. TOC。先頭サマリーページを 1 ページ目にしたので、元 PDF 側は +1。
-    toc = _build_toc(response, toc_entries, page_offset=1)
+    # 5. TOC。元 PDF 側はページ番号そのまま、サマリーは最終ページ。
+    toc = _build_toc(response, toc_entries, summary_page=doc.page_count)
     if migrated_bookmarks:
         _append_migrated_bookmarks(toc, migrated_bookmarks, doc.page_count)
     doc.set_toc(toc)
@@ -185,11 +208,11 @@ def _summary_missing_items(response):
 
 
 def _insert_summary_page(doc, response, citation):
-    """注釈 PDF の 1 ページ目に文献概要・カテゴリ・未充足構成を挿入。"""
+    """注釈 PDF の最終ページに文献概要・カテゴリ・未充足構成を追加。"""
     first = doc[0] if doc.page_count else None
     width = first.rect.width if first else 595
     height = first.rect.height if first else 842
-    page = doc.new_page(pno=0, width=width, height=height)
+    page = doc.new_page(width=width, height=height)
 
     margin = 42
     y = 42
@@ -262,7 +285,7 @@ def _insert_summary_page(doc, response, citation):
         _draw_textbox(page, fitz.Rect(margin, y, width - margin, y + 16),
                       "× または △ の構成要件はありません。", fontsize=9, color=muted)
 
-    footer = "以降のページに元PDFと注釈があります。ブックマークから該当段落番号の位置へ移動できます。"
+    footer = "前ページまでが元PDFと注釈です。ブックマークから該当段落番号の位置へ移動できます。"
     _draw_textbox(page, fitz.Rect(margin, height - 42, width - margin, height - 24),
                   footer, fontsize=8, color=muted)
     return page
@@ -291,7 +314,7 @@ def _parse_cited_paragraphs(cited_location):
       - 旧: `【0012】` (4 桁ブラケット)
       - 新コンパクト記法 (modules.cited_ref_notation): `12;CL1`, `67;CL1:CL3`, `63,67-72;F2` など
         - kind=para → ゼロパディング 4 桁化して追加
-        - kind=claim → "__claims__" を追加 (請求項ページに飛ばす)
+        - kind=claim → "__claim__:N" を追加 (請求項Nへ飛ばす)
         - 他の kind (page/column/figure/table/...) は段落ジャンプ対象外なのでスキップ
     """
     if not cited_location:
@@ -307,9 +330,6 @@ def _parse_cited_paragraphs(cited_location):
     # 旧 ブラケット記法
     for m in re.finditer(r"[【\[](\d{2,5})[】\]]", cited_location):
         _add(f"{int(m.group(1)):04d}")
-    # 旧キーワード「請求項」 / コンパクト記法の "CL" 接頭辞
-    if "請求項" in cited_location or re.search(r"\bCL\d", cited_location):
-        _add("__claims__")
 
     # 新コンパクト記法
     try:
@@ -323,11 +343,44 @@ def _parse_cited_paragraphs(cited_location):
                     except (TypeError, ValueError):
                         pass
             elif ref.kind == "claim":
-                _add("__claims__")
+                values = ref.values or []
+                if values:
+                    for v in values:
+                        _add(_claim_marker(v))
+                else:
+                    _add("__claims__")
             # page/column/figure/table/chem/formula/eq は段落の直接ジャンプ対象外
     except Exception:
         # parser 失敗時は旧来のブラケット結果のみで継続
         pass
+
+    # 自然文表記の後方互換: "請求項7" / "請求項７"
+    for m in re.finditer(r"請求\s*項\s*([0-9０-９]+)", cited_location):
+        _add(_claim_marker(m.group(1)))
+
+    # parser 失敗時の保険: CL7 / CL6,7 / CL1-3
+    if not any(str(x).startswith(_CLAIM_MARKER_PREFIX) or x == "__claims__" for x in results):
+        for m in re.finditer(r"\bCL([0-9,\-]+)", cited_location, flags=re.IGNORECASE):
+            for chunk in m.group(1).split(","):
+                chunk = chunk.strip()
+                if not chunk:
+                    continue
+                if "-" in chunk:
+                    try:
+                        a, b = [int(x) for x in chunk.split("-", 1)]
+                    except ValueError:
+                        continue
+                    if a <= b:
+                        for n in range(a, b + 1):
+                            _add(_claim_marker(n))
+                    else:
+                        _add(_claim_marker(a))
+                        _add(_claim_marker(b))
+                elif chunk.isdigit():
+                    _add(_claim_marker(chunk))
+
+    if "請求項" in cited_location and not any(str(x).startswith(_CLAIM_MARKER_PREFIX) for x in results):
+        _add("__claims__")
 
     return results
 
@@ -376,7 +429,8 @@ def _draw_segment_labels(doc, response, para_page_map, claims_page):
         cited_loc = sub.get("cited_location", "")
         color = _JUDGMENT_COLORS.get(judgment, _DEFAULT_COLOR)
         paras = _parse_cited_paragraphs(cited_loc)
-        label = f"Cl{claim_num} {judgment}"
+        req_id = str(sub.get("requirement_id") or "").strip()
+        label = f"{req_id or f'CL{claim_num}'} {judgment}"
 
         for para_id in paras:
             if para_id == "__claims__":
@@ -420,13 +474,23 @@ def _draw_segment_labels(doc, response, para_page_map, claims_page):
 
 def _resolve_paragraph_location(doc, para_id, cited_loc, para_page_map, claims_page):
     """段落IDからPDF上の位置を解決"""
-    if para_id == "__claims__":
-        cm = re.search(r"請求項(\d+)", cited_loc)
-        if not cm:
+    claim_num = _claim_number_from_marker(para_id)
+    if para_id == "__claims__" or claim_num is not None:
+        if claim_num is None:
+            cm = re.search(r"(?:請求\s*項|CL)\s*([0-9０-９]+)", cited_loc, flags=re.IGNORECASE)
+            if cm:
+                try:
+                    claim_num = int(cm.group(1).translate(_FW2HW))
+                except ValueError:
+                    claim_num = None
+        if claim_num is None:
             return None, None
+        claim_s = str(claim_num)
         variants = [
-            "【請求項" + cm.group(1).translate(_HW2FW) + "】",
-            "【請求項" + cm.group(1) + "】",
+            "【請求項" + claim_s.translate(_HW2FW) + "】",
+            "【請求項" + claim_s + "】",
+            "請求項" + claim_s.translate(_HW2FW),
+            "請求項" + claim_s,
         ]
         for sv in variants:
             pn, rect = _find_rect_in_pdf(doc, sv, claims_page)
@@ -573,7 +637,123 @@ def _append_migrated_bookmarks(toc, migrated_bookmarks, page_count):
         ])
 
 
-def _build_toc_entries(response, doc, para_page_map, claims_page):
+def _iter_response_items_in_display_order(response, segments=None):
+    """対比表と同じ請求項順・分節順で response 項目を返す。
+
+    segments が無い場合は従来互換で comparisons → sub_claims の順。
+    """
+    comparisons = response.get("comparisons", []) or []
+    sub_claims = response.get("sub_claims", []) or []
+
+    if not segments:
+        for comp in comparisons:
+            rid = str(comp.get("requirement_id") or "").strip()
+            yield {
+                "label": rid or "?",
+                "judgment": comp.get("judgment", ""),
+                "cited_location": comp.get("cited_location", ""),
+                "source": comp,
+            }
+        for sub in sub_claims:
+            label = str(sub.get("requirement_id") or "").strip()
+            if not label:
+                label = f"請求項{sub.get('claim_number', '?')}"
+            yield {
+                "label": label,
+                "judgment": sub.get("judgment", ""),
+                "cited_location": sub.get("cited_location", ""),
+                "source": sub,
+            }
+        return
+
+    comp_by_req = {
+        str(comp.get("requirement_id") or "").strip(): comp
+        for comp in comparisons
+        if str(comp.get("requirement_id") or "").strip()
+    }
+    sub_by_claim = {}
+    sub_by_req = {}
+    for sub in sub_claims:
+        req = str(sub.get("requirement_id") or "").strip()
+        if req:
+            sub_by_req[req] = sub
+        try:
+            sub_by_claim[int(sub.get("claim_number"))] = sub
+        except (TypeError, ValueError):
+            pass
+
+    seen_comp = set()
+    seen_sub = set()
+
+    for claim in segments or []:
+        try:
+            claim_number = int(claim.get("claim_number"))
+        except (TypeError, ValueError):
+            claim_number = None
+        is_independent = bool(claim.get("is_independent")) or claim_number == 1
+        if is_independent:
+            for seg in claim.get("segments") or []:
+                rid = str(seg.get("id") or "").strip()
+                if not rid:
+                    continue
+                comp = comp_by_req.get(rid)
+                if not comp:
+                    continue
+                seen_comp.add(rid)
+                yield {
+                    "label": rid,
+                    "judgment": comp.get("judgment", ""),
+                    "cited_location": comp.get("cited_location", ""),
+                    "source": comp,
+                }
+        else:
+            sub = None
+            # 従属請求項も 5A のような requirement_id を持つ場合があるので優先的に引く。
+            for seg in claim.get("segments") or []:
+                rid = str(seg.get("id") or "").strip()
+                if rid and rid in sub_by_req:
+                    sub = sub_by_req[rid]
+                    break
+            if sub is None and claim_number is not None:
+                sub = sub_by_claim.get(claim_number)
+            if not sub:
+                continue
+            req = str(sub.get("requirement_id") or "").strip()
+            label = req or f"請求項{sub.get('claim_number', claim_number or '?')}"
+            seen_sub.add(id(sub))
+            yield {
+                "label": label,
+                "judgment": sub.get("judgment", ""),
+                "cited_location": sub.get("cited_location", ""),
+                "source": sub,
+            }
+
+    # segments.json と応答がずれている場合も、残りを落とさない。
+    for comp in comparisons:
+        rid = str(comp.get("requirement_id") or "").strip()
+        if rid and rid in seen_comp:
+            continue
+        yield {
+            "label": rid or "?",
+            "judgment": comp.get("judgment", ""),
+            "cited_location": comp.get("cited_location", ""),
+            "source": comp,
+        }
+    for sub in sub_claims:
+        if id(sub) in seen_sub:
+            continue
+        label = str(sub.get("requirement_id") or "").strip()
+        if not label:
+            label = f"請求項{sub.get('claim_number', '?')}"
+        yield {
+            "label": label,
+            "judgment": sub.get("judgment", ""),
+            "cited_location": sub.get("cited_location", ""),
+            "source": sub,
+        }
+
+
+def _build_toc_entries(response, doc, para_page_map, claims_page, segments=None):
     """ブックマーク対象を構築。ページだけでなく段落番号の y 座標も保持する。
 
     タイトル形式: `<requirement_id> <judgment> 【<para>】 (p.<page>)` または
@@ -586,11 +766,13 @@ def _build_toc_entries(response, doc, para_page_map, claims_page):
         emitted = False
         for para_id in paras:
             pn = rect = None
-            if para_id == "__claims__":
+            claim_num = _claim_number_from_marker(para_id)
+            if para_id == "__claims__" or claim_num is not None:
                 pn, rect = _resolve_paragraph_location(
                     doc, para_id, cited_loc, para_page_map, claims_page)
                 page = (pn + 1) if pn is not None else claims_page
-                title = f"{label_prefix} {judgment} 請求項 (p.{page})"
+                claim_label = f"請求項{claim_num}" if claim_num is not None else "請求項"
+                title = f"{label_prefix} {judgment} {claim_label} (p.{page})"
             else:
                 pn, rect = _resolve_paragraph_location(
                     doc, para_id, cited_loc, para_page_map, claims_page)
@@ -604,19 +786,16 @@ def _build_toc_entries(response, doc, para_page_map, claims_page):
             label = cited_loc.strip() if cited_loc else "(不明)"
             entries.append({"level": 2, "title": f"{label_prefix} {judgment} {label}", "page": 1, "y": 0})
 
-    for comp in response.get("comparisons", []):
-        _emit(comp["requirement_id"], comp["judgment"], comp.get("cited_location", ""))
-
-    for sub in response.get("sub_claims", []):
-        _emit(f"請求項{sub['claim_number']}", sub["judgment"], sub.get("cited_location", ""))
+    for item in _iter_response_items_in_display_order(response, segments):
+        _emit(item["label"], item["judgment"], item.get("cited_location", ""))
 
     return entries
 
 
-def _build_toc(response, toc_entries, page_offset=0):
+def _build_toc(response, toc_entries, *, summary_page=None, page_offset=0):
     doc_id = response.get("document_id", "引用文献")
-    toc = [[1, f"注釈サマリー: {doc_id}", 1, _toc_dest(1, 0)]]
-    toc.append([1, f"対比結果: {doc_id}", 2, _toc_dest(2, 0)])
+    summary_page = int(summary_page or 1)
+    toc = [[1, f"対比結果: {doc_id}", 1, _toc_dest(1, 0)]]
     for entry in toc_entries:
         page = int(entry.get("page") or 1) + page_offset
         toc.append([
@@ -625,6 +804,7 @@ def _build_toc(response, toc_entries, page_offset=0):
             page,
             _toc_dest(page, entry.get("y") or 0),
         ])
+    toc.append([1, f"注釈サマリー: {doc_id}", summary_page, _toc_dest(summary_page, 0)])
     return toc
 
 

@@ -14,7 +14,7 @@ from services.comparison.common import (
     _safe_prompt_filename,
     _write_annotated_pdf,
 )
-from services.comparison.execute import compare_execute
+from services.comparison.execute import compare_execute, get_comparison_progress
 from services.comparison.export import export_excel, export_full_report
 from services.comparison.inventive import (
     inventive_step_execute,
@@ -56,6 +56,7 @@ __all__ = [
     "annotate_citation",
     "check_segments_freshness",
     "compare_execute",
+    "get_comparison_progress",
     "export_excel",
     "export_full_report",
     "generate_prompt_multi",

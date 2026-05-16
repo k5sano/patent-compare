@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import json
+import re
+import zipfile
 from pathlib import Path
 
 from openpyxl import load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 
+from modules.excel_writer import _find_comparison
 from services.comparison_service import (
     check_segments_freshness,
     export_excel,
@@ -35,6 +38,7 @@ def _prompt_sections_snapshot(prompt):
             or st.startswith('"document_id"')
             or st.startswith('"requirement_id"')
             or "全ての構成要件" in s
+            or "全ての独立請求項の構成要件" in s
         ):
             lines.append(s)
     return "\n".join(lines)
@@ -95,6 +99,17 @@ def test_save_response_single_writes_snapshot_json(copy_case_fixture):
     assert saved == expected
 
 
+def test_excel_comparison_lookup_uses_legacy_sub_claim_requirement_id():
+    resp = {
+        "comparisons": [{"requirement_id": "1A", "judgment": "○"}],
+        "sub_claims": [{"claim_number": 9, "requirement_id": "9A", "judgment": "△"}],
+    }
+
+    assert _find_comparison(resp, "1A")["judgment"] == "○"
+    assert _find_comparison(resp, "9A")["judgment"] == "△"
+    assert _find_comparison(resp, "9B")["judgment"] == "△"
+
+
 def test_export_excel_writes_workbook(copy_case_fixture):
     case_dir = copy_case_fixture("smoke")
 
@@ -145,8 +160,9 @@ def test_export_excel_highlights_comment_terms(copy_case_fixture):
     assert isinstance(value, CellRichText)
     assert "（備考: 成分Aと未知語）" in str(value)
     blocks = [b for b in value if isinstance(b, TextBlock)]
-    assert any(b.text == "成分A" and b.font.color.rgb == "00FF9999" for b in blocks)
-    assert not any("未知語" in b.text and b.font.color.rgb == "00EF4444" for b in blocks)
+    assert any(b.text == "成分A" and b.font.color.rgb == "FFFF9999" for b in blocks)
+    assert any(b.text == "成分A" and b.font.rFont == "メイリオ" for b in blocks)
+    assert not any("未知語" in b.text and b.font.color.rgb == "FFEF4444" for b in blocks)
 
 
 def test_export_excel_highlights_judgment_reason_terms(copy_case_fixture):
@@ -163,8 +179,9 @@ def test_export_excel_highlights_judgment_reason_terms(copy_case_fixture):
     value = ws["C10"].value
     assert isinstance(value, CellRichText)
     blocks = [b for b in value if isinstance(b, TextBlock)]
-    assert any(b.text == "成分A" and b.font.color.rgb == "00FF9999" for b in blocks)
-    assert not any("未知語" in b.text and b.font.color.rgb == "00EF4444" for b in blocks)
+    assert any(b.text == "成分A" and b.font.color.rgb == "FFFF9999" for b in blocks)
+    assert any(b.text == "成分A" and b.font.rFont == "メイリオ" for b in blocks)
+    assert not any("未知語" in b.text and b.font.color.rgb == "FFEF4444" for b in blocks)
 
 
 def test_export_excel_paste_sheet_uses_compact_notation(copy_case_fixture):
@@ -179,7 +196,7 @@ def test_export_excel_paste_sheet_uses_compact_notation(copy_case_fixture):
 
     assert code == 200
     ws = load_workbook(result["path"])["ペースト用"]
-    assert ws["C3"].value == "x10/備考メモ"
+    assert ws["C3"].value == "!10/備考メモ"
 
 
 def test_export_excel_paste_sheet_normalizes_same_kind_refs(copy_case_fixture):
@@ -259,9 +276,47 @@ def test_export_full_report_highlights_inventive_step_terms(copy_case_fixture):
         for block in value
         if isinstance(block, TextBlock)
     ]
-    assert any(block.text == "成分A" and block.font.color.rgb == "00FF9999" for block in blocks)
-    assert any(block.text == "成分B" and block.font.color.rgb == "00FF9999" for block in blocks)
-    assert not any("未知語" in block.text and block.font.color.rgb == "00EF4444" for block in blocks)
+    assert any(block.text == "成分A" and block.font.color.rgb == "FFFF9999" for block in blocks)
+    assert any(block.text == "成分B" and block.font.color.rgb == "FFFF9999" for block in blocks)
+    assert any(block.text == "成分A" and block.font.rFont == "メイリオ" for block in blocks)
+    assert not any("未知語" in block.text and block.font.color.rgb == "FFEF4444" for block in blocks)
+
+
+def test_export_full_report_uses_meiryo_and_valid_rich_text_colors(copy_case_fixture):
+    case_dir = copy_case_fixture("smoke")
+    inv = {
+        "overall_assessment": {"reasoning": "成分Aに基づき判断する。"},
+        "primary_reference": {"selection_reason": "成分Bを含む。"},
+    }
+    (case_dir / "inventive_step.json").write_text(
+        json.dumps(inv, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    result, code = export_full_report("smoke")
+
+    assert code == 200
+    wb = load_workbook(result["path"], rich_text=True)
+    assert wb["対比表"]["A1"].font.name == "メイリオ"
+    rich_blocks = [
+        block
+        for ws in wb.worksheets
+        for row in ws.iter_rows()
+        for cell in row
+        if isinstance(cell.value, CellRichText)
+        for block in cell.value
+        if isinstance(block, TextBlock)
+    ]
+    assert rich_blocks
+    assert all(block.font.rFont == "メイリオ" for block in rich_blocks if block.font)
+
+    with zipfile.ZipFile(result["path"]) as z:
+        xml = "\n".join(
+            z.read(name).decode("utf-8")
+            for name in z.namelist()
+            if name.startswith("xl/worksheets/sheet")
+        )
+    assert not re.search(r'rgb="00[0-9A-Fa-f]{6}"', xml)
 
 
 def test_check_segments_freshness_clean_fixture(copy_case_fixture):
