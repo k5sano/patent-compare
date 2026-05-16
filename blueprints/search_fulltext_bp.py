@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import yaml
+import base64
 from pathlib import Path
 from urllib.parse import urlencode
 from flask import (
@@ -25,6 +26,59 @@ from ._helpers import (
 )
 
 bp = Blueprint("search_fulltext", __name__)
+
+
+def _local_pdf_figure_images(case_id, patent_id, *, max_images=20):
+    """全文取得キャッシュに画像が無い場合、ローカルPDFの図表画像を右ペインへ出す。"""
+    try:
+        import fitz
+    except Exception:
+        return []
+    try:
+        pdf_path = find_citation_pdf(get_case_dir(case_id) / "input", patent_id)
+        if not pdf_path:
+            return []
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return []
+
+    out = []
+    try:
+        for page_index, page in enumerate(doc, start=1):
+            if len(out) >= max_images:
+                break
+            text = page.get_text("text") or ""
+            labels = re.findall(r"【\s*[図表]\s*[0-9０-９A-Za-zＡ-Ｚａ-ｚ\-－ー]+\s*】", text)
+            # 表紙ロゴ等は不要。図表ラベルがあるページだけ拾う。
+            if not labels:
+                continue
+            for idx, im in enumerate(page.get_images(full=True)):
+                if len(out) >= max_images:
+                    break
+                try:
+                    info = doc.extract_image(im[0])
+                    blob = info.get("image") or b""
+                    ext = (info.get("ext") or "png").lower()
+                    if not blob:
+                        continue
+                    label = labels[idx] if idx < len(labels) else f"P{page_index} 図表{idx + 1}"
+                    mime = "image/png" if ext == "png" else f"image/{ext}"
+                    src = f"data:{mime};base64,{base64.b64encode(blob).decode('ascii')}"
+                    out.append({
+                        "src": src,
+                        "label": label,
+                        "context": f"ローカルPDF P{page_index}",
+                        "alt": f"{patent_id} {label}",
+                        "source": "local_pdf",
+                    })
+                except Exception:
+                    continue
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    return out
 
 @bp.route("/case/<case_id>/search-run/hit/<path:patent_id>/view")
 def hit_full_text_view(case_id, patent_id):
@@ -252,6 +306,8 @@ def hit_full_text_view(case_id, patent_id):
     )
 
     images = hit.get("images") or []
+    if not images:
+        images = _local_pdf_figure_images(case_id, patent_id)
 
     # 抽出済みの表データを image src で対応付ける (image_records ベース抽出時のみ)
     extracted_tables_by_src: dict = {}

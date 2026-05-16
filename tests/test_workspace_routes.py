@@ -353,7 +353,7 @@ def test_hit_view_workspace_nav_uses_dropdown_order(tmp_path, monkeypatch):
 
     assert resp.status_code == 200
     assert '<span class="nav-pos">2 / 3</span>' in html
-    assert 'id="nav-prev-doc" class=""' in html
-    assert 'id="nav-next-doc" class=""' in html
+    assert 'id="nav-prev-doc" class="nav-doc-btn "' in html
+    assert 'id="nav-next-doc" class="nav-doc-btn "' in html
     assert "/search-run/hit/JP2030000001A/view" in html
     assert "/search-run/hit/JP2030000003A/view" in html

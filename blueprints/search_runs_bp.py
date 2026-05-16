@@ -239,6 +239,51 @@ def list_cached_hit_full_texts(case_id):
     return jsonify({"texts": texts, "count": len(texts)})
 
 
+@bp.route("/case/<case_id>/hit-bookmarks", methods=["GET"])
+def hit_bookmarks_list(case_id):
+    """全文レビューの名前付きしおり一覧を返す。"""
+    from services.search_run_service import list_hit_bookmarks
+    bookmarks = list_hit_bookmarks(case_id)
+    names = sorted({b.get("name") for b in bookmarks if b.get("name")})
+    return jsonify({"bookmarks": bookmarks, "names": names, "count": len(bookmarks)})
+
+
+@bp.route("/case/<case_id>/hit-bookmarks", methods=["POST"])
+def hit_bookmarks_save(case_id):
+    """全文レビューの文献に名前付きしおりを付ける。"""
+    from services.search_run_service import list_hit_bookmarks, save_hit_bookmark
+    body = request.get_json(silent=True) or {}
+    patent_id = str(body.get("patent_id") or "").strip()
+    name = str(body.get("name") or "").strip()
+    if not patent_id:
+        return jsonify({"error": "patent_id が必要です"}), 400
+    if not name:
+        return jsonify({"error": "しおり名を入力してください"}), 400
+    try:
+        item = save_hit_bookmark(case_id, patent_id, name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    bookmarks = list_hit_bookmarks(case_id)
+    names = sorted({b.get("name") for b in bookmarks if b.get("name")})
+    return jsonify({"ok": True, "bookmark": item, "bookmarks": bookmarks, "names": names})
+
+
+@bp.route("/case/<case_id>/search-runs/citation-cards", methods=["POST"])
+def search_run_citation_cards(case_id):
+    """Step 6 の引用文献を Step 4.5 候補カード用 hit 形式で返す。"""
+    from services.search_run_service import build_citation_card_hits
+
+    body = request.get_json(silent=True) or {}
+    items = body.get("items")
+    if items is None:
+        pids = body.get("patent_ids") or []
+        items = [{"id": pid, "aliases": [pid]} for pid in pids]
+    if not isinstance(items, list):
+        return jsonify({"error": "items は配列で指定してください"}), 400
+    hits = build_citation_card_hits(case_id, items)
+    return jsonify({"hits": hits, "count": len(hits)})
+
+
 @bp.route("/case/<case_id>/search-run/hit/<path:patent_id>/fetch-text", methods=["POST"])
 def fetch_hit_full_text(case_id, patent_id):
     """ヒット全文を取得してキャッシュ。source='auto' / 'google' / 'jplatpat'。"""
@@ -302,6 +347,20 @@ def search_run_screening_bulk(case_id, run_id):
     if not data:
         return jsonify({"error": "検索ランが見つかりません"}), 404
     return jsonify({"success": True, "updated": len(updates)})
+
+
+@bp.route("/case/<case_id>/search-runs/hold-patents", methods=["POST"])
+def search_run_hold_patents(case_id):
+    """指定文献を検索候補の待機BOX (`screening=hold`) へ移す。"""
+    from services.search_run_service import hold_patents_across_runs
+
+    body = request.get_json() or {}
+    patent_ids = body.get("patent_ids") or []
+    note = body.get("note")
+    if not isinstance(patent_ids, list) or not patent_ids:
+        return jsonify({"error": "patent_ids が必要です"}), 400
+    result = hold_patents_across_runs(case_id, patent_ids, note=note)
+    return jsonify({"success": True, **result})
 
 
 @bp.route("/case/<case_id>/search-run/<run_id>/download-starred", methods=["POST"])

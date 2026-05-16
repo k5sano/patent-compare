@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{{ meta.case_id }} - PatentCompare</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/case.css') }}?v=20260513-chat-window">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/case.css') }}?v=20260516-hit-bookmark">
 <script>
   // 画面幅モード初期化 (FOUC 回避のため body 描画前に data-width-mode を確定)
   (function () {
@@ -239,6 +239,9 @@
         <button class="btn btn-success" onclick="saveSegmentsFromEditor()">保存</button>
         <button class="btn btn-outline" onclick="location.reload()">リセット</button>
         <button class="btn btn-primary" onclick="saveSegmentsFromEditor().then(()=>showPanel(2))">保存して次へ &rarr;</button>
+        <button class="btn btn-outline" onclick="resumeComparisonFromProgress('segments')" title="途中停止した前回の再対比を、未完了文献だけで再開します">
+          再対比を再開
+        </button>
       </div>
       <div id="seg-save-msg" style="display:none; margin-top:0.5rem; padding:0.6rem 1rem; background:#14532d; border-radius:8px; color:#4ade80; font-size:0.85rem;"></div>
 
@@ -945,10 +948,11 @@
           <span style="flex:1"></span>
           <label style="font-size:0.8rem; color:var(--text2);">フィルタ:</label>
           <select id="sr-filter" onchange="renderSrHits()">
-            <option value="">全て</option>
+            <option value="">通常候補</option>
             <option value="star">☆ のみ</option>
             <option value="triangle">△ のみ</option>
             <option value="pending">未判定</option>
+            <option value="hold">待機BOX</option>
             <option value="not-rejected">×以外</option>
           </select>
           <label style="font-size:0.8rem; color:var(--text2);">ソート:</label>
@@ -1073,6 +1077,9 @@
             <option value="max">max</option>
           </select>
           <button class="btn btn-execute" onclick="executeCompare()" style="display:none;">&#9889; 直接実行</button>
+          <button class="btn btn-outline" onclick="resumeComparisonFromProgress('compare')" title="途中停止した前回の対比を、未完了文献だけで再開します">
+            再開
+          </button>
           <span id="prompt-charcount" style="color:var(--text2); font-size:0.85rem;"></span>
         </div>
         <div class="prompt-box" id="prompt-text" style="display:none;"></div>
@@ -1114,11 +1121,17 @@
       <div id="comparison-summary" class="comp-summary-outer">
         {% if citations %}
         <div id="comp-summary-toolbar" class="comp-summary-toolbar">
+          <div class="comp-toolbar-views" role="radiogroup" aria-label="Step 6 表示タイプ">
+            <span class="comp-toolbar-lbl">表示</span>
+            <label class="comp-radio-lbl"><input type="radio" name="comp-view" value="detail" checked> 詳細</label>
+            <label class="comp-radio-lbl"><input type="radio" name="comp-view" value="compact"> 充足</label>
+          </div>
           <div class="comp-toolbar-actions">
             <button type="button" class="comp-colbar-toggle" onclick="openUnmetCellsPanel()" title="未充足・部分充足セルを一覧し、壁打ちで順に確認します">未充足セル</button>
             <button type="button" class="comp-colbar-toggle" id="comp-colbar-toggle" onclick="toggleCompColumnPicker()" title="個別特許の列選択を表示・非表示にします">個別特許 非表示</button>
           </div>
           <div id="comp-summary-colbar" class="comp-summary-colbar" role="group" aria-label="表示する文献列"></div>
+          <div id="comp-citation-card-panel" class="comp-citation-card-panel" style="display:none;"></div>
         </div>
         <div class="comp-summary-scroll">
           <table class="comp-summary-table" id="comp-summary-table">
@@ -1473,7 +1486,11 @@
   <div class="comp-chat-box">
     <div class="comp-chat-head">
       <strong>対比セル壁打ち — <span id="comp-chat-title"></span></strong>
+      <span id="comp-chat-queue-status" class="comp-chat-queue-status"></span>
       <div class="comp-chat-head-actions">
+        <button type="button" class="comp-chat-nav-btn" id="comp-chat-list-btn" onclick="openUnmetCellsPanel({reuse:true})" title="未充足セル一覧へ戻る">一覧</button>
+        <button type="button" class="comp-chat-nav-btn" id="comp-chat-prev-btn" onclick="openPrevCompChatCell()" title="前のセル">前</button>
+        <button type="button" class="comp-chat-nav-btn" id="comp-chat-next-btn" onclick="openNextCompChatCell()" title="次のセル">次</button>
         <button type="button" class="comp-chat-window-btn" onclick="toggleCompChatFullscreen()" title="全画面表示">⛶</button>
         <button type="button" class="comp-chat-close" onclick="closeCompChat()" title="閉じる">×</button>
       </div>
@@ -1497,7 +1514,11 @@
           <textarea id="comp-chat-text" rows="3"></textarea>
           <label>上書きメモ</label>
           <input id="comp-chat-note" type="text" placeholder="例: 131段落確認、部分充足に変更">
-          <button type="button" class="btn btn-success" onclick="applyCompChatOverride()">この内容で判定を上書き</button>
+          <div class="comp-chat-override-actions">
+            <button type="button" class="btn btn-success" onclick="applyCompChatOverride()">上書き</button>
+            <button type="button" class="btn btn-success" onclick="applyCompChatOverride({goNext:true})">上書きして次へ</button>
+            <button type="button" class="btn btn-outline" onclick="markCompChatReviewed()">現状維持で済</button>
+          </div>
         </div>
       </div>
       <div class="comp-chat-thread">
@@ -1508,6 +1529,12 @@
           <span id="comp-chat-status"></span>
         </div>
         <div id="comp-chat-messages" class="comp-chat-messages"></div>
+        <div class="comp-chat-quick-row">
+          <button type="button" onclick="compChatQuickPrompt('このセルについて、現在の未充足/部分充足判定を維持すべきか、根拠付きで確認して。')">現状確認</button>
+          <button type="button" onclick="compChatQuickPrompt('このセルは○（充足）に変更できるか。引用文献の明示記載、内在的開示、実施例・表の根拠を分けて検討して。')">○検討</button>
+          <button type="button" onclick="compChatQuickPrompt('このセルは△（部分充足）にするのが妥当か。充足する点と不足する点を分けて整理して。')">△検討</button>
+          <button type="button" onclick="compChatQuickPrompt('このセルは×（未充足）を維持すべきか。ユーザーが見落としやすい段落・表の可能性も確認して。')">×維持</button>
+        </div>
         <textarea id="comp-chat-input" class="comp-chat-input" rows="4"
                   placeholder="例: 131段落にステアリン酸グリセリルがある。これはエステルとして充足しない？"></textarea>
         <div class="btn-row" style="margin-top:0.5rem;">
@@ -1565,7 +1592,8 @@ window.CASE_BOOTSTRAP = {
   citations_meta: [
     {% for cit in citations %}
     { "id": {{ cit.id | tojson }}, "label": {{ (cit.label or cit.id) | tojson }},
-      "category": {{ (cit._category or "") | tojson }} }{% if not loop.last %},{% endif %}
+      "category": {{ (cit._category or "") | tojson }},
+      "year": {{ (cit.year or cit.publication_year or cit.pub_year or "") | tojson }} }{% if not loop.last %},{% endif %}
     {% endfor %}
   ],
   freshness: {{ freshness | tojson if freshness else '{}' }},
@@ -1576,7 +1604,7 @@ window.CASE_BOOTSTRAP = {
   compact_sub: {{ compact_sub | tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='js/case.js') }}?v=20260513-search-report-select"></script>
+<script src="{{ url_for('static', filename='js/case.js') }}?v=20260516-hit-bookmark"></script>
 <script src="{{ url_for('static', filename='js/preliminary_research.js') }}"></script>
 <script src="{{ url_for('static', filename='js/hongan_analysis.js') }}"></script>
 <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

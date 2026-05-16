@@ -19,7 +19,18 @@
     border:1px solid var(--border); border-radius:6px; font-size:0.78rem; }
   .topbar a:hover { border-color:var(--accent); color:#bfdbfe; }
   .topbar a.nav-disabled { opacity:0.35; pointer-events:none; }
+  .topbar a.nav-doc-btn { display:inline-flex; align-items:center; justify-content:center;
+    min-width:4.6rem; padding:4px 10px; font-weight:700; background:#0f172a; }
   .nav-pos { color:var(--text2); font-size:0.78rem; padding:0 0.25rem; }
+  .hit-bookmark-form { display:inline-flex; align-items:center; gap:0.25rem;
+    padding-left:0.3rem; border-left:1px solid var(--border); }
+  .hit-bookmark-name { width:8.5rem; border:1px solid var(--border); border-radius:6px;
+    background:#0f172a; color:var(--text); padding:3px 7px; font-size:0.78rem; }
+  .hit-bookmark-name:focus { outline:1px solid var(--accent); border-color:var(--accent); }
+  .hit-bookmark-btn { border:1px solid #7c3aed; border-radius:6px; background:rgba(124,58,237,0.18);
+    color:#ddd6fe; cursor:pointer; padding:3px 8px; font-size:0.78rem; font-weight:700; }
+  .hit-bookmark-btn:hover { border-color:#a78bfa; color:#f5f3ff; }
+  .hit-bookmark-status { min-width:3.8rem; font-size:0.72rem; color:var(--text2); }
   .badge-src { padding:2px 8px; border-radius:8px; font-size:0.72rem; font-weight:600;
     border:1px solid currentColor; }
   .src-jplatpat { background:rgba(168,85,247,0.15); color:#c084fc; }
@@ -190,10 +201,17 @@
     {% if google_url %}<a href="{{ google_url }}" target="_blank" rel="noopener">Google Patents</a>{% endif %}
     {% if jplatpat_url %}<a href="{{ jplatpat_url }}" target="_blank" rel="noopener">J-PlatPat</a>{% endif %}
     <span class="nav-pos">{{ nav.position if nav else '' }}</span>
-    <a id="nav-prev-doc" class="{{ '' if nav and nav.prev_url else 'nav-disabled' }}"
-       href="{{ nav.prev_url if nav else '' }}" title="← 前の文献">← 前</a>
-    <a id="nav-next-doc" class="{{ '' if nav and nav.next_url else 'nav-disabled' }}"
-       href="{{ nav.next_url if nav else '' }}" title="→ 次の文献">次 →</a>
+    <a id="nav-prev-doc" class="nav-doc-btn {{ '' if nav and nav.prev_url else 'nav-disabled' }}"
+       href="{{ nav.prev_url if nav else '' }}" title="← 前の文献">← 前文献</a>
+    <a id="nav-next-doc" class="nav-doc-btn {{ '' if nav and nav.next_url else 'nav-disabled' }}"
+       href="{{ nav.next_url if nav else '' }}" title="→ 次の文献">後文献 →</a>
+    <span class="hit-bookmark-form">
+      <input id="hit-bookmark-name" class="hit-bookmark-name" type="text"
+             placeholder="しおり名" maxlength="40"
+             onkeydown="if(event.key==='Enter'){event.preventDefault(); saveHitBookmark();}">
+      <button type="button" class="hit-bookmark-btn" onclick="saveHitBookmark()">しおり</button>
+      <span id="hit-bookmark-status" class="hit-bookmark-status"></span>
+    </span>
     <a href="javascript:window.close()">閉じる</a>
   </div>
 </div>
@@ -412,6 +430,7 @@
 
 <script>
 const VIEW_CASE_ID = {{ case_id|tojson }};
+const VIEW_PATENT_ID = {{ patent_id|tojson }};
 const FILTER_KEY = `pc-hit-filter:${VIEW_CASE_ID}`;
 const ROT_KEY_PREFIX = `pc-hit-rotation:${VIEW_CASE_ID}:`;
 const ROT_DEFAULT_KEY = `pc-hit-rotation-default:${VIEW_CASE_ID}`;
@@ -524,6 +543,55 @@ async function setViewerScreening(screening) {
     });
     if (status) status.textContent = '保存失敗';
     console.warn('viewer screening save error', e);
+  }
+}
+
+async function saveHitBookmark() {
+  const input = document.getElementById('hit-bookmark-name');
+  const status = document.getElementById('hit-bookmark-status');
+  const name = input ? String(input.value || '').trim() : '';
+  if (!name) {
+    if (status) status.textContent = '名前を入力';
+    if (input) input.focus();
+    return;
+  }
+  if (status) status.textContent = '保存中...';
+  try {
+    const resp = await fetch(`/case/${encodeURIComponent(VIEW_CASE_ID)}/hit-bookmarks`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({patent_id: VIEW_PATENT_ID, name}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+    if (status) status.textContent = '保存済';
+    const payload = {
+      type: 'pc-hit-bookmark-updated',
+      case_id: VIEW_CASE_ID,
+      patent_id: VIEW_PATENT_ID,
+      bookmark: data.bookmark || {name, patent_id: VIEW_PATENT_ID},
+      bookmarks: data.bookmarks || [],
+      names: data.names || [],
+      ts: Date.now(),
+    };
+    try {
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(payload, window.location.origin);
+      }
+    } catch (_) { /* ignore */ }
+    try {
+      localStorage.setItem('pc-hit-bookmark-updated', JSON.stringify(payload));
+    } catch (_) { /* ignore */ }
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const bc = new BroadcastChannel('patent_compare_hit_bookmark');
+        bc.postMessage(payload);
+        bc.close();
+      }
+    } catch (_) { /* ignore */ }
+  } catch (e) {
+    if (status) status.textContent = '保存失敗';
+    console.warn('hit bookmark save error', e);
   }
 }
 

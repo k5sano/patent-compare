@@ -64,6 +64,104 @@ def _hit_text_dir(case_id: str) -> Path:
     return d
 
 
+def _hit_bookmarks_path(case_id: str) -> Path:
+    return _runs_dir(case_id) / "_hit_bookmarks.json"
+
+
+def list_hit_bookmarks(case_id: str) -> list[dict]:
+    """全文レビュー画面で付けた文献しおりを返す。"""
+    p = _hit_bookmarks_path(case_id)
+    if not p.exists():
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    bookmarks = data.get("bookmarks") if isinstance(data, dict) else data
+    out = []
+    for item in bookmarks or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        patent_id = str(item.get("patent_id") or "").strip()
+        if name and patent_id:
+            out.append({
+                "name": name,
+                "patent_id": patent_id,
+                "created_at": item.get("created_at") or "",
+            })
+    return out
+
+
+def save_hit_bookmark(case_id: str, patent_id: str, name: str) -> dict:
+    """文献に名前付きしおりを付ける。同一 name/patent_id は重複させない。"""
+    patent_id = str(patent_id or "").strip()
+    name = str(name or "").strip()
+    if not patent_id:
+        raise ValueError("patent_id is required")
+    if not name:
+        raise ValueError("name is required")
+    bookmarks = list_hit_bookmarks(case_id)
+    existing = next(
+        (b for b in bookmarks if b["name"] == name and b["patent_id"] == patent_id),
+        None,
+    )
+    if existing:
+        return existing
+    item = {
+        "name": name,
+        "patent_id": patent_id,
+        "created_at": _now_iso(),
+    }
+    bookmarks.append(item)
+    p = _hit_bookmarks_path(case_id)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump({"bookmarks": bookmarks}, f, ensure_ascii=False, indent=2)
+    return item
+
+
+def _write_hit_text_cache(case_id: str, patent_id: str, data: dict) -> None:
+    p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def _hit_text_content_score(data: Optional[dict]) -> int:
+    if not isinstance(data, dict):
+        return 0
+    return (
+        len(data.get("description") or "")
+        + len(data.get("abstract") or "")
+        + sum(len(str(c or "")) for c in (data.get("claims") or []))
+    )
+
+
+def _merge_hit_text_with_fallback(data: dict, fallback: Optional[dict]) -> dict:
+    """外部再取得が薄い場合にローカル/既存本文を失わないよう補完する。"""
+    if not fallback:
+        return data
+    merged = dict(data or {})
+    for key in ("title", "abstract", "description", "raw", "local_citation_id", "local_patent_number"):
+        if not merged.get(key) and fallback.get(key):
+            merged[key] = fallback.get(key)
+    if not merged.get("claims") and fallback.get("claims"):
+        merged["claims"] = fallback.get("claims")
+    if not merged.get("images") and fallback.get("images"):
+        merged["images"] = fallback.get("images")
+    if not _hit_text_content_score(merged) and _hit_text_content_score(fallback):
+        merged = dict(fallback)
+        if data and data.get("images") and not merged.get("images"):
+            merged["images"] = data.get("images")
+    elif fallback.get("source") == "local_citation":
+        merged.setdefault("local_citation_id", fallback.get("local_citation_id"))
+        merged.setdefault("local_patent_number", fallback.get("local_patent_number"))
+    return merged
+
+
 def _safe_pid(patent_id: str) -> str:
     """patent_id をファイル名安全に正規化。"""
     s = (patent_id or "").strip()
@@ -93,15 +191,55 @@ def _normalize_hit_text_patent_id(patent_id: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", cleaned)
 
 
+def _hit_text_match_keys(patent_id: str) -> set[str]:
+    """全文キャッシュ・引用JSON照合用の緩い比較キー。"""
+    raw = str(patent_id or "").strip()
+    if not raw:
+        return set()
+    keys = {raw.upper()}
+    norm = _normalize_hit_text_patent_id(raw)
+    if norm:
+        keys.add(norm)
+        keys.add(re.sub(r"(A|A\d|B|B\d|U|U\d)$", "", norm))
+    try:
+        from modules.citation_id import normalize_citation_id
+        cit_norm = normalize_citation_id(raw)
+        if cit_norm:
+            keys.add(str(cit_norm).upper())
+            keys.add(_normalize_hit_text_patent_id(cit_norm))
+    except Exception:
+        pass
+
+    # 文字列中に JP5047668B2 のような別表記が埋まっている場合を拾う。
+    for m in re.finditer(r"JP\s*[- ]?(\d[\d\s\-]*)([A-Z]\d?)?", raw.upper()):
+        number = re.sub(r"\D", "", m.group(1))
+        kind = (m.group(2) or "").upper()
+        if number:
+            keys.add(f"JP{number}{kind}")
+            keys.add(f"JP{number}")
+
+    m = re.search(r"特開\s*(\d{4})\s*[-ー－/／_ ]\s*(\d+)", raw)
+    if m:
+        keys.add(f"JP{m.group(1)}{m.group(2).zfill(6)}A")
+        keys.add(f"{m.group(1)}{m.group(2).zfill(6)}")
+
+    m = re.search(r"特許\s*第?\s*(\d+)\s*号?", raw)
+    if m:
+        keys.add(f"JP{m.group(1)}")
+        keys.add(m.group(1))
+
+    return {re.sub(r"[\s\-/／_ー－.,，．・()（）]", "", k) for k in keys if k}
+
+
 def get_hit_text(case_id: str, patent_id: str) -> Optional[dict]:
     p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
     if not p.exists():
-        target_norm = _normalize_hit_text_patent_id(patent_id)
-        if not target_norm:
+        target_keys = _hit_text_match_keys(patent_id)
+        if not target_keys:
             return None
         for cand in _hit_text_dir(case_id).glob("*.json"):
-            cand_norm = _normalize_hit_text_patent_id(cand.stem)
-            if cand_norm == target_norm:
+            cand_keys = _hit_text_match_keys(cand.stem)
+            if cand_keys & target_keys:
                 p = cand
                 break
             try:
@@ -109,7 +247,8 @@ def get_hit_text(case_id: str, patent_id: str) -> Optional[dict]:
                     data = json.load(f)
             except (OSError, json.JSONDecodeError):
                 continue
-            if _normalize_hit_text_patent_id(data.get("patent_id", "")) == target_norm:
+            data_keys = _hit_text_match_keys(data.get("patent_id", ""))
+            if data_keys & target_keys:
                 return data
         else:
             return None
@@ -145,9 +284,136 @@ def list_cached_hit_texts(case_id: str, patent_ids=None) -> dict:
         return out
     for pid in patent_ids:
         data = get_hit_text(case_id, pid)
+        if (
+            data is None
+            or _hit_text_content_score(data) == 0
+            or (data.get("source") == "local_citation" and not data.get("title"))
+        ):
+            local_data = _build_hit_text_from_citation(case_id, pid)
+            if local_data is not None:
+                local_data["from_local_citation"] = True
+                _write_hit_text_cache(case_id, pid, local_data)
+                data = local_data
         if data is not None:
             out[pid] = data
     return out
+
+
+def _text_from_claim(claim) -> str:
+    if isinstance(claim, dict):
+        text = str(claim.get("text") or claim.get("full_text") or "").strip()
+        number = claim.get("number") or claim.get("id")
+        if text and number and not text.startswith("【請求項"):
+            return f"【請求項{number}】{text}"
+        return text
+    return str(claim or "").strip()
+
+
+def _description_from_paragraphs(paragraphs) -> str:
+    fw2hw = str.maketrans("０１２３４５６７８９", "0123456789")
+    parts = []
+    for para in paragraphs or []:
+        if isinstance(para, dict):
+            pid_raw = str(para.get("id") or para.get("number") or "").translate(fw2hw)
+            text = str(para.get("text") or "").strip()
+        else:
+            pid_raw = ""
+            text = str(para or "").strip()
+        if not text:
+            continue
+        m = re.search(r"\d+", pid_raw)
+        marker = f"【{m.group(0).zfill(4)}】" if m else ""
+        parts.append(f"{marker}{text}")
+    return "\n".join(parts)
+
+
+def _local_hit_title(data: dict, patent_id: str, local_id: str) -> str:
+    title = (
+        data.get("patent_title")
+        or data.get("title")
+        or data.get("invention_title")
+        or ""
+    )
+    return str(title or local_id or patent_id or "").strip()
+
+
+def _build_hit_text_from_citation(case_id: str, patent_id: str) -> Optional[dict]:
+    """既に Step5/6 用に抽出済みの citation JSON から全文ビュー用 cache を作る。"""
+    target_keys = _hit_text_match_keys(patent_id)
+    if not target_keys:
+        return None
+    citations_dir = get_case_dir(case_id) / "citations"
+    if not citations_dir.exists():
+        return None
+
+    best_path = None
+    best_data = None
+    for path in sorted(citations_dir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        aliases = [
+            path.stem,
+            data.get("patent_number"),
+            data.get("label"),
+            data.get("doc_id"),
+            data.get("publication_number"),
+        ]
+        cand_keys = set()
+        for alias in aliases:
+            cand_keys.update(_hit_text_match_keys(alias))
+        if cand_keys & target_keys:
+            best_path = path
+            best_data = data
+            break
+
+    if not best_path or not best_data:
+        return None
+
+    claims = [_text_from_claim(c) for c in (best_data.get("claims") or [])]
+    claims = [c for c in claims if c]
+    description = _description_from_paragraphs(best_data.get("paragraphs") or [])
+    abstract = ""
+    raw_abstract = best_data.get("abstract")
+    if isinstance(raw_abstract, dict):
+        abstract = str(raw_abstract.get("text") or "").strip()
+    elif raw_abstract:
+        abstract = str(raw_abstract).strip()
+
+    if not (claims or description or abstract):
+        return None
+
+    local_id = best_data.get("patent_number") or best_data.get("label") or best_path.stem
+    title = _local_hit_title(best_data, patent_id, local_id)
+    return {
+        "patent_id": patent_id,
+        "local_citation_id": best_path.stem,
+        "local_patent_number": local_id,
+        "url": "",
+        "title": title,
+        "abstract": abstract,
+        "claims": claims,
+        "description": description,
+        "raw": "\n".join([abstract, "\n".join(claims), description]).strip(),
+        "source": "local_citation",
+        "fetched_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "classifications": {},
+        "images": [],
+    }
+
+
+def _case_input_pdf_exists(case_id: str, patent_id: str) -> bool:
+    target_keys = _hit_text_match_keys(patent_id)
+    if not target_keys:
+        return False
+    input_dir = get_case_dir(case_id) / "input"
+    if not input_dir.exists():
+        return False
+    for path in input_dir.glob("*.pdf"):
+        if _hit_text_match_keys(path.stem) & target_keys:
+            return True
+    return False
 
 
 def _default_text_source(patent_id: str) -> str:
@@ -410,10 +676,19 @@ def fetch_and_cache_hit_text(case_id: str, patent_id: str, *, force: bool = Fals
         return {"error": "patent_id が空です"}
     chosen = source if source in ("google", "jplatpat") else _default_text_source(patent_id)
     cached = get_hit_text(case_id, patent_id)
+    local_fallback = _build_hit_text_from_citation(case_id, patent_id)
     if cached and not force:
         if not (chosen == "google" and _is_thin_google_translation(cached)):
             cached["from_cache"] = True
             return cached
+
+    if not force:
+        local = local_fallback
+        if local:
+            _write_hit_text_cache(case_id, patent_id, local)
+            local["from_cache"] = False
+            local["from_local_citation"] = True
+            return local
 
     if chosen == "jplatpat":
         from modules.jplatpat_client import fetch_jplatpat_full_text
@@ -447,12 +722,15 @@ def fetch_and_cache_hit_text(case_id: str, patent_id: str, *, force: bool = Fals
         data = fetch_patent_full_text(patent_id, language=google_language)
         data.setdefault("source", "google")
 
-    p = _hit_text_dir(case_id) / f"{_safe_pid(patent_id)}.json"
-    try:
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
+    fallback = local_fallback if _hit_text_content_score(local_fallback) else cached
+    data = _merge_hit_text_with_fallback(data, fallback)
+    if not _hit_text_content_score(data) and _hit_text_content_score(cached):
+        data = dict(cached)
+        data["from_cache"] = True
+        data["warning"] = "再取得結果が空だったため、既存キャッシュを保持しました"
+        return data
+
+    _write_hit_text_cache(case_id, patent_id, data)
     data["from_cache"] = False
     return data
 
@@ -750,6 +1028,172 @@ def bulk_update_screening(
             target["note"] = u.get("note") or ""
     save_run(case_id, data)
     return data
+
+
+def _screening_match_keys(patent_id: str) -> set[str]:
+    """検索ヒットと引用IDの表記ゆれを吸収する比較キー。"""
+    from modules.citation_id import normalize_citation_id
+
+    raw = str(patent_id or "").strip()
+    if not raw:
+        return set()
+    variants = {raw}
+    try:
+        variants.add(normalize_citation_id(raw))
+    except Exception:
+        pass
+    try:
+        variants.add(_normalize_hit_text_patent_id(raw))
+    except Exception:
+        pass
+    keys = set()
+    for v in variants:
+        s = str(v or "").strip().upper()
+        if not s:
+            continue
+        keys.add(s)
+        keys.add(re.sub(r"[\s\-/／_ー－.,，．・]", "", s))
+    return {k for k in keys if k}
+
+
+def hold_patents_across_runs(
+    case_id: str, patent_ids: list[str], note: Optional[str] = None
+) -> dict:
+    """指定文献を全検索ラン内で `hold` に移し、通常候補から外せるようにする。"""
+    requested = [str(pid).strip() for pid in (patent_ids or []) if str(pid or "").strip()]
+    target_keys = {k for pid in requested for k in _screening_match_keys(pid)}
+    matched_requested: set[str] = set()
+    updated_runs = []
+    updated_total = 0
+    if not target_keys:
+        return {"requested": 0, "updated": 0, "runs": [], "not_found": []}
+
+    for path in sorted(_runs_dir(case_id).glob("*.json")):
+        data = load_run(case_id, path.stem)
+        if not data:
+            continue
+        run_updated = 0
+        for hit in data.get("hits", []):
+            hit_keys = _screening_match_keys(hit.get("patent_id", ""))
+            if not (hit_keys & target_keys):
+                continue
+            if hit.get("screening") != "hold":
+                hit["screening"] = "hold"
+                if note is not None:
+                    hit["note"] = note
+                run_updated += 1
+                updated_total += 1
+            for pid in requested:
+                if _screening_match_keys(pid) & hit_keys:
+                    matched_requested.add(pid)
+        if run_updated:
+            save_run(case_id, data)
+            updated_runs.append({"run_id": data.get("run_id") or path.stem, "updated": run_updated})
+
+    return {
+        "requested": len(requested),
+        "updated": updated_total,
+        "runs": updated_runs,
+        "not_found": [pid for pid in requested if pid not in matched_requested],
+    }
+
+
+def _citation_card_hit_score(hit: dict, run_created_at: str = "") -> tuple:
+    """引用文献カードに採用する検索ヒットの優先度。"""
+    ai = hit.get("ai_score")
+    try:
+        ai_num = float(ai) if ai is not None else -1.0
+    except (TypeError, ValueError):
+        ai_num = -1.0
+    return (
+        _screening_priority(hit.get("screening")),
+        ai_num,
+        1 if hit.get("claim1") else 0,
+        1 if hit.get("abstract") else 0,
+        str(run_created_at or ""),
+    )
+
+
+def build_citation_card_hits(case_id: str, items: list[dict]) -> list[dict]:
+    """Step 6 の引用文献を Step 4.5 と同じ候補カード形式で表示するための hit 群。
+
+    items = [{"id": "WO...", "aliases": ["表示ラベル", ...]}, ...]
+    検索ランに同一文献があれば AI スコア・キーワード集計元のメタ情報を流用し、
+    見つからない場合も簡易カードとして返す。
+    """
+    normalized_items = []
+    key_to_indexes: dict[str, set[int]] = {}
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        pid = str(item.get("id") or "").strip()
+        if not pid:
+            continue
+        aliases = [pid]
+        for a in item.get("aliases") or []:
+            s = str(a or "").strip()
+            if s and s not in aliases:
+                aliases.append(s)
+        idx = len(normalized_items)
+        normalized_items.append({"id": pid, "aliases": aliases})
+        for alias in aliases:
+            for key in _screening_match_keys(alias):
+                key_to_indexes.setdefault(key, set()).add(idx)
+
+    best: list[Optional[dict]] = [None] * len(normalized_items)
+    best_score: list[tuple] = [(-1, -1.0, 0, 0, "")] * len(normalized_items)
+
+    for path in sorted(_runs_dir(case_id).glob("*.json")):
+        data = load_run(case_id, path.stem)
+        if not data:
+            continue
+        run_id = data.get("run_id") or path.stem
+        run_created = data.get("created_at", "")
+        for hit in data.get("hits", []):
+            hit_keys = _screening_match_keys(hit.get("patent_id", ""))
+            indexes = set()
+            for key in hit_keys:
+                indexes.update(key_to_indexes.get(key, set()))
+            if not indexes:
+                continue
+            score = _citation_card_hit_score(hit, run_created)
+            for idx in indexes:
+                if score < best_score[idx]:
+                    continue
+                h = dict(hit)
+                h["_source_run_id"] = run_id
+                h["_source_formula_level"] = data.get("formula_level", "")
+                h["_source_run_created_at"] = run_created
+                h["_citation_id"] = normalized_items[idx]["id"]
+                h["_citation_card_status"] = "matched"
+                best[idx] = h
+                best_score[idx] = score
+
+    out = []
+    for idx, item in enumerate(normalized_items):
+        if best[idx] is not None:
+            out.append(best[idx])
+            continue
+        local_text = get_hit_text(case_id, item["id"])
+        if not local_text or not local_text.get("title"):
+            local_text = _build_hit_text_from_citation(case_id, item["id"]) or local_text
+        title = ""
+        for alias in item["aliases"]:
+            if alias != item["id"]:
+                title = alias
+                break
+        if local_text and local_text.get("title"):
+            title = local_text.get("title") or title
+        h = _normalize_hit({
+            "patent_id": item["id"],
+            "title": title,
+            "screening": "pending",
+            "downloaded_as_citation": _case_input_pdf_exists(case_id, item["id"]),
+        })
+        h["_citation_id"] = item["id"]
+        h["_citation_card_status"] = "fallback"
+        out.append(h)
+    return out
 
 
 def merge_runs(case_id: str, run_ids: list) -> list:

@@ -2735,7 +2735,7 @@ async function saveSegmentsFromEditor(opts) {
   // ただし skipAutoRecompare=true (本願 PDF ブックマーク等の chained 呼び出し) なら
   // 警告だけ出して再対比は実行しない (呼び出し側の処理を中断させない)。
   const fresh = (window.CASE_BOOTSTRAP || {}).freshness || {};
-  const targetIds = (fresh.citation_ids_with_responses || []).slice();
+  const targetIds = (fresh.recompare_citation_ids || fresh.citation_ids_with_responses || []).slice();
   let shouldRecompare = false;
   if (fresh.has_responses && targetIds.length && !skipAutoRecompare) {
     if (!window._segmentsSaveWarnAcked) {
@@ -2830,18 +2830,160 @@ function _hideRecompareOverlay() {
   if (ov) ov.style.display = 'none';
 }
 
-async function _runAutoRecompare(citationIds) {
+let _compareProgressTimer = null;
+
+function _stopCompareProgressPolling() {
+  if (_compareProgressTimer) {
+    window.clearInterval(_compareProgressTimer);
+    _compareProgressTimer = null;
+  }
+}
+
+function _formatCompareProgress(data, fallbackText) {
+  if (!data || data.status === 'none') return fallbackText;
+  const total = data.total || 0;
+  const completed = data.completed || 0;
+  const saved = data.saved || 0;
+  const failed = data.failed || 0;
+  const items = Object.values(data.items || {});
+  const running = items.find(x => x.stage === 'running' || x.stage === 'prompt');
+  const queued = items.filter(x => x.stage === 'queued').length;
+  const parts = [
+    `${completed}/${total} 完了`,
+    `保存 ${saved}`,
+  ];
+  if (failed) parts.push(`失敗 ${failed}`);
+  if (queued) parts.push(`待機 ${queued}`);
+  let line = parts.join(' / ');
+  if (running) {
+    line += `\n処理中: ${running.doc_id || ''} (${running.message || running.stage})`;
+  }
+  if (data.status === 'partial') line += '\n一部失敗しましたが、成功分は保存済みです。';
+  return line;
+}
+
+function _startCompareProgressPolling(statusEl, fallbackText) {
+  _stopCompareProgressPolling();
+  if (!statusEl) return;
+  const tick = async () => {
+    try {
+      const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/comparison/progress?t=${Date.now()}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      statusEl.textContent = _formatCompareProgress(data, fallbackText);
+    } catch (e) {
+      // 進捗表示は補助機能なので、通信失敗しても実行本体は止めない。
+    }
+  };
+  tick();
+  _compareProgressTimer = window.setInterval(tick, 2000);
+}
+
+async function _loadCompareProgress() {
+  const resp = await fetch(`/case/${encodeURIComponent(CASE_ID)}/comparison/progress?t=${Date.now()}`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return await resp.json();
+}
+
+function _unfinishedCitationIdsFromProgress(data) {
+  const items = Object.values((data && data.items) || {});
+  const ids = [];
+  items.forEach(item => {
+    if (!item || item.stage === 'done') return;
+    if (item.has_response) return;
+    const id = item.citation_id || item.doc_id;
+    if (id && !ids.includes(id)) ids.push(id);
+  });
+  return ids;
+}
+
+async function resumeComparisonFromProgress(source) {
+  let data;
+  try {
+    data = await _loadCompareProgress();
+  } catch (e) {
+    alert('再開用の進捗を取得できません: ' + e.message);
+    return;
+  }
+  const ids = _unfinishedCitationIdsFromProgress(data);
+  if (!ids.length) {
+    alert('再開対象はありません。前回実行分は完了済みです。');
+    return;
+  }
+  const total = data.total || Object.keys(data.items || {}).length || ids.length;
+  const done = data.saved || 0;
+  const failed = data.failed || 0;
+  if (!confirm(
+    `前回の対比を再開します。\n\n` +
+    `前回進捗: ${done}/${total} 保存済み${failed ? ` / 失敗 ${failed}` : ''}\n` +
+    `再開対象: ${ids.length} 件\n${ids.join(', ')}\n\n` +
+    `保存済み文献は再実行せず、未完了分だけ 1文献=1コール で実行します。`
+  )) return;
+  await _runCompareCitationIds(ids, { autoReload: true, source: source || 'resume' });
+}
+
+async function _runCompareCitationIds(citationIds, options = {}) {
   if (!citationIds || !citationIds.length) return;
-  _showRecompareOverlay(
-    `分節保存完了。前回選択の ${citationIds.length} 件で自動再対比を実行中...`
-  );
+  const model = getPickerModel('compare-step5', 'opus');
+  const mode = (document.getElementById('compare-mode-picker')?.value) || 'requirement_first';
+  const effort = (document.getElementById('compare-effort-picker')?.value) || 'high';
+  try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
+  const overlay = document.getElementById('exec-compare-progress');
+  const status = document.getElementById('exec-compare-status');
+  const fallbackText = `LLM(${model}/${mode}/effort=${effort})で${citationIds.length}件の文献を 1文献=1コール で対比分析中...`;
+  if (overlay) overlay.classList.add('show');
+  if (status) status.textContent = fallbackText;
+  _startCompareProgressPolling(status, fallbackText);
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: citationIds }),
+      body: JSON.stringify({ citation_ids: citationIds, model, mode, effort, per_citation: true })
+    });
+    const data = await _readJsonResponse(resp);
+    _stopCompareProgressPolling();
+    if (overlay) overlay.classList.remove('show');
+    if (!resp.ok || data.error || data.success === false) {
+      _renderExecError(document.getElementById('parse-result'), data);
+      return;
+    }
+    const docs = (data.saved_docs || []).join(', ');
+    const errMsg = (data.errors && data.errors.length)
+      ? `\n\n警告:\n${data.errors.join('\n')}` : '';
+    alert(
+      `✅ 対比完了 (${data.num_docs || 0} 件)\n` +
+      `保存先: ${docs}${errMsg}\n\n` +
+      `ページをリロードして反映を確認します。`
+    );
+    if (options.autoReload !== false) location.reload();
+  } catch (e) {
+    _stopCompareProgressPolling();
+    if (overlay) overlay.classList.remove('show');
+    alert('通信エラー: ' + e.message);
+  }
+}
+
+async function _runAutoRecompare(citationIds) {
+  if (!citationIds || !citationIds.length) return;
+  const model = getPickerModel('compare-step5', 'opus');
+  const mode = (document.getElementById('compare-mode-picker')?.value) || 'requirement_first';
+  const effort = (document.getElementById('compare-effort-picker')?.value) || 'high';
+  try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
+  try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
+  const fallbackText = `分節保存完了。前回選択の ${citationIds.length} 件を 1文献=1コール で自動再対比中...`;
+  _showRecompareOverlay(
+    fallbackText
+  );
+  _startCompareProgressPolling(document.getElementById('auto-recompare-text'), fallbackText);
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/execute`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ citation_ids: citationIds, model, mode, effort, per_citation: true }),
     });
     const data = await resp.json();
+    _stopCompareProgressPolling();
     _hideRecompareOverlay();
     if (!resp.ok || data.error) {
       alert('自動再対比でエラー: ' + (data.error || `HTTP ${resp.status}`));
@@ -2856,6 +2998,7 @@ async function _runAutoRecompare(citationIds) {
     // freshness を反映するためページリロード
     location.reload();
   } catch (e) {
+    _stopCompareProgressPolling();
     _hideRecompareOverlay();
     alert('自動再対比 通信エラー: ' + e.message);
   }
@@ -2947,7 +3090,7 @@ async function bookmarkHongan() {
       if (!fr.ok) return;
       const fd = await fr.json();
       if (!fd.needs_recompare) return;  // 不整合なし → 何もしない
-      const targetIds = fd.citation_ids_with_responses || [];
+      const targetIds = fd.recompare_citation_ids || fd.citation_ids_with_responses || [];
       if (!targetIds.length) return;
       if (window._segmentsAutoRecompareAcked === false) return;  // 同セッションで「No」済
       const ok = confirm(
@@ -4868,15 +5011,18 @@ async function executeCompareUnanswered() {
   const overlay = document.getElementById('exec-compare-progress');
   const status = document.getElementById('exec-compare-status');
   if (overlay) overlay.classList.add('show');
+  const fallbackText = `LLM(${model}/${mode}/effort=${effort})で未対比 ${targetIds.length} 件を 1文献=1コール で対比分析中...`;
   if (status) status.textContent =
-    `LLM(${model}/${mode}/effort=${effort})で未対比 ${targetIds.length} 件を対比分析中...`;
+    fallbackText;
+  _startCompareProgressPolling(status, fallbackText);
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: targetIds, model, mode, effort })
+      body: JSON.stringify({ citation_ids: targetIds, model, mode, effort, per_citation: true })
     });
-    const data = await resp.json();
+    const data = await _readJsonResponse(resp);
+    _stopCompareProgressPolling();
     if (overlay) overlay.classList.remove('show');
     if (data.error || data.success === false) {
       _renderExecError(document.getElementById('parse-result'), data);
@@ -4896,6 +5042,7 @@ async function executeCompareUnanswered() {
       alert('対比に失敗 (パース失敗等):\n' + JSON.stringify(data, null, 2).slice(0, 500));
     }
   } catch (e) {
+    _stopCompareProgressPolling();
     if (overlay) overlay.classList.remove('show');
     alert('通信エラー: ' + e.message);
   }
@@ -5067,6 +5214,18 @@ async function parseResponse() {
 // ===== 対比サマリ読み込み & 表描画（列表示/詳細・充足切替） =====
 let _compSummaryData = null;
 let _compSummaryWired = false;
+let _compViewToggleWired = false;
+let _compProgressData = null;
+let _compCitSortYearDir = _workspaceLoad('comp-cit-sort-year-dir', 'desc') === 'asc' ? 'asc' : 'desc';
+let _compActiveReqFilters = {}; // filterKey -> { kind: 'comparison'|'sub_claim', key: string, judgments: ['○','△','×'] }
+let _compCitationCardsVisible = false;
+let _compCitationCardHits = [];
+let _compCitationCardIdsKey = '';
+let _compCitationCardLoadingKey = '';
+let _compCitationCardSyncTimer = null;
+let _compHitBookmarks = null;
+let _compHitBookmarkLoading = false;
+let _compActiveBookmarkFilter = _workspaceLoad('comp-hit-bookmark-filter', '');
 
 function _compMetaForCit(citId) {
   const list = (window.CASE_BOOTSTRAP && window.CASE_BOOTSTRAP.citations_meta) || [];
@@ -5109,8 +5268,8 @@ function _compJClass(j) {
 
 // === 対比表ペースト用クリップボード書き出し ===
 // 1 行 = 1 分節。請求項1 (1a/1b/1c...) は連続、請求項 2 以降は前に空行 1 つ。
-// セル内容: [判定prefix(?|x|空)][cited_location 記法] (/comment があれば末尾)
-//   判定: ○→prefix なし、△→"?"、×→"x"
+// セル内容: [判定prefix(?|!|空)][cited_location 記法] (/comment があれば末尾)
+//   判定: ○→prefix なし、△→"?"、×→"!"
 //   comment: cited_location 内の `"..."` 部分。空なら judgment_reason の短縮版でフォールバック。
 function _stripCommentMemoFromLoc(raw) {
   if (!raw) return '';
@@ -5146,7 +5305,7 @@ function _formatCompForPaste(comp) {
   const j = (comp.judgment || '').trim();
   let prefix = '';
   if (j === '△') prefix = '?';
-  else if (j === '×') prefix = 'x';
+  else if (j === '×') prefix = '!';
   // ○ や空は prefix なし
 
   const raw = comp.cited_location || '';
@@ -5166,21 +5325,14 @@ function _buildClipboardForCit(d, citId) {
   const resp = d.responses && d.responses[citId];
   if (!resp) return '';
   const lines = [];
-  // 請求項1 の分節 (1a, 1b, 1c, ...) - 空行なし
-  for (const segId of (d.segIds || [])) {
-    const comp = (resp.comparisons || []).find((c) => c.requirement_id === segId);
-    lines.push(_formatCompForPaste(comp));
-  }
-  // 従属請求項 (請求項2 以降) - 各々の前に空行 1 つ
-  // master 側 (d.subClaims) の順序でループし、response 側 (resp.sub_claims) を引き当てる
-  // response が欠落している従属請求項は空文字 (空のセル) を出す
-  const masterSubs = (d.subClaims || []).slice().sort(
-    (a, b) => (a.claim_number || 0) - (b.claim_number || 0)
-  );
-  for (const claim of masterSubs) {
-    const sub = (resp.sub_claims || []).find((sc) => sc.claim_number === claim.claim_number);
-    lines.push('');
-    lines.push(_formatCompForPaste(sub));
+  const rows = d.claimRows || (d.segIds || []).map((segId) => ({kind: 'comparison', seg_id: segId}));
+  for (const row of rows) {
+    if (row.kind === 'comparison') {
+      lines.push(_formatCompForPaste(_compForSegment(resp, row.seg_id)));
+    } else if (row.kind === 'sub_claim') {
+      const sub = (resp.sub_claims || []).find((sc) => sc.claim_number === row.claim_number);
+      lines.push(_formatCompForPaste(sub));
+    }
   }
   return lines.join('\n');
 }
@@ -5243,6 +5395,293 @@ function _compJDisp(comp) {
   return disp;
 }
 
+function _compForSegment(resp, segId) {
+  if (!resp || !segId) return null;
+  const sid = String(segId);
+  const comp = (resp.comparisons || []).find((c) => String(c.requirement_id || '') === sid);
+  if (comp) return comp;
+  // 旧プロンプトでは、請求項2/4/8/9のような後続独立請求項が sub_claims に
+  // 入っていた。正式には再対比対象だが、画面の空欄を減らすため
+  // requirement_id が一致する旧データを暫定表示に使う。
+  const legacySub = (resp.sub_claims || []).find((sc) => String(sc.requirement_id || '') === sid);
+  if (legacySub) {
+    return Object.assign({_legacy_sub_claim_fallback: true}, legacySub);
+  }
+  const m = sid.match(/^(\d+)/);
+  const claimNumber = m ? Number(m[1]) : null;
+  const legacyClaimSub = claimNumber
+    ? (resp.sub_claims || []).find((sc) => Number(sc.claim_number) === claimNumber)
+    : null;
+  if (legacyClaimSub) {
+    return Object.assign({_legacy_sub_claim_fallback: true}, legacyClaimSub);
+  }
+  return null;
+}
+
+function _compNormalizeJudgment(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (s.includes('○') || s === 'o' || s === 'O' || /^ok$/i.test(s)) return '○';
+  if (s.includes('△') || s.includes('▲')) return '△';
+  if (s.includes('×') || s.includes('✕') || s.includes('✖') || s.toLowerCase() === 'x') return '×';
+  return s.charAt(0);
+}
+
+function _compReqFilterKey(kind, key) {
+  return (kind === 'sub_claim' ? 'sub_claim' : 'comparison') + ':' + String(key || '');
+}
+
+function _compReqFilterParts(filterKey) {
+  const s = String(filterKey || '');
+  const idx = s.indexOf(':');
+  if (idx < 0) return {kind: 'comparison', key: s};
+  return {kind: s.slice(0, idx) || 'comparison', key: s.slice(idx + 1)};
+}
+
+function _compIsActiveReqFilter(kind, key) {
+  const filterKey = _compReqFilterKey(kind, key);
+  const f = _compActiveReqFilters[filterKey];
+  return !!(f && f.judgments && f.judgments.length);
+}
+
+function _compReqFilterFor(kind, key) {
+  return _compActiveReqFilters[_compReqFilterKey(kind, key)] || null;
+}
+
+function _compActiveReqFilterList() {
+  return Object.values(_compActiveReqFilters || {}).filter((f) =>
+    f && f.judgments && f.judgments.length
+  );
+}
+
+function _compJudgmentForCit(d, citId, kind, key) {
+  const resp = d && d.responses ? d.responses[citId] : null;
+  if (!resp) return '';
+  if (kind === 'sub_claim') {
+    const claimNumber = Number(key);
+    const sub = (resp.sub_claims || []).find((sc) => Number(sc.claim_number) === claimNumber);
+    return _compNormalizeJudgment(sub && sub.judgment);
+  }
+  const comp = _compForSegment(resp, String(key));
+  return _compNormalizeJudgment(comp && comp.judgment);
+}
+
+function _compFilterCitationsByRequirement(d, citIds) {
+  const filters = _compActiveReqFilterList();
+  if (!filters.length) {
+    return citIds;
+  }
+  return citIds.filter((citId) => filters.every((f) => {
+    const allowed = new Set(f.judgments || []);
+    return allowed.has(_compJudgmentForCit(d, citId, f.kind, f.key));
+  }));
+}
+
+function _compBookmarkNorm(s) {
+  return String(s || '').toUpperCase().replace(/[\s\-_/／ー－.,，．・()（）]/g, '');
+}
+
+function _compBookmarkAliasesForCit(citId) {
+  const meta = _compMetaForCit(citId);
+  return [citId, meta.id, meta.label, meta.patent_id, meta.doc_id]
+    .filter(Boolean)
+    .map(_compBookmarkNorm)
+    .filter(Boolean);
+}
+
+function _compBookmarkMatchesCit(bookmark, citId) {
+  if (!bookmark || !citId) return false;
+  const b = _compBookmarkNorm(bookmark.patent_id || bookmark.id || '');
+  if (!b) return false;
+  return _compBookmarkAliasesForCit(citId).some((a) => a === b || a.includes(b) || b.includes(a));
+}
+
+function _compBookmarkNames() {
+  const names = new Set();
+  for (const b of (_compHitBookmarks || [])) {
+    if (b && b.name) names.add(String(b.name));
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b, 'ja'));
+}
+
+function _compFilterCitationsByBookmark(citIds) {
+  const name = String(_compActiveBookmarkFilter || '').trim();
+  if (!name) return citIds;
+  const bookmarks = (_compHitBookmarks || []).filter((b) => b && String(b.name || '') === name);
+  if (!bookmarks.length) return [];
+  return citIds.filter((citId) => bookmarks.some((b) => _compBookmarkMatchesCit(b, citId)));
+}
+
+function _setCompBookmarkFilter(name) {
+  _compActiveBookmarkFilter = String(name || '').trim();
+  if (_compActiveBookmarkFilter) _workspaceStore('comp-hit-bookmark-filter', _compActiveBookmarkFilter);
+  else _workspaceStore('comp-hit-bookmark-filter', '');
+  renderCompSummaryTable();
+}
+
+async function loadCompHitBookmarks(force = false) {
+  if (_compHitBookmarkLoading) return;
+  if (_compHitBookmarks !== null && !force) return;
+  _compHitBookmarkLoading = true;
+  try {
+    const resp = await fetch('/case/' + encodeURIComponent(CASE_ID) + '/hit-bookmarks');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    _compHitBookmarks = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+    if (_compActiveBookmarkFilter && !_compBookmarkNames().includes(_compActiveBookmarkFilter)) {
+      _compActiveBookmarkFilter = '';
+      _workspaceStore('comp-hit-bookmark-filter', '');
+    }
+  } catch (e) {
+    console.warn('hit bookmark load failed', e);
+    _compHitBookmarks = [];
+  } finally {
+    _compHitBookmarkLoading = false;
+  }
+  if (_compSummaryData) renderCompSummaryTable();
+}
+
+function _applyHitBookmarkUpdate(data) {
+  if (!data || data.case_id && data.case_id !== CASE_ID) return;
+  if (Array.isArray(data.bookmarks)) {
+    _compHitBookmarks = data.bookmarks;
+  } else if (data.bookmark) {
+    const next = (_compHitBookmarks || []).slice();
+    const b = data.bookmark;
+    const exists = next.some((x) => x && x.name === b.name && x.patent_id === b.patent_id);
+    if (!exists) next.push(b);
+    _compHitBookmarks = next;
+  } else {
+    loadCompHitBookmarks(true);
+    return;
+  }
+  if (_compSummaryData) renderCompSummaryTable();
+}
+
+function _compCurrentVisMap(d) {
+  const visMap = {};
+  const citIds = (d && d.citIds) || [];
+  citIds.forEach((id) => { visMap[id] = true; });
+  const colbar = document.getElementById('comp-summary-colbar');
+  if (colbar) {
+    colbar.querySelectorAll('.comp-col-toggle').forEach((el) => {
+      const id = el.getAttribute('data-cit-id');
+      if (id) visMap[id] = el.checked;
+    });
+  }
+  return visMap;
+}
+
+function _compCurrentActiveCitIds(d) {
+  if (!d) return [];
+  const visMap = _compCurrentVisMap(d);
+  const base = _compSortedCitIds(d).filter((id) => visMap[id] !== false);
+  return _compFilterCitationsByRequirement(d, _compFilterCitationsByBookmark(base));
+}
+
+function _compReqFilterHtml(kind, key) {
+  const filterKey = _compReqFilterKey(kind, key);
+  const active = _compIsActiveReqFilter(kind, key);
+  const filter = _compReqFilterFor(kind, key);
+  const selected = active ? new Set(filter.judgments || []) : new Set();
+  const btns = ['○', '△', '×'].map((j) => {
+    const on = selected.has(j);
+    return '<button type="button" class="comp-req-filter-btn comp-req-filter-' +
+      (j === '○' ? 'ok' : j === '△' ? 'partial' : 'ng') +
+      (on ? ' is-active' : '') +
+      '" data-req-filter="' + _escapeAttr(filterKey) +
+      '" data-judgment="' + _escapeAttr(j) +
+      '" title="この構成要件で ' + _escapeAttr(j) + ' の文献だけ表示">' + j + '</button>';
+  }).join('');
+  const clear = active
+    ? '<button type="button" class="comp-req-filter-clear" data-req-filter-clear="' +
+        _escapeAttr(filterKey) + '" title="この構成要件フィルタを解除">解除</button>'
+    : '';
+  return '<div class="comp-req-filter" title="この構成要件の判定で文献列を絞り込み">' + btns + clear + '</div>';
+}
+
+function _toggleCompReqFilter(filterKey, judgment) {
+  const parts = _compReqFilterParts(filterKey);
+  const j = _compNormalizeJudgment(judgment);
+  if (!j) return;
+  let judgments = [];
+  const current = _compActiveReqFilters[filterKey];
+  if (current && current.judgments) {
+    judgments = current.judgments.slice();
+  }
+  const idx = judgments.indexOf(j);
+  if (idx >= 0) judgments.splice(idx, 1);
+  else judgments.push(j);
+  if (!judgments.length) {
+    delete _compActiveReqFilters[filterKey];
+  } else {
+    _compActiveReqFilters[filterKey] = {kind: parts.kind, key: parts.key, judgments};
+  }
+  renderCompSummaryTable();
+}
+
+function _clearCompReqFilter(filterKey) {
+  if (_compActiveReqFilters[filterKey]) {
+    delete _compActiveReqFilters[filterKey];
+    renderCompSummaryTable();
+  }
+}
+
+function _clearAllCompReqFilters() {
+  if (!_compActiveReqFilterList().length) return;
+  _compActiveReqFilters = {};
+  renderCompSummaryTable();
+}
+
+function _compCategoryRank(cat) {
+  if (cat === 'X') return 0;
+  if (cat === 'Y') return 1;
+  if (cat === 'A') return 2;
+  return 3;
+}
+
+function _compYearForCit(citId) {
+  const meta = _compMetaForCit(citId);
+  const rawValues = [meta.year, meta.publication_year, meta.pub_year, meta.label, meta.id, citId];
+  for (const raw of rawValues) {
+    const s = String(raw || '').replace(/[０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+    if (!s) continue;
+    const m = s.match(/(?:JP|WO|US|EP|CN|KR)?\s*(18|19|20)\d{2}/i);
+    if (m) {
+      const y = Number(m[0].match(/(18|19|20)\d{2}/)[0]);
+      if (y >= 1800 && y <= 2099) return y;
+    }
+  }
+  return null;
+}
+
+function _compSortedCitIds(d) {
+  const ids = ((d && d.citIds) || []).slice();
+  const originalIndex = new Map(ids.map((id, idx) => [String(id), idx]));
+  const yearDir = _compCitSortYearDir === 'asc' ? 'asc' : 'desc';
+  ids.sort((a, b) => {
+    const catA = _compCategoryForCit(a, d && d.responses && d.responses[a]);
+    const catB = _compCategoryForCit(b, d && d.responses && d.responses[b]);
+    const cr = _compCategoryRank(catA) - _compCategoryRank(catB);
+    if (cr !== 0) return cr;
+    const ya = _compYearForCit(a);
+    const yb = _compYearForCit(b);
+    if (ya !== null && yb !== null && ya !== yb) {
+      return yearDir === 'asc' ? (ya - yb) : (yb - ya);
+    }
+    if (ya !== null && yb === null) return -1;
+    if (ya === null && yb !== null) return 1;
+    return (originalIndex.get(String(a)) || 0) - (originalIndex.get(String(b)) || 0);
+  });
+  return ids;
+}
+
+function _toggleCompCitationYearSort() {
+  _compCitSortYearDir = _compCitSortYearDir === 'desc' ? 'asc' : 'desc';
+  _workspaceStore('comp-cit-sort-year-dir', _compCitSortYearDir);
+  renderCompSummaryTable();
+}
+
 // cited_location 表示: サーバ展開済み (cited_location_expanded) を優先、無ければ raw
 // 備考 (cited_location_comment) があれば併記
 function _compLocHtml(comp, citId) {
@@ -5259,24 +5698,101 @@ function _compLocHtml(comp, citId) {
   return html;
 }
 
+function _getCompViewMode() {
+  const saved = _workspaceLoad('comp-view-mode', '');
+  const checked = document.querySelector('input[name="comp-view"]:checked');
+  const raw = (checked && checked.value) || saved || 'detail';
+  return raw === 'compact' ? 'compact' : 'detail';
+}
+
+function _syncCompViewControls(mode) {
+  const normalized = mode === 'compact' ? 'compact' : 'detail';
+  document.querySelectorAll('input[name="comp-view"]').forEach((el) => {
+    el.checked = el.value === normalized;
+  });
+}
+
+function _postCompViewModeToWorkspaceFrame(mode) {
+  const frame = document.getElementById('workspace-ref-frame');
+  if (!frame || !frame.contentWindow) return;
+  try {
+    frame.contentWindow.postMessage({
+      type: 'pc-comp-view-mode',
+      mode: mode === 'compact' ? 'compact' : 'detail',
+    }, window.location.origin);
+  } catch (_) {
+    // 右作業ペインが未ロード・別URLのときは保存済み状態だけで十分。
+  }
+}
+
+function wireCompViewToggleIfNeeded() {
+  if (_compViewToggleWired) return;
+  _compViewToggleWired = true;
+  document.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || t.name !== 'comp-view') return;
+    const mode = t.value === 'compact' ? 'compact' : 'detail';
+    _workspaceStore('comp-view-mode', mode);
+    _syncCompViewControls(mode);
+    renderCompSummaryTable();
+    _postCompViewModeToWorkspaceFrame(mode);
+  });
+  _syncCompViewControls(_workspaceLoad('comp-view-mode', 'detail'));
+}
+
 function wireCompSummaryIfNeeded() {
+  wireCompViewToggleIfNeeded();
   if (_compSummaryWired) return;
   const root = document.getElementById('comparison-summary');
   if (!root) return;
   _compSummaryWired = true;
   root.addEventListener('change', (e) => {
     const t = e.target;
-    if (t && ((t.classList && t.classList.contains('comp-col-toggle')) || t.name === 'comp-view')) {
+    if (t && t.classList && t.classList.contains('comp-col-toggle')) {
       renderCompSummaryTable();
+      return;
     }
-  });
-  document.addEventListener('change', (e) => {
-    const t = e.target;
-    if (t && t.name === 'comp-view') {
-      renderCompSummaryTable();
+    if (t && t.matches && t.matches('[data-comp-bookmark-filter]')) {
+      _setCompBookmarkFilter(t.value || '');
     }
   });
   root.addEventListener('click', (e) => {
+    const sortBtn = e.target && e.target.closest ? e.target.closest('[data-sort-year]') : null;
+    if (sortBtn) {
+      e.preventDefault();
+      _toggleCompCitationYearSort();
+      return;
+    }
+    const holdBtn = e.target && e.target.closest ? e.target.closest('[data-hold-visible-cits]') : null;
+    if (holdBtn) {
+      e.preventDefault();
+      compHoldActiveCitations(holdBtn);
+      return;
+    }
+    const cardsBtn = e.target && e.target.closest ? e.target.closest('[data-toggle-citation-cards]') : null;
+    if (cardsBtn) {
+      e.preventDefault();
+      toggleCompCitationCards(cardsBtn);
+      return;
+    }
+    const reqBtn = e.target && e.target.closest ? e.target.closest('.comp-req-filter-btn') : null;
+    if (reqBtn) {
+      e.preventDefault();
+      _toggleCompReqFilter(reqBtn.getAttribute('data-req-filter') || '', reqBtn.getAttribute('data-judgment') || '');
+      return;
+    }
+    const reqClear = e.target && e.target.closest ? e.target.closest('[data-req-filter-clear]') : null;
+    if (reqClear) {
+      e.preventDefault();
+      _clearCompReqFilter(reqClear.getAttribute('data-req-filter-clear') || '');
+      return;
+    }
+    const reqClearAll = e.target && e.target.closest ? e.target.closest('[data-req-filter-clear-all]') : null;
+    if (reqClearAll) {
+      e.preventDefault();
+      _clearAllCompReqFilters();
+      return;
+    }
     const t = e.target && e.target.closest ? e.target.closest('.comp-colbar-quick-btn') : null;
     if (!t) return;
     e.preventDefault();
@@ -5284,6 +5800,17 @@ function wireCompSummaryIfNeeded() {
   });
 }
 
+document.addEventListener('DOMContentLoaded', wireCompViewToggleIfNeeded);
+
+window.addEventListener('message', (e) => {
+  if (e.origin !== window.location.origin) return;
+  const data = e.data || {};
+  if (!data || data.type !== 'pc-comp-view-mode') return;
+  const mode = data.mode === 'compact' ? 'compact' : 'detail';
+  _workspaceStore('comp-view-mode', mode);
+  _syncCompViewControls(mode);
+  renderCompSummaryTable();
+});
 // 対比サマリ表の外（引例テキスト全文エリアなど）からの段落リンクも拾う
 (function _wireGlobalParaRef() {
   if (typeof document === 'undefined') return;
@@ -5456,28 +5983,98 @@ function _compColbarApplyQuickSelect(action) {
 }
 
 function _buildColbarHtml(d, visMap) {
+  const sortedIds = _compSortedCitIds(d);
+  const yearLabel = _compCitSortYearDir === 'desc' ? '年↓' : '年↑';
+  const yearTitle = _compCitSortYearDir === 'desc'
+    ? 'X/Y/A優先、カテゴリ内は新しい年から表示。クリックで古い順へ'
+    : 'X/Y/A優先、カテゴリ内は古い年から表示。クリックで新しい順へ';
+  const bookmarkNames = _compBookmarkNames();
+  const bookmarkSelect = bookmarkNames.length
+    ? '<label class="comp-bookmark-filter"><span>しおり</span><select data-comp-bookmark-filter="1">' +
+        '<option value="">すべて</option>' +
+        bookmarkNames.map((name) => '<option value="' + _escapeAttr(name) + '"' +
+          (name === _compActiveBookmarkFilter ? ' selected' : '') + '>' +
+          _escapeHtml(name) + '</option>').join('') +
+      '</select></label>'
+    : '<span class="comp-bookmark-filter comp-bookmark-filter-empty" title="全文レビュー画面でしおりを付けるとここで絞り込めます">しおりなし</span>';
   let cb = '<div class="comp-colbar-row1">' +
     '<span class="comp-colbar-lbl">表示する列</span>' +
     '<div class="comp-colbar-quick" role="group" aria-label="カテゴリ別トグル">' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-sort-btn" data-sort-year="1" title="' + _escapeAttr(yearTitle) + '">XYA/' + yearLabel + '</button>' +
       '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-x" data-quick="X" title="X 引例の表示 ON/OFF">X</button>' +
       '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-y" data-quick="Y" title="Y 引例の表示 ON/OFF">Y</button>' +
       '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-a" data-quick="A" title="A 文献の表示 ON/OFF">A</button>' +
       '<button type="button" class="comp-colbar-quick-btn" data-quick="ALL" title="全文献を表示">全選択</button>' +
       '<button type="button" class="comp-colbar-quick-btn comp-colbar-quick-clear" data-quick="NONE" title="すべてのチェックを外す">All clear</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-card-btn" data-toggle-citation-cards="1" title="表示中の文献を Step 4.5 と同じ候補カードで表示">カード表示</button>' +
+      '<button type="button" class="comp-colbar-quick-btn comp-colbar-hold-btn" data-hold-visible-cits="1" title="現在表示中の文献を検索候補の待機BOXへ移し、通常候補から外す">表示中を待機BOX</button>' +
     '</div>' +
+    bookmarkSelect +
     '</div>' +
     '<div class="comp-colbar-chips">';
-  for (const cid of d.citIds) {
+  for (const cid of sortedIds) {
     const meta = _compMetaForCit(cid);
     const cat = _compCategoryForCit(cid, d.responses[cid]);
+    const year = _compYearForCit(cid);
     const ch = (visMap[cid] !== false) ? ' checked' : '';
     cb += '<label class="comp-col-chip">' +
       '<input type="checkbox" class="comp-col-toggle" data-cit-id="' + _escapeHtml(cid) + '"' + ch + ' title="表にこの文献列を含める">' +
       '<span class="comp-col-chip-name">' + _escapeHtml(meta.label || cid) + '</span>' +
-      '<span class="comp-cat comp-cat-' + (cat === 'X' ? 'x' : cat === 'Y' ? 'y' : cat === 'A' ? 'a' : 'na') + ' comp-cat-inline">' + (cat || '—') + '</span></label>';
+      '<span class="comp-cat comp-cat-' + (cat === 'X' ? 'x' : cat === 'Y' ? 'y' : cat === 'A' ? 'a' : 'na') + ' comp-cat-inline">' + (cat || '—') + '</span>' +
+      (year ? '<span class="comp-col-chip-year">' + String(year) + '</span>' : '') +
+      _compProgressBadgeHtml(cid, d) + '</label>';
   }
   cb += '</div>';
+  const filters = _compActiveReqFilterList();
+  if (filters.length) {
+    const chips = filters.map((f) => {
+      const label = f.kind === 'sub_claim' ? '請求項' + String(f.key) : String(f.key);
+      return '<span class="comp-req-filter-status-chip"><strong>' +
+        _escapeHtml(label) + '</strong> / ' + _escapeHtml((f.judgments || []).join('・')) +
+        '<button type="button" class="comp-req-filter-clear" data-req-filter-clear="' +
+        _escapeAttr(_compReqFilterKey(f.kind, f.key)) + '" title="この条件だけ解除">×</button></span>';
+    }).join('');
+    cb += '<div class="comp-req-filter-status">構成要件フィルタ: ' + chips +
+      '<button type="button" class="comp-req-filter-clear comp-req-filter-clear-inline" data-req-filter-clear-all="1">全解除</button></div>';
+  }
   return cb;
+}
+
+function _compProgressItemForCit(citId, d) {
+  const progress = (d && d.progress) || _compProgressData;
+  const items = Object.values((progress && progress.items) || {});
+  if (!citId || !items.length) return null;
+  const target = String(citId);
+  return items.find((item) => {
+    if (!item) return false;
+    if (String(item.citation_id || '') === target) return true;
+    if (String(item.doc_id || '') === target) return true;
+    return Array.isArray(item.saved_docs) && item.saved_docs.map(String).includes(target);
+  }) || null;
+}
+
+function _compProgressBadgeHtml(citId, d) {
+  const progress = (d && d.progress) || _compProgressData;
+  if (!progress || progress.status === 'none') return '';
+  const item = _compProgressItemForCit(citId, d);
+  if (!item) return '';
+  const stage = item.stage || '';
+  if (item.has_response && stage !== 'running' && stage !== 'prompt' && stage !== 'queued') {
+    return '<span class="comp-progress-badge comp-progress-done" title="回答JSONが保存済みです。古い失敗進捗は無視して表示しています。">回答済</span>';
+  }
+  if (stage === 'done') {
+    return '<span class="comp-progress-badge comp-progress-done" title="今回の再対比で保存済み">保存済</span>';
+  }
+  if (stage === 'error') {
+    return '<span class="comp-progress-badge comp-progress-error" title="' + _escapeAttr(item.error || item.message || '失敗') + '">失敗</span>';
+  }
+  if (stage === 'running' || stage === 'prompt') {
+    return '<span class="comp-progress-badge comp-progress-running" title="現在この文献を再対比中">再対比中</span>';
+  }
+  if (stage === 'queued') {
+    return '<span class="comp-progress-badge comp-progress-waiting" title="今回の再対比でまだ処理されていません">未再対比</span>';
+  }
+  return '';
 }
 
 function renderCompSummaryTable() {
@@ -5486,6 +6083,7 @@ function renderCompSummaryTable() {
   const colbar = document.getElementById('comp-summary-colbar');
   if (!tbody) return;
   wireCompSummaryIfNeeded();
+  if (_compHitBookmarks === null) loadCompHitBookmarks();
 
   const d = _compSummaryData;
   if (!d) {
@@ -5496,6 +6094,7 @@ function renderCompSummaryTable() {
   }
 
   const citIds = d.citIds;
+  const sortedCitIds = _compSortedCitIds(d);
   if (citIds.length === 0) {
     tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2">—</td></tr>';
     return;
@@ -5514,25 +6113,25 @@ function renderCompSummaryTable() {
     return;
   }
 
-  const visMap = {};
-  citIds.forEach((id) => { visMap[id] = true; });
-  if (colbar) {
-    colbar.querySelectorAll('.comp-col-toggle').forEach((el) => {
-      const id = el.getAttribute('data-cit-id');
-      if (id) visMap[id] = el.checked;
-    });
-  }
-  const activeCits = citIds.filter((id) => visMap[id] !== false);
-  if (activeCits.length === 0) {
-    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:center; color:var(--text2);">少なくとも1件の「表示する列」にチェックを入れてください。</td></tr>';
+  const visMap = _compCurrentVisMap(d);
+  const baseActiveCits = sortedCitIds.filter((id) => visMap[id] !== false);
+  const bookmarkActiveCits = _compFilterCitationsByBookmark(baseActiveCits);
+  const activeCits = _compFilterCitationsByRequirement(d, bookmarkActiveCits);
+  const zeroByBookmarkFilter = baseActiveCits.length > 0 && bookmarkActiveCits.length === 0 && !!_compActiveBookmarkFilter;
+  const zeroByReqFilter = bookmarkActiveCits.length > 0 && activeCits.length === 0 && _compActiveReqFilterList().length > 0;
+  if (baseActiveCits.length === 0) {
+    const msg = '少なくとも1件の「表示する列」にチェックを入れてください。';
+    tbody.innerHTML = '<tr><td class="comp-loading-cell" colspan="2" style="text-align:center; color:var(--text2);">' + msg + '</td></tr>';
     if (thead) thead.innerHTML = '';
     if (colbar) colbar.innerHTML = _buildColbarHtml(d, visMap);
+    _scheduleCompCitationCardSync();
     return;
   }
 
   if (colbar) colbar.innerHTML = _buildColbarHtml(d, visMap);
 
-  const view = (document.querySelector('input[name="comp-view"]:checked') || {}).value || 'detail';
+  const view = _getCompViewMode();
+  _syncCompViewControls(view);
   const isCompact = view === 'compact';
   const spanAll = activeCits.length + 1;
 
@@ -5544,6 +6143,7 @@ function renderCompSummaryTable() {
     h += '<th class="comp-th-cit" scope="col" data-cit-th="' + _escapeHtml(citId) + '">' +
       '<div class="comp-th-cit-line1">' + _escapeHtml(meta.label || citId) + '</div>' +
       '<div class="comp-th-cat">' + _compCategoryBadgeHtml(cat) + '</div>' +
+      '<div class="comp-th-progress">' + _compProgressBadgeHtml(citId, d) + '</div>' +
       '<button type="button" class="comp-copy-btn" title="該当箇所/コメントを対比表ペースト用にクリップボードへコピー" ' +
       'onclick="copyCitClipboard(\'' + safeCitId + '\', this); event.stopPropagation();">📋 コピー</button>' +
       '</th>';
@@ -5551,65 +6151,79 @@ function renderCompSummaryTable() {
   h += '</tr>';
   if (thead) thead.innerHTML = h;
 
-  const segIds = d.segIds;
-  const segTextMap = d.segTextMap || {};
+  const rows = d.claimRows || (d.segIds || []).map((segId) => ({kind: 'comparison', seg_id: segId, text: (d.segTextMap || {})[segId] || ''}));
   let body = '';
-  for (const segId of segIds) {
-    const segText = segTextMap[segId] || '';
-    const reqCellHtml = '<span class="comp-req-id">' + _escapeHtml(segId) + '</span>' +
-      (segText ? '<span class="comp-req-text">' + _escapeHtml(segText) + '</span>' : '');
-    if (isCompact) {
-      body += '<tr>';
-      body += '<td class="comp-td-req">' + reqCellHtml + '</td>';
-      for (const citId of activeCits) {
-        const resp = d.responses[citId];
-        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
-        const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
-        const jDisp = comp ? _compJDisp(comp) : '—';
-        body += '<td class="comp-td-j ' + _compJClass(jRaw) + ' comp-td-zen">' + _escapeHtml(jDisp) + '</td>';
-      }
-      body += '</tr>';
-    } else {
-      body += '<tr>';
-      body += '<td class="comp-td-req" rowspan="2" style="vertical-align:top;">' + reqCellHtml + '</td>';
-      for (const citId of activeCits) {
-        const resp = d.responses[citId];
-        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
-        const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
-        const jDisp = comp ? _compJDisp(comp) : '—';
-        body += '<td class="comp-td-j ' + _compJClass(jRaw) + '">' + _escapeHtml(jDisp) + '</td>';
-      }
-      body += '</tr><tr>';
-      for (const citId of activeCits) {
-        const resp = d.responses[citId];
-        const comp = resp && resp.comparisons && resp.comparisons.find((c) => c.requirement_id === segId);
-        if (comp) {
-          const reason = _compReasonHtml(comp.judgment_reason || '', citId);
-          const loc = _compLocHtml(comp, citId);
-          const editedBadge = comp._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(comp._edited_at) + '">✏</span>' : '';
-          const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'comparison\',\'' + _escapeAttr(segId) + '\')">✏</button>';
-          const chatBtn = '<button class="comp-chat-btn" title="このセルについて壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + _escapeAttr(segId) + '\',\'comparison\')">💬</button>';
-          body += '<td class="comp-td-reason">' + editedBadge + reason + loc + editBtn + chatBtn + '</td>';
-        } else {
-          body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
-        }
-      }
-      body += '</tr>';
-    }
+  if (zeroByBookmarkFilter || zeroByReqFilter) {
+    const emptyMsg = zeroByBookmarkFilter
+      ? '選択中のしおりに該当する文献がありません。文献選択フィルタのしおりを解除してください。'
+      : '選択中の構成要件フィルタに該当する文献がありません。左の条件を解除・変更してください。';
+    body += '<tr><td class="comp-loading-cell comp-req-filter-empty" style="color:var(--text2);">' + emptyMsg + '</td></tr>';
   }
-
-  const subClaims = d.subClaims;
-  if (subClaims && subClaims.length > 0) {
-    body += '<tr><th class="comp-section-h" colspan="' + spanAll + '" style="text-align:left; padding-top:0.8rem;">従属請求項</th></tr>';
-    for (const claim of subClaims) {
-      const claimText = claim.full_text || (Array.isArray(claim.segments) ? claim.segments.map((s) => s.text || '').join('') : '');
-      const subReqHtml = '<span class="comp-req-id">請求項' + String(claim.claim_number) + '</span>' +
-        (claimText ? '<span class="comp-req-text">' + _escapeHtml(claimText) + '</span>' : '');
+  for (const row of rows) {
+    if (row.kind === 'comparison') {
+      const segId = row.seg_id;
+      const segText = row.text || (d.segTextMap || {})[segId] || '';
+      const reqCellHtml = '<span class="comp-req-id">' + _escapeHtml(segId) + '</span>' +
+        (segText ? '<span class="comp-req-text">' + _escapeHtml(segText) + '</span>' : '') +
+        _compReqFilterHtml('comparison', segId);
+      if (zeroByBookmarkFilter || zeroByReqFilter) {
+        body += '<tr><td class="comp-td-req">' + reqCellHtml + '</td></tr>';
+        continue;
+      }
+      if (isCompact) {
+        body += '<tr>';
+        body += '<td class="comp-td-req">' + reqCellHtml + '</td>';
+        for (const citId of activeCits) {
+          const resp = d.responses[citId];
+          const comp = _compForSegment(resp, segId);
+          const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
+          const jDisp = comp ? _compJDisp(comp) : '—';
+          body += '<td class="comp-td-j ' + _compJClass(jRaw) + ' comp-td-zen">' + _escapeHtml(jDisp) + '</td>';
+        }
+        body += '</tr>';
+      } else {
+        body += '<tr>';
+        body += '<td class="comp-td-req" rowspan="2" style="vertical-align:top;">' + reqCellHtml + '</td>';
+        for (const citId of activeCits) {
+          const resp = d.responses[citId];
+          const comp = _compForSegment(resp, segId);
+          const jRaw = (comp && comp.judgment) ? String(comp.judgment) : '';
+          const jDisp = comp ? _compJDisp(comp) : '—';
+          body += '<td class="comp-td-j ' + _compJClass(jRaw) + '">' + _escapeHtml(jDisp) + '</td>';
+        }
+        body += '</tr><tr>';
+        for (const citId of activeCits) {
+          const resp = d.responses[citId];
+          const comp = _compForSegment(resp, segId);
+          if (comp) {
+            const reason = _compReasonHtml(comp.judgment_reason || '', citId);
+            const loc = _compLocHtml(comp, citId);
+            const editedBadge = comp._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(comp._edited_at) + '">✏</span>' : '';
+            const legacyBadge = comp._legacy_sub_claim_fallback ? '<span class="comp-edited-badge" title="旧形式 sub_claims から暫定表示。正確な分節対比には再対比してください。">旧</span>' : '';
+            const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'comparison\',\'' + _escapeAttr(segId) + '\')">✏</button>';
+            const chatBtn = '<button class="comp-chat-btn" title="このセルについて壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + _escapeAttr(segId) + '\',\'comparison\')">💬</button>';
+            body += '<td class="comp-td-reason">' + editedBadge + legacyBadge + reason + loc + editBtn + chatBtn + '</td>';
+          } else {
+            body += '<td class="comp-td-reason" style="color:var(--text2);">—</td>';
+          }
+        }
+        body += '</tr>';
+      }
+    } else if (row.kind === 'sub_claim') {
+      const claimNumber = row.claim_number;
+      const claimText = row.text || '';
+      const subReqHtml = '<span class="comp-req-id">請求項' + String(claimNumber) + '</span>' +
+        (claimText ? '<span class="comp-req-text">' + _escapeHtml(claimText) + '</span>' : '') +
+        _compReqFilterHtml('sub_claim', claimNumber);
+      if (zeroByBookmarkFilter || zeroByReqFilter) {
+        body += '<tr><td class="comp-td-req">' + subReqHtml + '</td></tr>';
+        continue;
+      }
       if (isCompact) {
         body += '<tr><td class="comp-td-req">' + subReqHtml + '</td>';
         for (const citId of activeCits) {
           const resp = d.responses[citId];
-          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
+          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claimNumber);
           const jRaw = (sub && sub.judgment) ? String(sub.judgment) : '';
           const jDisp = sub ? _compJDisp(sub) : '—';
           body += '<td class="comp-td-j ' + _compJClass(jRaw) + ' comp-td-zen">' + _escapeHtml(jDisp) + '</td>';
@@ -5619,15 +6233,15 @@ function renderCompSummaryTable() {
         body += '<tr><td class="comp-td-req" style="vertical-align:top;">' + subReqHtml + '</td>';
         for (const citId of activeCits) {
           const resp = d.responses[citId];
-          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claim.claim_number);
+          const sub = resp && resp.sub_claims && resp.sub_claims.find((sc) => sc.claim_number === claimNumber);
           if (sub) {
             const jRaw = (sub.judgment) ? String(sub.judgment) : '';
             const jDisp = _compJDisp(sub);
             const jr = _compReasonHtml(sub.judgment_reason || '', citId);
             const loc = _compLocHtml(sub, citId);
             const editedBadge = sub._edited_at ? '<span class="comp-edited-badge" title="手動編集済 ' + _escapeHtml(sub._edited_at) + '">✏</span>' : '';
-            const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'sub_claim\',\'' + claim.claim_number + '\')">✏</button>';
-            const chatBtn = '<button class="comp-chat-btn" title="この従属請求項について壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + claim.claim_number + '\',\'sub_claim\')">💬</button>';
+            const editBtn = '<button class="comp-edit-btn" title="判定とコメントを修正" onclick="openCompEdit(\'' + _escapeAttr(citId) + '\',\'sub_claim\',\'' + claimNumber + '\')">✏</button>';
+            const chatBtn = '<button class="comp-chat-btn" title="この従属請求項について壁打ち" onclick="openCompChat(\'' + _escapeAttr(citId) + '\',\'' + claimNumber + '\',\'sub_claim\')">💬</button>';
             body += '<td class="comp-td-j ' + _compJClass(jRaw) + '" style="font-size:0.85rem;">' + editedBadge + _escapeHtml(jDisp) + ' <span class="comp-sub-rationale">' + jr + loc + '</span> ' + editBtn + chatBtn + '</td>';
           } else {
             body += '<td style="color:var(--text2);">—</td>';
@@ -5636,6 +6250,11 @@ function renderCompSummaryTable() {
         body += '</tr>';
       }
     }
+  }
+
+  if (zeroByBookmarkFilter || zeroByReqFilter) {
+    tbody.innerHTML = body;
+    return;
   }
 
   body += '<tr><th class="comp-section-h" colspan="' + spanAll + '" style="text-align:left; padding-top:0.8rem;">文献サマリ</th></tr>';
@@ -5661,6 +6280,7 @@ function renderCompSummaryTable() {
   }
   body += '</tr>';
   tbody.innerHTML = body;
+  _scheduleCompCitationCardSync();
 }
 
 function _setCompSummaryLoadError(msg) {
@@ -5782,14 +6402,257 @@ async function saveCompEdit() {
 // ----------------------------------------------------------------
 window._compChatCtx = null;  // {citId, segId, targetKind, context}
 window._compChatWindowWired = false;
+window._compChatQueue = { cells: [], index: -1, selectedOnly: true };
 
 function _getVisibleCompCitationIds() {
+  if (_compSummaryData) return _compCurrentActiveCitIds(_compSummaryData);
   const boxes = Array.from(document.querySelectorAll('#comp-summary-colbar .comp-col-toggle'));
   if (!boxes.length) return null;
   return boxes
     .filter(cb => cb.checked)
     .map(cb => cb.getAttribute('data-cit-id'))
     .filter(Boolean);
+}
+
+async function compHoldActiveCitations(btn) {
+  const ids = _compCurrentActiveCitIds(_compSummaryData);
+  if (!ids.length) {
+    alert('待機BOXへ移す表示中の文献がありません。');
+    return;
+  }
+  const ok = confirm(
+    `現在表示中の ${ids.length} 件を検索候補の待機BOXへ移します。\n` +
+    '待機BOXへ移した候補は、通常の引用候補一覧には表示されません。'
+  );
+  if (!ok) return;
+  const orig = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '退避中...';
+  }
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search-runs/hold-patents`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        patent_ids: ids,
+        note: 'Step 6 の対比表から待機BOXへ移動',
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.error) {
+      alert(data.error || `待機BOXへの移動に失敗しました (HTTP ${resp.status})`);
+      return;
+    }
+    const msg = `待機BOXへ移動: ${data.updated || 0}件` +
+      ((data.not_found || []).length ? ` / 未検出 ${data.not_found.length}件` : '');
+    if (typeof _srShowToast === 'function') _srShowToast(msg);
+    else alert(msg);
+    const currentRunId = _srCurrentRun && _srCurrentRun.run_id;
+    await loadSearchRuns();
+    if (currentRunId && typeof srOpenRun === 'function') {
+      await srOpenRun(currentRunId);
+    }
+  } catch (e) {
+    alert('通信エラー: ' + (e && e.message ? e.message : e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig || '表示中を待機BOX';
+    }
+  }
+}
+
+function _compCitationCardItems(ids) {
+  return (ids || []).map((id) => {
+    const meta = _compMetaForCit(id);
+    const aliases = [id];
+    [meta.label, meta.id].forEach((v) => {
+      const s = String(v || '').trim();
+      if (s && !aliases.includes(s)) aliases.push(s);
+    });
+    return {id, aliases};
+  });
+}
+
+function _compCitationCardPanel() {
+  return document.getElementById('comp-citation-card-panel');
+}
+
+function _compCitationIdsKey(ids) {
+  return (ids || []).map(String).join('\u001f');
+}
+
+function _scheduleCompCitationCardSync() {
+  if (!_compCitationCardsVisible) return;
+  if (_compCitationCardSyncTimer) window.clearTimeout(_compCitationCardSyncTimer);
+  _compCitationCardSyncTimer = window.setTimeout(() => {
+    _compCitationCardSyncTimer = null;
+    syncCompCitationCardsToFilters();
+  }, 80);
+}
+
+async function syncCompCitationCardsToFilters() {
+  if (!_compCitationCardsVisible) return;
+  const ids = _compCurrentActiveCitIds(_compSummaryData);
+  const key = _compCitationIdsKey(ids);
+  if (key === _compCitationCardIdsKey || key === _compCitationCardLoadingKey) {
+    renderCompCitationCards();
+    return;
+  }
+  await loadCompCitationCards(null, {ids, keepOpen: true});
+}
+
+async function toggleCompCitationCards(btn) {
+  const panel = _compCitationCardPanel();
+  if (!panel) return;
+  if (_compCitationCardsVisible) {
+    _compCitationCardsVisible = false;
+    _compCitationCardHits = [];
+    _compCitationCardIdsKey = '';
+    _compCitationCardLoadingKey = '';
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    if (btn) btn.textContent = 'カード表示';
+    return;
+  }
+  await loadCompCitationCards(btn);
+}
+
+async function loadCompCitationCards(btn, options) {
+  options = options || {};
+  const panel = _compCitationCardPanel();
+  if (!panel) return;
+  const ids = Array.isArray(options.ids) ? options.ids : _compCurrentActiveCitIds(_compSummaryData);
+  const idsKey = _compCitationIdsKey(ids);
+  if (!ids.length) {
+    panel.style.display = 'block';
+    panel.innerHTML = '<div class="comp-card-panel-empty">表示中の文献がありません。</div>';
+    _compCitationCardsVisible = true;
+    _compCitationCardHits = [];
+    _compCitationCardIdsKey = idsKey;
+    _compCitationCardLoadingKey = '';
+    return;
+  }
+  if (idsKey === _compCitationCardLoadingKey) return;
+  const orig = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '読込中...';
+  }
+  _compCitationCardLoadingKey = idsKey;
+  panel.style.display = 'block';
+  panel.innerHTML = '<div class="comp-card-panel-empty">引用文献カードを読み込み中...（対比表フィルターに同期）</div>';
+  try {
+    const resp = await fetch(`/case/${CASE_ID}/search-runs/citation-cards`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({items: _compCitationCardItems(ids)}),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.error) {
+      panel.innerHTML = '<div class="comp-card-panel-empty comp-card-panel-error">' +
+        _escapeHtml(data.error || `HTTP ${resp.status}`) + '</div>';
+      return;
+    }
+    _compCitationCardHits = data.hits || [];
+    _compCitationCardsVisible = true;
+    _compCitationCardIdsKey = idsKey;
+    if (btn) btn.textContent = 'カード非表示';
+
+    // Step 4.5 と同じキーワードグループ集計を出すため、全文キャッシュをまとめて復元。
+    const pids = Array.from(new Set(_compCitationCardHits.flatMap(h =>
+      [h.patent_id, h._citation_id].filter(Boolean)
+    )));
+    if (pids.length) {
+      try {
+        const ftResp = await fetch(`/case/${CASE_ID}/search-run/hits/cached-full-texts`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({patent_ids: pids}),
+        });
+        if (ftResp.ok) {
+          const ftData = await ftResp.json();
+          window._pkmFullTexts = window._pkmFullTexts || {};
+          Object.entries(ftData.texts || {}).forEach(([pid, data]) => _pkmApplyHitTextUpdate(pid, data));
+        }
+      } catch (_) {}
+    }
+    renderCompCitationCards();
+  } catch (e) {
+    panel.innerHTML = '<div class="comp-card-panel-empty comp-card-panel-error">通信エラー: ' +
+      _escapeHtml(e && e.message ? e.message : e) + '</div>';
+  } finally {
+    if (_compCitationCardLoadingKey === idsKey) _compCitationCardLoadingKey = '';
+    if (btn) {
+      btn.disabled = false;
+      if (!_compCitationCardsVisible) btn.textContent = orig || 'カード表示';
+    }
+  }
+}
+
+function renderCompCitationCards() {
+  const panel = _compCitationCardPanel();
+  if (!panel || !_compCitationCardsVisible) return;
+  const hits = _compCitationCardHits || [];
+  if (!hits.length) {
+    panel.innerHTML = '<div class="comp-card-panel-empty">表示できる引用文献カードがありません。</div>';
+    return;
+  }
+  const matched = hits.filter(h => h._citation_card_status === 'matched').length;
+  const missingFullText = hits.filter(h => h && h.patent_id && !(window._pkmFullTexts && window._pkmFullTexts[h.patent_id])).length;
+  panel.innerHTML =
+    '<div class="comp-card-panel-head">' +
+      '<strong>引用文献カード</strong>' +
+      '<span>表示中 ' + hits.length + '件 / 検索ラン情報あり ' + matched + '件</span>' +
+      '<button type="button" class="btn btn-outline comp-card-fetch-btn" onclick="compFetchDisplayedCitationFullTexts(this)" ' +
+        (missingFullText ? '' : 'disabled ') +
+        'title="表示中カードの未取得全文をローカル引用データ優先で一括取得">全文未取得 ' + missingFullText + '件を取得</button>' +
+      '<span id="comp-card-fetch-status" class="comp-card-fetch-status"></span>' +
+      '<button type="button" class="comp-card-panel-close" onclick="toggleCompCitationCards()">閉じる</button>' +
+    '</div>' +
+    '<div class="comp-card-panel-list">' + hits.map((h) => srRenderHitCard(h)).join('') + '</div>';
+}
+
+async function compFetchDisplayedCitationFullTexts(btn) {
+  const hits = (_compCitationCardHits || []).filter(h => h && h.patent_id);
+  const target = hits.filter(h => !(window._pkmFullTexts && window._pkmFullTexts[h.patent_id]));
+  const status = document.getElementById('comp-card-fetch-status');
+  if (!target.length) {
+    if (status) status.textContent = '取得済み';
+    renderCompCitationCards();
+    return;
+  }
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '取得中...'; }
+  let done = 0;
+  let failed = 0;
+  const updateStatus = (pid) => {
+    if (status) status.textContent = `${done}/${target.length}${failed ? ` 失敗${failed}` : ''}${pid ? `: ${pid}` : ''}`;
+  };
+  updateStatus('');
+  await _runWithConcurrency(target, async (h) => {
+    const pid = h.patent_id;
+    try {
+      const r = await fetch(`/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/fetch-text`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({force: false, source: 'auto'}),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      _pkmApplyHitTextUpdate(pid, data);
+    } catch (e) {
+      failed += 1;
+      console.warn('citation full text fetch failed', pid, e);
+    } finally {
+      done += 1;
+      updateStatus(pid);
+    }
+  }, 4);
+  if (status) status.textContent = failed ? `完了 ${done - failed}/${target.length} / 失敗 ${failed}` : `完了 ${done}/${target.length}`;
+  if (btn) { btn.disabled = false; btn.textContent = orig || '全文未取得を取得'; }
+  renderCompCitationCards();
 }
 
 function _resetCompChatWindowPosition() {
@@ -5879,9 +6742,47 @@ function _compChatSetStatus(text, type) {
   el.style.color = type === 'error' ? '#fca5a5' : type === 'success' ? '#86efac' : 'var(--text2)';
 }
 
+function _compChatSameCell(a, b) {
+  return a && b &&
+    String(a.citation_id) === String(b.citation_id) &&
+    String(a.segment_id) === String(b.segment_id) &&
+    String(a.target_kind || 'comparison') === String(b.target_kind || 'comparison');
+}
+
+function _compChatSetQueue(cells, index, selectedOnly) {
+  window._compChatQueue = {
+    cells: Array.isArray(cells) ? cells : [],
+    index: Number.isFinite(index) ? index : -1,
+    selectedOnly: selectedOnly !== false,
+  };
+  _updateCompChatQueueControls();
+}
+
+function _updateCompChatQueueControls() {
+  const q = window._compChatQueue || {cells: [], index: -1};
+  const total = (q.cells || []).length;
+  const idx = Number.isFinite(q.index) ? q.index : -1;
+  const status = document.getElementById('comp-chat-queue-status');
+  if (status) {
+    status.textContent = total && idx >= 0 ? `${idx + 1} / ${total}` : (total ? `${total} 件` : '');
+  }
+  const prev = document.getElementById('comp-chat-prev-btn');
+  const next = document.getElementById('comp-chat-next-btn');
+  const list = document.getElementById('comp-chat-list-btn');
+  if (prev) prev.disabled = !(total && idx > 0);
+  if (next) next.disabled = !(total && idx >= 0 && idx < total - 1);
+  if (list) list.disabled = !total;
+}
+
+function _compChatQueueIndexFor(citId, segId, targetKind) {
+  const q = window._compChatQueue || {};
+  const target = {citation_id: citId, segment_id: segId, target_kind: targetKind || 'comparison'};
+  return (q.cells || []).findIndex(c => _compChatSameCell(c, target));
+}
+
 function _compChatTarget(citId, segId) {
   const resp = _compSummaryData && _compSummaryData.responses && _compSummaryData.responses[citId];
-  return resp && (resp.comparisons || []).find(c => String(c.requirement_id) === String(segId));
+  return _compForSegment(resp, segId);
 }
 
 function _renderCompChatContext(ctx) {
@@ -5966,12 +6867,20 @@ function _fillCompChatSuggestion(suggestion) {
   return true;
 }
 
-async function openCompChat(citId, segId, targetKind) {
+async function openCompChat(citId, segId, targetKind, options) {
+  options = options || {};
   const modal = document.getElementById('comp-chat-modal');
   if (!modal) return;
   _ensureCompChatWindowBehavior();
   _resetCompChatWindowPosition();
   targetKind = targetKind || 'comparison';
+  const qIndex = Number.isFinite(options.queueIndex)
+    ? options.queueIndex
+    : _compChatQueueIndexFor(citId, segId, targetKind);
+  if (qIndex >= 0 && window._compChatQueue) {
+    window._compChatQueue.index = qIndex;
+  }
+  _updateCompChatQueueControls();
   window._compChatCtx = {citId, segId, targetKind, context: null};
   const targetLabel = targetKind === 'sub_claim' ? `請求項${segId}` : segId;
   document.getElementById('comp-chat-title').textContent = `${citId} / ${targetLabel}`;
@@ -5994,6 +6903,34 @@ async function openCompChat(citId, segId, targetKind) {
   } catch (e) {
     _compChatSetStatus(e.message, 'error');
   }
+}
+
+function openCompChatFromQueue(index) {
+  const q = window._compChatQueue || {};
+  const cells = q.cells || [];
+  const c = cells[index];
+  if (!c) return;
+  openCompChat(c.citation_id, c.segment_id, c.target_kind || 'comparison', {queueIndex: index});
+}
+
+function openNextCompChatCell() {
+  const q = window._compChatQueue || {};
+  if (!q.cells || q.index < 0 || q.index >= q.cells.length - 1) return;
+  openCompChatFromQueue(q.index + 1);
+}
+
+function openPrevCompChatCell() {
+  const q = window._compChatQueue || {};
+  if (!q.cells || q.index <= 0) return;
+  openCompChatFromQueue(q.index - 1);
+}
+
+function compChatQuickPrompt(text) {
+  const ta = document.getElementById('comp-chat-input');
+  if (!ta) return;
+  const cur = (ta.value || '').trim();
+  ta.value = cur ? (cur + '\n' + text) : text;
+  ta.focus();
 }
 
 function closeCompChat() {
@@ -6026,12 +6963,8 @@ async function sendCompChatMessage() {
     ta.value = '';
     const sug = d.suggested_override || null;
     if (_fillCompChatSuggestion(sug)) {
-      if (sug.apply && sug.judgment_changed) {
-        _compChatSetStatus(`上書き文案を自動保存中 (${sug.from_judgment || '—'}→${sug.to_judgment || '—'})...`);
-        await applyCompChatOverride({auto: true});
-      } else {
-        _compChatSetStatus('上書き文案を左欄に反映しました', 'success');
-      }
+      const arrow = sug.judgment_changed ? ` (${sug.from_judgment || '—'}→${sug.to_judgment || '—'})` : '';
+      _compChatSetStatus(`上書き文案を左欄に反映しました${arrow}。保存は手動で実行してください`, 'success');
     } else {
       _compChatSetStatus('応答受信', 'success');
     }
@@ -6069,13 +7002,36 @@ async function applyCompChatOverride(options) {
       _compSummaryData.responses[ctx.citId] = d.doc;
       renderCompSummaryTable();
     }
-    _compChatSetStatus(options.auto ? '壁打ち結論に従って自動更新しました' : '上書き保存しました', 'success');
+    _markCurrentCompChatQueueReviewed(d.override || null);
+    _compChatSetStatus(options.goNext ? '上書き保存しました。次のセルへ移動します' : '上書き保存しました', 'success');
+    if (options.goNext) {
+      setTimeout(openNextCompChatCell, 250);
+    }
   } catch (e) {
     _compChatSetStatus(e.message, 'error');
   }
 }
 
-async function openUnmetCellsPanel() {
+function _markCurrentCompChatQueueReviewed(override) {
+  const q = window._compChatQueue || {};
+  const idx = q.index;
+  if (!q.cells || idx < 0 || idx >= q.cells.length) return;
+  q.cells[idx].reviewed = true;
+  q.cells[idx].reviewed_at = (override && override.timestamp) || new Date().toISOString();
+  q.cells[idx].override_note = (override && override.user_note) || q.cells[idx].override_note || '';
+  _updateCompChatQueueControls();
+}
+
+function markCompChatReviewed() {
+  const note = document.getElementById('comp-chat-note');
+  if (note && !(note.value || '').trim()) {
+    note.value = '壁打ち確認済み。現状判定を維持';
+  }
+  applyCompChatOverride({goNext: true});
+}
+
+async function openUnmetCellsPanel(options) {
+  options = options || {};
   const modal = document.getElementById('comp-chat-modal');
   if (!modal) return;
   _ensureCompChatWindowBehavior();
@@ -6092,7 +7048,10 @@ async function openUnmetCellsPanel() {
   modal.style.display = 'flex';
   _compChatSetStatus('読込中...');
   try {
-    const selected = _getVisibleCompCitationIds();
+    let selected = _getVisibleCompCitationIds();
+    if (options.reuse && window._compChatQueue && window._compChatQueue.selectedOnly === false) {
+      selected = null;
+    }
     if (selected && selected.length === 0) {
       document.getElementById('comp-chat-context-body').innerHTML = '<pre>表示中の文献がありません。Step 6の「表示する列」で文献を選択してください。</pre>';
       _compChatSetStatus('0 件');
@@ -6103,14 +7062,15 @@ async function openUnmetCellsPanel() {
     const d = await resp.json();
     if (!resp.ok || d.error) { _compChatSetStatus(d.error || `HTTP ${resp.status}`, 'error'); return; }
     const cells = d.cells || [];
+    _compChatSetQueue(cells, -1, !!selected);
     if (!cells.length) {
       document.getElementById('comp-chat-context-body').innerHTML = '<pre>未充足・部分充足セルはありません。</pre>';
     } else {
       document.getElementById('comp-chat-context-body').innerHTML =
         '<h4>未充足セル' + (selected ? '（表示中の文献のみ）' : '') + '</h4>' + cells.map(c =>
-          '<button type="button" class="comp-chat-unmet-row" onclick="openCompChat(\'' +
-          _escapeAttr(c.citation_id) + '\',\'' + _escapeAttr(c.segment_id) + '\',\'' + _escapeAttr(c.target_kind || 'comparison') + '\')">' +
-          '<strong>' + _escapeHtml(c.citation_id) + ' / ' + _escapeHtml(c.segment_id) + ' / ' + _escapeHtml(c.judgment || '—') + '</strong><br>' +
+          '<button type="button" class="comp-chat-unmet-row' + (c.reviewed ? ' is-reviewed' : '') + '" onclick="openCompChatFromQueue(' + cells.indexOf(c) + ')">' +
+          '<strong>' + _escapeHtml(c.citation_id) + ' / ' + _escapeHtml(c.segment_id) + ' / ' + _escapeHtml(c.judgment || '—') + '</strong>' +
+          (c.reviewed ? '<span class="comp-chat-reviewed-badge">済</span>' : '') + '<br>' +
           '<span style="color:var(--text2);">' + _escapeHtml(c.segment_text || '') + '</span><br>' +
           _escapeHtml(c.reason || '') +
           '</button>'
@@ -6121,6 +7081,16 @@ async function openUnmetCellsPanel() {
     _compChatSetStatus(e.message, 'error');
   }
 }
+
+document.addEventListener('keydown', (e) => {
+  const modal = document.getElementById('comp-chat-modal');
+  if (!modal || modal.style.display === 'none') return;
+  const active = document.activeElement;
+  if (active && active.id === 'comp-chat-input' && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault();
+    sendCompChatMessage();
+  }
+});
 
 async function loadComparisonSummary() {
   wireCompSummaryIfNeeded();
@@ -6151,9 +7121,32 @@ async function loadComparisonSummary() {
     }
     const segs = await segResp.json();
 
-    const claim1 = segs.find((c) => c.claim_number === 1);
-    const segIds = claim1 ? claim1.segments.map((s) => s.id) : [];
-    const subClaims = segs.filter((c) => c.claim_number !== 1);
+    const independentClaims = segs.filter((c) => c && (c.is_independent || c.claim_number === 1));
+    const claim1 = independentClaims.find((c) => c.claim_number === 1) || independentClaims[0] || null;
+    const segIds = independentClaims.flatMap((c) => (c.segments || []).map((s) => s.id));
+    const subClaims = segs.filter((c) => c && !(c.is_independent || c.claim_number === 1));
+    const claimRows = [];
+    segs.forEach((claim) => {
+      if (!claim) return;
+      const isIndependent = !!claim.is_independent || claim.claim_number === 1;
+      if (isIndependent) {
+        (claim.segments || []).forEach((s) => {
+          if (!s || !s.id) return;
+          claimRows.push({
+            kind: 'comparison',
+            claim_number: claim.claim_number,
+            seg_id: s.id,
+            text: s.text || '',
+          });
+        });
+      } else {
+        claimRows.push({
+          kind: 'sub_claim',
+          claim_number: claim.claim_number,
+          text: claim.full_text || (Array.isArray(claim.segments) ? claim.segments.map((s) => s.text || '').join('') : ''),
+        });
+      }
+    });
 
     const responses = {};
     let hasAny = false;
@@ -6168,18 +7161,28 @@ async function loadComparisonSummary() {
     }
 
     const segTextMap = {};
-    if (claim1 && Array.isArray(claim1.segments)) {
-      claim1.segments.forEach((s) => { if (s && s.id) segTextMap[s.id] = s.text || ''; });
+    independentClaims.forEach((claim) => {
+      (claim.segments || []).forEach((s) => { if (s && s.id) segTextMap[s.id] = s.text || ''; });
+    });
+    let progressData = null;
+    try {
+      progressData = await _loadCompareProgress();
+      _compProgressData = progressData;
+    } catch (e) {
+      progressData = null;
     }
     _compSummaryData = {
       segs,
       claim1,
+      independentClaims,
       segIds,
       segTextMap,
       citIds,
       responses,
       subClaims,
-      hasAny: hasAny
+      claimRows,
+      hasAny: hasAny,
+      progress: progressData
     };
     renderCompSummaryTable();
   } catch (e) {
@@ -6767,16 +7770,19 @@ async function executeCompare() {
   const effort = (document.getElementById('compare-effort-picker')?.value) || 'high';
   try { localStorage.setItem('pc-compare-mode-v2', mode); } catch(e) {}
   try { localStorage.setItem('pc-compare-effort', effort); } catch(e) {}
+  const fallbackText = `LLM(${model}/${mode}/effort=${effort})で${citIds.length}件の文献を 1文献=1コール で対比分析中...`;
   document.getElementById('exec-compare-status').textContent =
-    `LLM(${model}/${mode}/effort=${effort})で${citIds.length}件の文献を対比分析中...`;
+    fallbackText;
+  _startCompareProgressPolling(document.getElementById('exec-compare-status'), fallbackText);
 
   try {
     const resp = await fetch(`/case/${CASE_ID}/execute`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ citation_ids: citIds, model, mode, effort })
+      body: JSON.stringify({ citation_ids: citIds, model, mode, effort, per_citation: true })
     });
     const data = await _readJsonResponse(resp);
+    _stopCompareProgressPolling();
     progress.classList.remove('show');
     btn.disabled = false;
 
@@ -6809,6 +7815,7 @@ async function executeCompare() {
       </div>`;
     }
   } catch(e) {
+    _stopCompareProgressPolling();
     progress.classList.remove('show');
     btn.disabled = false;
     alert('通信エラー: ' + e.message);
@@ -8137,10 +9144,12 @@ function renderSrHits() {
   const sortBy = (document.getElementById('sr-sort') || {}).value || 'default';
   let hits = [..._srCurrentRun.hits];
 
-  if (filter === 'star') hits = hits.filter(h => h.screening === 'star');
+  if (!filter) hits = hits.filter(h => (h.screening || 'pending') !== 'hold');
+  else if (filter === 'star') hits = hits.filter(h => h.screening === 'star');
   else if (filter === 'triangle') hits = hits.filter(h => h.screening === 'triangle');
   else if (filter === 'pending') hits = hits.filter(h => (h.screening || 'pending') === 'pending');
-  else if (filter === 'not-rejected') hits = hits.filter(h => h.screening !== 'reject');
+  else if (filter === 'hold') hits = hits.filter(h => h.screening === 'hold');
+  else if (filter === 'not-rejected') hits = hits.filter(h => h.screening !== 'reject' && h.screening !== 'hold');
 
   // グループヒット数のメモ化（フィルタ・ソートで複数回参照されるため）
   const _countsMemo = new Map();
@@ -8189,8 +9198,9 @@ function renderSrHits() {
   const gfNote = (_srGroupFilter && _srGroupFilter.size > 0)
     ? ` / グループ絞込み:${hits.length}件`
     : '';
+  const holdNote = !filter ? ` / 通常表示:${hits.length}件` : '';
   document.getElementById('sr-hits-stats').textContent =
-    `全${_srCurrentRun.hits.length}件 / ★${stats.star || 0} △${stats.triangle || 0} ×${stats.reject || 0} …${stats.hold || 0} 未${stats.pending || 0}${gfNote}`;
+    `全${_srCurrentRun.hits.length}件 / ★${stats.star || 0} △${stats.triangle || 0} ×${stats.reject || 0} …${stats.hold || 0} 未${stats.pending || 0}${holdNote}${gfNote}`;
 
   if (!hits.length) {
     el.innerHTML = '<div style="font-size:0.85rem; color:var(--text2); padding:0.5rem;">フィルタ該当なし</div>';
@@ -8333,6 +9343,8 @@ function srRenderHitCard(h) {
   const screening = h.screening || 'pending';
   const scrClass = SR_SCREEN_CLASS[screening] || 'sr-pending';
   const pid = h.patent_id || '';
+  const sourceRunId = h._source_run_id || (_srCurrentRun && _srCurrentRun.run_id) || '';
+  const sourceRunLabel = h._source_formula_level ? `<span class="sr-hit-src-run">run: ${_pkmEsc(h._source_formula_level)}</span>` : '';
   const date = h.publication_date || '';
   const ipc = (h.ipc || []).slice(0, 3).join(' ');
   const aiScore = (h.ai_score != null) ? `<span class="sr-score">AI: ${h.ai_score}</span>` : '';
@@ -8398,6 +9410,7 @@ function srRenderHitCard(h) {
       'jplatpat': { label: 'J-PlatPat', cls: 'sr-src-jp', tip: 'J-PlatPat から取得' },
       'google': { label: 'Google', cls: 'sr-src-gp', tip: 'Google Patents から取得' },
       'google_fallback': { label: 'Google', cls: 'sr-src-gp', tip: 'J-PlatPat 失敗 → Google Patents から代替取得' },
+      'local_citation': { label: 'ローカル', cls: 'sr-src-jp', tip: '対比済みのローカル引用文献データから表示' },
     };
     const m = map[ft.source] || { label: ft.source, cls: '', tip: '' };
     return `<span class="sr-hit-src ${m.cls}" title="${_pkmEsc(m.tip)}">${m.label}</span>`;
@@ -8434,10 +9447,17 @@ function srRenderHitCard(h) {
     : 'PDF/画像 未取得 — 一括抽出時に自動で全文取得を試みます';
 
   // タイトル → 全文ハイライトビューを新タブで開く
-  const runQ = _srCurrentRun && _srCurrentRun.run_id
-    ? `?run_id=${encodeURIComponent(_srCurrentRun.run_id)}`
-    : '';
-  const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view${runQ}`;
+  const viewParams = new URLSearchParams();
+  if (sourceRunId) viewParams.set('run_id', sourceRunId);
+  if (_compCitationCardsVisible && Array.isArray(_compCitationCardHits) && _compCitationCardHits.length) {
+    const navIds = _compCitationCardHits.map((x) => x && x.patent_id).filter(Boolean);
+    if (navIds.includes(pid)) {
+      viewParams.set('nav', 'workspace_citations');
+      navIds.forEach((id) => viewParams.append('nav_id', id));
+    }
+  }
+  const viewQ = String(viewParams);
+  const viewUrl = `/case/${encodeURIComponent(CASE_ID)}/search-run/hit/${encodeURIComponent(pid)}/view${viewQ ? '?' + viewQ : ''}`;
   const titleEsc = _pkmEsc(titleSrc) || '<em style="color:var(--text2);">(タイトル未取得 — クリックで全文取得)</em>';
 
   return `<div class="sr-hit-card ${scrClass}" data-pid="${pid}">
@@ -8446,15 +9466,17 @@ function srRenderHitCard(h) {
         <input type="checkbox" class="sr-hit-tblsel" data-pid="${pid}" ${selChecked} title="${_pkmEsc(selTitle)}" onchange="srToggleTableSel('${pid}', this.checked)">
         ${['star', 'triangle', 'pending', 'hold', 'reject'].map(s => {
           const active = (s === screening) ? 'active' : '';
-          return `<button class="sr-btn-${s} ${active}" title="${s}"
-                   onclick="srSetScreening('${pid}', '${s}')">${SR_SCREEN_LABELS[s]}</button>`;
+          const disabled = sourceRunId ? '' : ' disabled';
+          const title = sourceRunId ? s : `${s} (検索ラン未検出のため保存不可)`;
+          return `<button class="sr-btn-${s} ${active}" title="${_pkmEsc(title)}"${disabled}
+                   onclick="srSetScreening('${_escapeAttr(pid)}', '${s}', '${_escapeAttr(sourceRunId)}')">${SR_SCREEN_LABELS[s]}</button>`;
         }).join('')}
       </div>
       <div class="sr-hit-meta">
         <span class="sr-hit-pid">${pid}</span>
         <span class="sr-hit-date">${date}</span>
         <span class="sr-hit-ipc">${ipc}</span>
-        ${aiScore}${dled}${extractBadge}
+        ${aiScore}${dled}${extractBadge}${sourceRunLabel}
         <span style="flex:1"></span>
         ${srcBadge}
         <button class="sr-hit-fetch-btn" onclick="srFetchHitFullText('${_pkmEsc(pid).replace(/'/g, "\\'")}', this)" title="${fetchBtnTitle}">${fetchBtnLabel}</button>
@@ -8472,6 +9494,81 @@ function srRenderHitCard(h) {
 
 // ヒットの全文を Google Patents から取得しセッションキャッシュへ
 window._pkmFullTexts = window._pkmFullTexts || {};
+
+function _pkmApplyHitTextUpdate(patentId, data) {
+  const pid = String(patentId || (data && data.patent_id) || '').trim();
+  if (!pid || !data) return;
+  window._pkmFullTexts = window._pkmFullTexts || {};
+  window._pkmFullTexts[pid] = data;
+  if (data.patent_id && data.patent_id !== pid) window._pkmFullTexts[data.patent_id] = data;
+  if (data.local_citation_id && data.local_citation_id !== pid) window._pkmFullTexts[data.local_citation_id] = data;
+
+  srRerenderOneHitCard(pid);
+  if (data.patent_id && data.patent_id !== pid) srRerenderOneHitCard(data.patent_id);
+
+  if (_compCitationCardsVisible && _compCitationCardHits && _compCitationCardHits.length) {
+    _compCitationCardHits.forEach((h) => {
+      if (!h) return;
+      const matches = (
+        h.patent_id === pid || h._citation_id === pid ||
+        h.patent_id === data.patent_id || h._citation_id === data.patent_id ||
+        h.patent_id === data.local_citation_id || h._citation_id === data.local_citation_id
+      );
+      if (!matches) return;
+      if (!h.title && data.title) h.title = data.title;
+      if (!h.claim1 && Array.isArray(data.claims) && data.claims.length) h.claim1 = data.claims[0];
+      if (!h.abstract && data.abstract) h.abstract = data.abstract;
+    });
+    renderCompCitationCards();
+  }
+}
+
+function _pkmWireHitTextUpdateListener() {
+  if (window._pkmHitTextUpdateWired) return;
+  window._pkmHitTextUpdateWired = true;
+  const handlePayload = (payload) => {
+    if (!payload || payload.type !== 'hit_text_updated') return;
+    if (payload.case_id && payload.case_id !== CASE_ID) return;
+    _pkmApplyHitTextUpdate(payload.patent_id, payload.data);
+  };
+  window.addEventListener('storage', (ev) => {
+    if (ev.key !== 'pc-hit-text-updated' || !ev.newValue) return;
+    try { handlePayload(JSON.parse(ev.newValue)); } catch (e) {}
+  });
+  try {
+    if ('BroadcastChannel' in window) {
+      const ch = new BroadcastChannel('patent_compare_hit_text');
+      ch.onmessage = (ev) => handlePayload(ev.data);
+      window._pkmHitTextBroadcastChannel = ch;
+    }
+  } catch (e) {}
+}
+_pkmWireHitTextUpdateListener();
+
+function _wireHitBookmarkUpdateListener() {
+  if (window._pkmHitBookmarkUpdateWired) return;
+  window._pkmHitBookmarkUpdateWired = true;
+  const handlePayload = (payload) => {
+    if (!payload || payload.type !== 'pc-hit-bookmark-updated') return;
+    _applyHitBookmarkUpdate(payload);
+  };
+  window.addEventListener('message', (ev) => {
+    if (ev.origin && ev.origin !== window.location.origin) return;
+    handlePayload(ev.data);
+  });
+  window.addEventListener('storage', (ev) => {
+    if (ev.key !== 'pc-hit-bookmark-updated' || !ev.newValue) return;
+    try { handlePayload(JSON.parse(ev.newValue)); } catch (e) {}
+  });
+  try {
+    if ('BroadcastChannel' in window) {
+      const ch = new BroadcastChannel('patent_compare_hit_bookmark');
+      ch.onmessage = (ev) => handlePayload(ev.data);
+      window._pkmHitBookmarkBroadcastChannel = ch;
+    }
+  } catch (e) {}
+}
+_wireHitBookmarkUpdateListener();
 
 function _pkmGetSelectedSource() {
   const el = document.getElementById('sr-pkm-source');
@@ -8496,8 +9593,7 @@ async function srFetchHitFullText(patentId, btn) {
       throw new Error(err.error || ('HTTP ' + r.status));
     }
     const data = await r.json();
-    window._pkmFullTexts[patentId] = data;
-    srRerenderOneHitCard(patentId);
+    _pkmApplyHitTextUpdate(patentId, data);
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = origLabel; }
     alert('全文取得失敗: ' + (e && e.message ? e.message : String(e)));
@@ -8808,14 +9904,25 @@ function srTogglePkm() {
   if (typeof renderSrHits === 'function') renderSrHits();
 }
 
-async function srSetScreening(patentId, screening) {
-  if (!_srCurrentRun) return;
+async function srSetScreening(patentId, screening, runId) {
+  const targetRunId = runId || (_srCurrentRun && _srCurrentRun.run_id) || '';
+  if (!targetRunId) return;
   // 楽観的更新
-  const hit = _srCurrentRun.hits.find(h => h.patent_id === patentId);
-  if (hit) hit.screening = screening;
-  renderSrHits();
+  if (_srCurrentRun && _srCurrentRun.run_id === targetRunId) {
+    const hit = _srCurrentRun.hits.find(h => h.patent_id === patentId);
+    if (hit) hit.screening = screening;
+    renderSrHits();
+  }
+  if (_compCitationCardHits && _compCitationCardHits.length) {
+    _compCitationCardHits.forEach((h) => {
+      if (h.patent_id === patentId && (h._source_run_id || '') === targetRunId) {
+        h.screening = screening;
+      }
+    });
+    renderCompCitationCards();
+  }
   try {
-    await fetch(`/case/${CASE_ID}/search-run/${_srCurrentRun.run_id}/screening`, {
+    await fetch(`/case/${CASE_ID}/search-run/${targetRunId}/screening`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({patent_id: patentId, screening}),

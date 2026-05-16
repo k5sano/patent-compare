@@ -77,6 +77,19 @@ def test_get_hit_text_resolves_saihyo_to_wo(case_dir):
     assert "グアニルシステイン" in hit["description"]
 
 
+def test_hit_bookmarks_are_named_and_deduped(case_dir):
+    first = srs.save_hit_bookmark("TEST-CASE", "JP2030000001A", "要確認")
+    second = srs.save_hit_bookmark("TEST-CASE", "JP2030000001A", "要確認")
+    third = srs.save_hit_bookmark("TEST-CASE", "JP2030000002A", "要確認")
+
+    bookmarks = srs.list_hit_bookmarks("TEST-CASE")
+
+    assert first == second
+    assert len(bookmarks) == 2
+    assert third["patent_id"] == "JP2030000002A"
+    assert {b["name"] for b in bookmarks} == {"要確認"}
+
+
 def test_google_text_language_prefers_english_for_wo():
     assert srs._google_text_language_for("WO2023012009", "ja") == "en"
     assert srs._google_text_language_for("WO2023/012009", "ja") == "en"
@@ -176,6 +189,57 @@ def test_bulk_update_screening(case_dir):
     assert index["特開2023-200"]["screening"] == "reject"
     assert index["特開2023-200"]["note"] == "関係なし"
     assert index["特開2023-300"]["screening"] == "pending"
+
+
+def test_hold_patents_across_runs_marks_matching_hits(case_dir):
+    d1 = srs.create_run_from_hits(
+        "TEST-CASE", formula="x", formula_level="narrow",
+        hits=[_make_hit("US 2016/175445 A1"), _make_hit("特開2023-100")],
+    )
+    d2 = srs.create_run_from_hits(
+        "TEST-CASE", formula="y", formula_level="wide",
+        hits=[_make_hit("US2016175445A1"), _make_hit("特開2023-200")],
+    )
+    result = srs.hold_patents_across_runs(
+        "TEST-CASE", ["US2016175445A1", "WO2020/000001A1"], note="Step6から退避"
+    )
+    assert result["updated"] == 2
+    assert result["not_found"] == ["WO2020/000001A1"]
+
+    run1 = srs.load_run("TEST-CASE", d1["run_id"])
+    run2 = srs.load_run("TEST-CASE", d2["run_id"])
+    idx1 = {h["patent_id"]: h for h in run1["hits"]}
+    idx2 = {h["patent_id"]: h for h in run2["hits"]}
+    assert idx1["US 2016/175445 A1"]["screening"] == "hold"
+    assert idx1["US 2016/175445 A1"]["note"] == "Step6から退避"
+    assert idx1["特開2023-100"]["screening"] == "pending"
+    assert idx2["US2016175445A1"]["screening"] == "hold"
+    assert idx2["特開2023-200"]["screening"] == "pending"
+
+
+def test_build_citation_card_hits_reuses_search_run_metadata(case_dir):
+    srs.create_run_from_hits(
+        "TEST-CASE", formula="x", formula_level="narrow",
+        hits=[
+            _make_hit("US 2016/175445 A1", screening="triangle", score=72),
+            _make_hit("特開2023-100", screening="pending", score=20),
+        ],
+    )
+    hits = srs.build_citation_card_hits(
+        "TEST-CASE",
+        [
+            {"id": "US2016175445A1", "aliases": ["US 2016/175445 A1"]},
+            {"id": "WO2020/000001A1", "aliases": []},
+        ],
+    )
+    assert len(hits) == 2
+    assert hits[0]["patent_id"] == "US 2016/175445 A1"
+    assert hits[0]["screening"] == "triangle"
+    assert hits[0]["ai_score"] == 72
+    assert hits[0]["_citation_card_status"] == "matched"
+    assert hits[0]["_source_run_id"]
+    assert hits[1]["patent_id"] == "WO2020/000001A1"
+    assert hits[1]["_citation_card_status"] == "fallback"
 
 
 def test_merge_runs_dedups_by_patent_id(case_dir):

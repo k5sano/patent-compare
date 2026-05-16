@@ -353,6 +353,35 @@
 </div>
 
 <script>
+const CASE_FILTER_STORAGE_PREFIX = 'pc-index-filter-';
+
+function _caseFilterGet(key) {
+  const storageKey = CASE_FILTER_STORAGE_PREFIX + key;
+  try {
+    const v = localStorage.getItem(storageKey);
+    if (v !== null) return v;
+  } catch (e) { /* localStorage 不可なら旧 sessionStorage を試す */ }
+  try {
+    const legacy = sessionStorage.getItem('filter-' + key);
+    if (legacy !== null) {
+      try { localStorage.setItem(storageKey, legacy); } catch (e) { /* noop */ }
+      return legacy;
+    }
+  } catch (e) { /* noop */ }
+  return null;
+}
+
+function _caseFilterSet(key, value) {
+  const storageKey = CASE_FILTER_STORAGE_PREFIX + key;
+  try { localStorage.setItem(storageKey, value || ''); } catch (e) { /* noop */ }
+  try { sessionStorage.setItem('filter-' + key, value || ''); } catch (e) { /* noop */ }
+}
+
+function _caseFilterRemove(key) {
+  try { localStorage.removeItem(CASE_FILTER_STORAGE_PREFIX + key); } catch (e) { /* noop */ }
+  try { sessionStorage.removeItem('filter-' + key); } catch (e) { /* noop */ }
+}
+
 // ===== 案件作成 =====
 async function createCase() {
   const caseNumber = document.getElementById('new-case-number').value.trim();
@@ -728,11 +757,11 @@ document.addEventListener('keydown', function(e) {
     editYear.appendChild(opt);
   });
 
-  // sessionStorageからフィルタ値を復元
-  const savedYear = sessionStorage.getItem('filter-year');
-  const savedMonth = sessionStorage.getItem('filter-month');
-  if (savedYear) filterYear.value = savedYear;
-  if (savedMonth) document.getElementById('filter-month').value = savedMonth;
+  // localStorage からフィルタ値を復元。旧 sessionStorage 保存分も移行する。
+  const savedYear = _caseFilterGet('year');
+  const savedMonth = _caseFilterGet('month');
+  if (savedYear !== null) filterYear.value = savedYear;
+  if (savedMonth !== null) document.getElementById('filter-month').value = savedMonth;
 
   filterCases();
 })();
@@ -740,9 +769,9 @@ document.addEventListener('keydown', function(e) {
 function filterCases() {
   const year = document.getElementById('filter-year').value;
   const month = document.getElementById('filter-month').value;
-  // 選択をsessionStorageに保存
-  sessionStorage.setItem('filter-year', year);
-  sessionStorage.setItem('filter-month', month);
+  // 選択を永続保存し、案件から戻ったときも前回状態を維持する。
+  _caseFilterSet('year', year);
+  _caseFilterSet('month', month);
   const items = document.querySelectorAll('.case-item');
   let shown = 0;
   items.forEach(el => {
@@ -766,8 +795,8 @@ function filterCases() {
 function clearFilter() {
   document.getElementById('filter-year').value = '';
   document.getElementById('filter-month').value = '';
-  sessionStorage.removeItem('filter-year');
-  sessionStorage.removeItem('filter-month');
+  _caseFilterRemove('year');
+  _caseFilterRemove('month');
   filterCases();
 }
 

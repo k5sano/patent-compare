@@ -45,6 +45,26 @@ const SRC = {{ source|tojson }};
 const t0 = Date.now();
 const statusEl = document.getElementById('status');
 
+function notifyOpener(data) {
+  const payload = {
+    type: 'hit_text_updated',
+    case_id: CASE_ID,
+    patent_id: PID,
+    data,
+    ts: Date.now(),
+  };
+  try {
+    if ('BroadcastChannel' in window) {
+      const ch = new BroadcastChannel('patent_compare_hit_text');
+      ch.postMessage(payload);
+      ch.close();
+    }
+  } catch (e) {}
+  try {
+    localStorage.setItem('pc-hit-text-updated', JSON.stringify(payload));
+  } catch (e) {}
+}
+
 function tickStatus() {
   const e = ((Date.now() - t0) / 1000).toFixed(0);
   statusEl.textContent = `取得中... ${e}s 経過 (通常 8〜15s)`;
@@ -59,6 +79,8 @@ const tickT = setInterval(tickStatus, 500);
     });
     clearInterval(tickT);
     if (r.ok) {
+      const data = await r.json().catch(() => null);
+      if (data) notifyOpener(data);
       // 取得完了 → このページをハイライトビューにリロード
       location.reload();
       return;
