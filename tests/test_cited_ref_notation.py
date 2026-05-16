@@ -324,3 +324,13 @@ class TestNormalizeCompactPasteNotation:
 
     def test_zero_padded_paragraphs_are_compacted(self):
         assert normalize("【0001】;段落【0002】;T1;T2/コメント") == "1,2;T1,2/コメント"
+
+    def test_strict_examples_are_preserved(self):
+        assert normalize("C4G12") == "C4G12"
+        assert normalize("P1A2-4") == "P1A2-4"
+        assert normalize("F1,1a,5C") == "F1,1a,5C"
+        assert normalize("T4/備考") == "T4/備考"
+
+    def test_comment_separator_is_not_needlessly_inserted(self):
+        assert normalize("T4;/備考") == "T4/備考"
+        assert normalize("20;F2;CL3;T4/備考;//自分メモ") == "20;F2;CL3;T4/備考;//自分メモ"
